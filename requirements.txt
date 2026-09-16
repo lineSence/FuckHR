@@ -6,3 +6,5 @@ PyYAML>=6.0
 rapidfuzz>=3.9
 aiogram>=3.7
 python-dotenv>=1.0
+# Проверка MX-записи домена при угадывании email (contacts.py, импорт ленивый).
+dnspython>=2.6
