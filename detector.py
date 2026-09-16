@@ -22,7 +22,7 @@ import re
 import sqlite3
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
-from typing import Any, Sequence
+from typing import Any
 
 import db
 
@@ -193,10 +193,11 @@ class Report:
 def _field(obj: Any, name: str, default: Any = None) -> Any:
     """Читает поле у hh.Vacancy, sqlite3.Row или обычного словаря."""
     if isinstance(obj, sqlite3.Row):
-        return obj[name] if name in obj.keys() else default
-    if isinstance(obj, dict):
-        return obj.get(name, default)
-    value = getattr(obj, name, default)
+        value = obj[name] if name in obj.keys() else default
+    elif isinstance(obj, dict):
+        value = obj.get(name, default)
+    else:
+        value = getattr(obj, name, default)
     return default if value is None else value
 
 
@@ -227,23 +228,18 @@ def _snippet(text: str, start: int, end: int, window: int = 45) -> str:
 def extract_claims(text: str) -> tuple[Claim, ...]:
     """Достаёт утверждения с цитатами. Одно утверждение — один раз."""
     found: list[Claim] = []
-    taken: set[str] = set()
     for key, label, patterns in CLAIM_PATTERNS:
-        if key in taken:
-            continue
         for pattern in patterns:
             match = re.search(pattern, text, flags=re.IGNORECASE)
             if match:
                 found.append(
-                    Claim(key=key, label=label, quote=_snippet(text, *match.span()))
+                    Claim(key=key, label=label, quote=_snippet(text, match.start(), match.end()))
                 )
-                taken.add(key)
                 break
     return tuple(found)
 
 
-def _parse_ts(value: str | None) -> datetime | None
-:
+def _parse_ts(value: str | None) -> datetime | None:
     if not value:
         return None
     try:
@@ -276,7 +272,7 @@ def history(conn: sqlite3.Connection, key: str, months: int = 8) -> History:
 
     dated = sum(1 for r in rows if (r["published_at"] or "").strip())
     salary_changes = 0
-    cycles = 1 if rows else 0
+    cycles = 1
     previous_active: bool | None = None
     previous_salary: tuple[Any, Any] | None = None
     for row in rows:
@@ -348,8 +344,10 @@ def _check_stable_team(claim: Claim, hist: History) -> Finding:
     )
 
 
-def _check_no_overtime(claim: Claim, text: str, hist: History) -> Finding:
-    hits = [label for label, pattern in OVERTIME_HINTS if re.search(pattern, text, re.IGNORECASE)]
+def _check_no_overtime(claim: Claim, text: str) -> Finding:
+    hits = [
+        label for label, pattern in OVERTIME_HINTS if re.search(pattern, text, re.IGNORECASE)
+    ]
     if hits:
         return Finding(
             kind=claim.key,
@@ -362,7 +360,7 @@ def _check_no_overtime(claim: Claim, text: str, hist: History) -> Finding:
     return Finding(
         kind=claim.key,
         claimed=claim.quote,
-        found="противоречий в тексте вакансии нет, внешних данных об этом у нас пока нет",
+        found="противоречий в тексте нет, внешних данных об этом у нас пока нет",
         verdict=NO_DATA,
         confidence="низкая",
         sources=("текст вакансии",),
@@ -425,9 +423,7 @@ def _facts(vacancy: Any, text: str, hist: History) -> list[Finding]:
             Finding(
                 kind="grade_mismatch",
                 claimed="",
-                found=(
-                    f"грейд «{experience}» при требованиях: " + ", ".join(senior_hits[:5])
-                ),
+                found=f"грейд «{experience}» при требованиях: " + ", ".join(senior_hits[:5]),
                 verdict=NOT_SUPPORTED,
                 confidence="средняя",
                 sources=("поля вакансии",),
@@ -461,7 +457,7 @@ def assess(vacancy: Any, hist: History | None = None) -> Report:
         if claim.key == "stable_team":
             findings.append(_check_stable_team(claim, hist))
         elif claim.key == "no_overtime":
-            findings.append(_check_no_overtime(claim, text, hist))
+            findings.append(_check_no_overtime(claim, text))
         elif claim.key == "white_salary":
             findings.append(_check_white_salary(claim, vacancy, hist))
         else:
@@ -475,7 +471,9 @@ def assess(vacancy: Any, hist: History | None = None) -> Report:
                 )
             )
     findings.extend(_facts(vacancy, text, hist))
-    return Report(key=str(_field(vacancy, "key", "")), findings=tuple(findings), history=hist)
+    return Report(
+        key=str(_field(vacancy, "key", "")), findings=tuple(findings), history=hist
+    )
 
 
 def format_report(report: Report) -> str:
