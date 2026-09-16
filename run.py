@@ -1,14 +1,19 @@
-"""Один прогон пайплайна MVP (шаг 1 из docs/mvp-windows.md).
+"""Один прогон пайплайна MVP (шаги 1–3 из docs/mvp-windows.md).
 
-    hh.ru (HTML поиска) -> предфильтр -> страница вакансии -> скоринг -> SQLite -> Telegram
+    hh.ru (HTML поиска) -> предфильтр -> страница вакансии -> скоринг
+    -> детектор утверждений -> SQLite -> Telegram
 
-Ни одного LLM-вызова. Запускается из Task Scheduler через pythonw.exe (ADR-014).
-Источник данных — HTML страниц hh.ru: публичный API закрыт с апреля 2026 (ADR-015).
+Источник данных — HTML страниц hh.ru: публичный API закрыт с апреля 2026
+(ADR-015). Запускается из Task Scheduler через pythonw.exe (ADR-014).
 
-У прогона три обязанности, а не одна:
+У прогона четыре обязанности, а не одна:
 1. собрать и отправить карточки;
 2. зафиксировать историю — и появление, и исчезновение вакансии (ADR-010);
-3. пожаловаться, если сам сломался (canary.py), а не тихо вернуть ноль.
+3. сопоставить утверждения вакансии с этой историей (detector.py, ADR-009);
+4. пожаловаться, если сам сломался (canary.py), а не тихо вернуть ноль.
+
+LLM-вызовов здесь по-прежнему нет: детектор детерминирован [CORE-015], а шлюз
+из llm.py включается отдельно и только когда будет чем его кормить.
 """
 
 from __future__ import annotations
@@ -26,6 +31,7 @@ from dotenv import load_dotenv
 import bot as tg
 import canary
 import db
+import detector
 from hh import Vacancy, enrich
 from hh_html import BlockedError, HHHtmlClient
 from score import Profile, evaluate
@@ -128,6 +134,7 @@ def main() -> int:
 
     conn = db.connect(db_path)
     db.init_schema(conn)
+    detector.ensure_schema(conn)
 
     new_count = 0
     enriched = 0
@@ -162,12 +169,17 @@ def main() -> int:
                     log.warning("нет деталей по %s, берём черновик", draft.external_id)
             verdict = evaluate(vacancy, profile)
             # Слепок пишется для всего, даже для отклонённого: история публикаций
-            # нужна будущему детектору независимо от нашего интереса (ADR-009, ADR-010).
+            # нужна детектору независимо от нашего интереса (ADR-009, ADR-010).
             db.add_snapshot(conn, vacancy)
             if verdict.rejected:
                 continue
             if db.upsert_vacancy(conn, vacancy, verdict.score, verdict.reasons):
                 new_count += 1
+            # Детектор запускается сразу после слепка: история уже включает
+            # текущий прогон, и вывод не отстаёт от карточки на один запуск.
+            detector.store(
+                conn, detector.assess(vacancy, detector.history(conn, vacancy.key))
+            )
     except BlockedError as exc:
         blocked = True
         log.error("%s", exc)
@@ -201,20 +213,35 @@ def main() -> int:
     rows = db.pending_cards(conn, profile.min_score, args.limit)
     log.info("новых вакансий: %s, к отправке: %s", new_count, len(rows))
 
+    signals = {row["key"]: detector.load_lines(conn, row["key"]) for row in rows}
+
     if args.dry_run:
         for row in rows:
             print(f"{row['score']:5.1f}  {row['title']} — {row['company']}")
             print(f"        {row['url']}")
+            for line in signals.get(row["key"], []):
+                print(f"        {line}")
     elif rows:
         token = os.environ["TELEGRAM_BOT_TOKEN"]
         chat_id = os.environ["TELEGRAM_CHAT_ID"]
         republished = {row["key"]: db.republish_count(conn, row["key"]) for row in rows}
-        delivered = asyncio.run(tg.send_cards(token, chat_id, rows, republished))
+        delivered = asyncio.run(
+            tg.send_cards(token, chat_id, rows, republished, signals)
+        )
         db.mark_notified(conn, delivered)
         log.info("отправлено карточек: %s", len(delivered))
 
     filled, total = db.published_at_coverage(conn)
-    log.info("итого в базе: %s, слепков с датой публикации: %s из %s", db.stats(conn), filled, total)
+    flagged, assessed = detector.coverage(conn)
+    log.info(
+        "итого в базе: %s, слепков с датой публикации: %s из %s, "
+        "отчётов детектора с флагами: %s из %s",
+        db.stats(conn),
+        filled,
+        total,
+        flagged,
+        assessed,
+    )
     conn.close()
     return 2 if blocked else 0
 
