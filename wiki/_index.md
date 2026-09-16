@@ -8,11 +8,13 @@
 - `wiki/rules/llm-usage.md` — как вызывать модели: квоты, каскад, кэш, запрет ротации ключей.
 - `wiki/rules/legal.md` — 152-ФЗ/GDPR/ToS: что собираем и что нет.
 - `wiki/rules/hr-signal-detection.md` — правила детектора HR-брехни и формат выводов.
+- `wiki/rules/outreach.md` — прямой контакт в обход HR: кому, куда и как писать.
 
 ## references
 
 - `wiki/references/llm-providers.md` — роли провайдеров, лимиты, что не использовать.
 - `wiki/references/data-sources.md` — источники вакансий и данных о компаниях.
+- `wiki/references/contact-discovery.md` — где искать нанимающего менеджера и рабочий канал.
 - `wiki/references/prior-art.md` — проверенные аналоги и покрытие ТЗ.
 - `wiki/references/domain-glossary.md` — термины и сущности домена.
 

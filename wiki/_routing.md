@@ -21,6 +21,19 @@ triggers:
     load:
       - wiki/architecture/pipeline.md
 
+  - id: outreach
+    keywords: [контакт, письмо, аутрич, outreach, обойти hr, напрямую, руководитель отдела, тимлид, нанимающий менеджер, email, follow-up, шаблон письма]
+    load:
+      - wiki/rules/outreach.md
+      - wiki/references/contact-discovery.md
+      - wiki/rules/legal.md
+
+  - id: contact-discovery
+    keywords: [поиск людей, кто нанимает, habr career, github org, корпоративная почта, валидация email, спикеры, команда компании]
+    load:
+      - wiki/references/contact-discovery.md
+      - wiki/rules/outreach.md
+
   - id: scraping-sources
     keywords: [hh.ru, hh, джобборд, карьерная страница, greenhouse, lever, ashby, скрейпинг, парсер, капча, open api]
     load:
@@ -34,19 +47,21 @@ triggers:
       - wiki/rules/hr-signal-detection.md
 
   - id: legal
-    keywords: [152-фз, gdpr, tos, персональные данные, телефон, linkedin, юридика, osint]
+    keywords: [152-фз, gdpr, tos, персональные данные, телефон, linkedin, юридика, osint, спам, отказ от рассылки]
     load:
       - wiki/rules/legal.md
+      - wiki/rules/outreach.md
 
   - id: prior-art
-    keywords: [аналог, конкурент, career-ops, autopilot-jobhunt, jobspy, готовое решение, рынок]
+    keywords: [аналог, конкурент, career-ops, autopilot-jobhunt, jobspy, apollo, clay, hunter, готовое решение, рынок]
     load:
       - wiki/references/prior-art.md
 
   - id: telegram
-    keywords: [telegram, тг, бот, уведомление, выдача, дайджест]
+    keywords: [telegram, тг, бот, уведомление, выдача, дайджест, подтверждение отправки, кнопки]
     load:
       - wiki/architecture/pipeline.md
+      - wiki/references/contact-discovery.md
 
   - id: workflow-release
     keywords: [релиз, деплой, версия, changelog]
