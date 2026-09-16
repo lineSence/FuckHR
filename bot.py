@@ -1,7 +1,7 @@
-"""Telegram-слой: отправка карточек и сбор реакций.
+"""Telegram-слой: отправка карточек, служебные сообщения и сбор реакций.
 
 Два режима работы:
-- send_cards() — одноразовая отправка из run.py, без polling;
+- send_cards() / send_alert() — одноразовая отправка из run.py, без polling;
 - python bot.py — долгоживущий polling, чтобы кнопки писали feedback в базу.
 
 Кнопки в MVP меняют только оценку релевантности. Никакой отправки писем нет
@@ -44,7 +44,7 @@ EXPERIENCE_RU = {
 def proxy_url() -> str | None:
     """Прокси для api.telegram.org.
 
-    TELEGRAM_PROXY имеет приоритет; иначе берём стандартные переменные, которые
+    TELEGRAM_PROXY имеет приоритет; иначе берываем стандартные переменные, которые
     уже использует httpx в сборщике — чтобы один VPN работал для всего проекта.
     """
     for name in ("TELEGRAM_PROXY", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"):
@@ -54,7 +54,17 @@ def proxy_url() -> str | None:
     return None
 
 
-def format_card(row: sqlite3.Row, republished: int = 1) -> str:
+def format_card(
+    row: sqlite3.Row,
+    republished: int = 1,
+    signal_lines: Sequence[str] = (),
+) -> str:
+    """Карточка вакансии с выводами детектора.
+
+    signal_lines приходят из detector.load_lines() и содержат цитаты из вакансии,
+    то есть произвольный текст с чужого сайта — отсюда html.escape на каждой
+    строке: одинокий < в описании иначе ломает отправку всей карточки.
+    """
     reasons = json.loads(row["score_reasons"] or "[]")
     title = html.escape(row["title"] or "без названия")
     company = html.escape(row["company"] or "компания не указана")
@@ -68,8 +78,9 @@ def format_card(row: sqlite3.Row, republished: int = 1) -> str:
     if reasons:
         lines.append("За что: " + html.escape("; ".join(reasons)))
     if republished > 1:
-        # Зародыш детектора HR-брехни: сигнал появляется сам по мере накопления слепков.
         lines.append(f"⚠\ufe0f Публиковалась раз в базе: {republished}")
+    for line in signal_lines:
+        lines.append(html.escape(line))
     lines.append(f"<a href=\"{row['url']}\">Открыть вакансию</a>")
     return "\n".join(lines)
 
@@ -102,6 +113,7 @@ async def send_cards(
     chat_id: str | int,
     rows: Sequence[sqlite3.Row],
     republished: dict[str, int] | None = None,
+    signals: dict[str, Sequence[str]] | None = None,
     attempts: int = 3,
 ) -> list[str]:
     """Отправляет карточки и возвращает ключи тех, которые дошли.
@@ -111,6 +123,7 @@ async def send_cards(
     карточка не помечается отправленной и уйдёт в следующий прогон.
     """
     republished = republished or {}
+    signals = signals or {}
     delivered: list[str] = []
     failed: list[str] = []
     bot = _bot(token)
@@ -120,7 +133,11 @@ async def send_cards(
                 try:
                     await bot.send_message(
                         chat_id=chat_id,
-                        text=format_card(row, republished.get(row["key"], 1)),
+                        text=format_card(
+                            row,
+                            republished.get(row["key"], 1),
+                            signals.get(row["key"], ()),
+                        ),
                         reply_markup=keyboard(row["key"]),
                         disable_web_page_preview=True,
                     )
@@ -148,6 +165,28 @@ async def send_cards(
     if failed:
         log.warning("не дошло карточек: %s (уйдут в следующий прогон)", len(failed))
     return delivered
+
+
+async def send_alert(token: str, chat_id: str | int, text: str) -> bool:
+    """Служебное сообщение владельцу — без кнопок и без HTML-разметки.
+
+    Текст приходит из canary.py и содержит пути файлов, поэтому parse_mode снят:
+    одинокие < и & в путях иначе сломают отправку именно тогда, когда она нужна.
+    """
+    bot = _bot(token)
+    try:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            parse_mode=None,
+            disable_web_page_preview=True,
+        )
+        return True
+    except Exception:  # noqa: BLE001 — канарейка не должна ронять прогон
+        log.exception("не удалось отправить служебное сообщение")
+        return False
+    finally:
+        await bot.session.close()
 
 
 async def run_polling(token: str, db_path: str) -> None:

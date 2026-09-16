@@ -3,15 +3,23 @@
 Главное здесь — таблица vacancy_snapshots. Она начинает заполняться с первого
 запуска, хотя польза от неё появится только через месяцы: без истории публикаций
 детектор HR-брехни (ADR-009) не работает.
+
+История состоит из двух половин. Первую пишет прогон: «вакансия видна, вот её
+поля». Вторую — deactivate_missing: «вакансию перестали показывать». Без второй
+половины сценарий «закрыли и открыли снова» неотличим от «висит месяц», а это и
+есть главный сигнал детектора.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable, Sequence
+
+log = logging.getLogger(__name__)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS vacancies (
@@ -153,6 +161,20 @@ def upsert_vacancy(
     return is_new
 
 
+def touch_seen(conn: sqlite3.Connection, keys: Iterable[str]) -> None:
+    """Отмечает, что вакансия попалась в выдаче, даже если скоринг её отклонил.
+
+    Без этого отклонённые вакансии никогда не считались бы «пропавшими»:
+    строки в vacancies у них нет, и deactivate_missing их не увидит.
+    """
+    now = utcnow()
+    conn.executemany(
+        "UPDATE vacancies SET last_seen_at = ? WHERE key = ?",
+        [(now, key) for key in keys],
+    )
+    conn.commit()
+
+
 def add_snapshot(conn: sqlite3.Connection, vacancy: Any, is_active: bool = True) -> None:
     conn.execute(
         """
@@ -175,22 +197,140 @@ def add_snapshot(conn: sqlite3.Connection, vacancy: Any, is_active: bool = True)
     conn.commit()
 
 
-def republish_count(conn: sqlite3.Connection, key: str, months: int = 8) -> int:
-    """Сколько разных дат публикации у этой вакансии за период.
-
-    Заготовка для детектора брехни. На свежей базе всегда вернёт 1 — это нормально.
-    """
-    since = (datetime.now(timezone.utc) - timedelta(days=30 * months)).isoformat()
-    cur = conn.execute(
+def last_snapshot_active(conn: sqlite3.Connection, key: str) -> bool | None:
+    """Состояние последнего слепка: True, False или None, если слепков нет."""
+    row = conn.execute(
         """
-        SELECT COUNT(DISTINCT substr(published_at, 1, 10)) AS n
-        FROM vacancy_snapshots
-        WHERE key = ? AND seen_at >= ? AND published_at IS NOT NULL
+        SELECT is_active FROM vacancy_snapshots
+        WHERE key = ?
+        ORDER BY seen_at DESC, id DESC
+        LIMIT 1
+        """,
+        (key,),
+    ).fetchone()
+    return None if row is None else bool(row["is_active"])
+
+
+def known_keys(conn: sqlite3.Connection, days: int = 30) -> list[str]:
+    """Ключи вакансий, которые попадались за последние `days` дней."""
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat(timespec="seconds")
+    cur = conn.execute("SELECT key FROM vacancies WHERE last_seen_at >= ?", (since,))
+    return [row["key"] for row in cur.fetchall()]
+
+
+def deactivate_missing(
+    conn: sqlite3.Connection, seen_keys: Iterable[str], days: int = 30
+) -> list[str]:
+    """Пишет слепок is_active = 0 для вакансий, которых не было в этом прогоне.
+
+    Вызывать ТОЛЬКО после успешного прогона. Если hh.ru показал капчу или отдал
+    пустую выдачу, вызов приведёт к тому, что вся база разом «закроется» — и
+    история, ради которой всё это делается, превратится в мусор.
+
+    Повторный вызов ничего не дублирует: у вакансии, чей последний слепок уже
+    неактивен, новый слепок не появляется.
+    """
+    seen = set(seen_keys)
+    now = utcnow()
+    closed: list[str] = []
+    for key in known_keys(conn, days):
+        if key in seen or last_snapshot_active(conn, key) is False:
+            continue
+        row = conn.execute(
+            """
+            SELECT external_id, published_at, company_id, salary_from, salary_to
+            FROM vacancies WHERE key = ?
+            """,
+            (key,),
+        ).fetchone()
+        if row is None:
+            continue
+        conn.execute(
+            """
+            INSERT INTO vacancy_snapshots (
+                key, seen_at, external_id, published_at, company_id,
+                salary_from, salary_to, is_active
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+            """,
+            (
+                key,
+                now,
+                row["external_id"],
+                row["published_at"],
+                row["company_id"],
+                row["salary_from"],
+                row["salary_to"],
+            ),
+        )
+        closed.append(key)
+    conn.commit()
+    if closed:
+        log.info("пропали из выдачи: %s", len(closed))
+    return closed
+
+
+def _reopen_cycles(conn: sqlite3.Connection, key: str, since: str) -> int:
+    """Сколько раз вакансия возвращалась в выдачу после исчезновения."""
+    rows = conn.execute(
+        """
+        SELECT is_active FROM vacancy_snapshots
+        WHERE key = ? AND seen_at >= ?
+        ORDER BY seen_at, id
         """,
         (key, since),
+    ).fetchall()
+    if not rows:
+        return 0
+    cycles = 1
+    previous: bool | None = None
+    for row in rows:
+        current = bool(row["is_active"])
+        if previous is False and current is True:
+            cycles += 1
+        previous = current
+    return cycles
+
+
+def republish_count(conn: sqlite3.Connection, key: str, months: int = 8) -> int:
+    """Сколько раз вакансия публиковалась заново за период.
+
+    Считается тремя независимыми способами, берётся максимум:
+    1. разные даты публикации — точнее всего, но published_at из HTML бывает пустым;
+    2. разные external_id при одном ключе — hh.ru выдаёт новый id при перепубликации;
+    3. циклы «пропала — появилась снова» по слепкам.
+
+    Раньше работал только первый способ, и при пустом published_at сигнал молча
+    возвращал 0. Молчаливый ноль хуже грубой оценки.
+    """
+    since = (datetime.now(timezone.utc) - timedelta(days=30 * months)).isoformat(
+        timespec="seconds"
     )
-    row = cur.fetchone()
-    return int(row["n"] or 0)
+    row = conn.execute(
+        """
+        SELECT
+            COUNT(DISTINCT substr(published_at, 1, 10)) AS by_date,
+            COUNT(DISTINCT external_id) AS by_id
+        FROM vacancy_snapshots
+        WHERE key = ? AND seen_at >= ?
+        """,
+        (key, since),
+    ).fetchone()
+    by_date = int(row["by_date"] or 0)
+    by_id = int(row["by_id"] or 0)
+    return max(by_date, by_id, _reopen_cycles(conn, key, since))
+
+
+def published_at_coverage(conn: sqlite3.Connection) -> tuple[int, int]:
+    """(слепков с датой публикации, всего слепков) — здоровье сигнала одним взглядом."""
+    row = conn.execute(
+        """
+        SELECT
+            SUM(CASE WHEN published_at IS NOT NULL AND published_at <> '' THEN 1 ELSE 0 END) AS filled,
+            COUNT(*) AS total
+        FROM vacancy_snapshots
+        """
+    ).fetchone()
+    return int(row["filled"] or 0), int(row["total"] or 0)
 
 
 def pending_cards(
@@ -234,6 +374,7 @@ def stats(conn: sqlite3.Connection) -> dict[str, int]:
         SELECT
             (SELECT COUNT(*) FROM vacancies) AS vacancies,
             (SELECT COUNT(*) FROM vacancy_snapshots) AS snapshots,
+            (SELECT COUNT(*) FROM vacancy_snapshots WHERE is_active = 0) AS closed,
             (SELECT COUNT(*) FROM vacancies WHERE notified_at IS NOT NULL) AS notified
         """
     ).fetchone()
