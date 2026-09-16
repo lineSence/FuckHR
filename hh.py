@@ -1,7 +1,8 @@
-"""Клиент hh.ru Open API и нормализация в единую модель Vacancy (ADR-010).
+"""Модель Vacancy и нормализация (ADR-010).
 
-Чтение вакансий не требует OAuth — достаточно своего User-Agent с контактом.
-Токен нужен только для действий от имени пользователя, а их в скоупе нет ([CORE-018]).
+Исторически здесь жил клиент hh.ru Open API. С апреля 2026 публичный GET /vacancies
+отдаёт 403 всем неавторизованным, поэтому сбор переехал в hh_html.py (ADR-015).
+Клиент HHClient оставлен: он сразу заработает, если появится токен приложения (HH_TOKEN).
 """
 
 from __future__ import annotations
@@ -98,19 +99,24 @@ def strip_html(value: str | None) -> str:
 
 
 class HHClient:
-    """Тонкий синхронный клиент. Параллелизм 1 сознательный ([CORE-016])."""
+    """Клиент Open API. В пайплайне не используется: поиск закрыт без токена (ADR-015)."""
 
-    def __init__(self, user_agent: str, pause: float = 0.34, timeout: float = 20.0) -> None:
+    def __init__(
+        self,
+        user_agent: str,
+        pause: float = 0.34,
+        timeout: float = 20.0,
+        token: str | None = None,
+    ) -> None:
         if not user_agent or "@" not in user_agent:
             raise ValueError(
                 "HH_USER_AGENT должен содержать контакт, например 'FuckHR/0.1 (me@example.com)'"
             )
         self.pause = pause
-        self._client = httpx.Client(
-            base_url=API_ROOT,
-            headers={"User-Agent": user_agent, "Accept": "application/json"},
-            timeout=timeout,
-        )
+        headers = {"User-Agent": user_agent, "Accept": "application/json"}
+        if token:
+            headers["Authorization"] = "Bearer " + token
+        self._client = httpx.Client(base_url=API_ROOT, headers=headers, timeout=timeout)
 
     def __enter__(self) -> "HHClient":
         return self
@@ -125,8 +131,14 @@ class HHClient:
         delay = 2.0
         for attempt in range(1, attempts + 1):
             response = self._client.get(path, params=params)
+            if response.status_code == 403:
+                # С апреля 2026 это штатный ответ на любой анонимный поиск, а не сбой.
+                raise PermissionError(
+                    "hh.ru Open API закрыт для неавторизованных запросов (403). "
+                    "Используй hh_html.HHHtmlClient или задай токен приложения HH_TOKEN. "
+                    f"Ответ: {response.text[:200]}"
+                )
             if response.status_code == 429 or response.status_code >= 500:
-                # Каптча или блокировка по частоте — ждём и пробуем снова.
                 log.warning("hh.ru %s -> %s, попытка %s", path, response.status_code, attempt)
                 if attempt == attempts:
                     response.raise_for_status()
@@ -167,11 +179,11 @@ class HHClient:
                 break
 
     def vacancy(self, vacancy_id: str) -> dict:
-        return self._get(f"/vacancies/{vacancy_id}")
+        return self._get("/vacancies/" + str(vacancy_id))
 
 
 def from_search_item(item: dict) -> Vacancy:
-    """Черновая модель из выдачи поиска: достаточно для предфильтра."""
+    """Черновая модель из выдачи поиска API: достаточно для предфильтра."""
     salary = item.get("salary") or {}
     employer = item.get("employer") or {}
     snippet = item.get("snippet") or {}
@@ -201,11 +213,10 @@ def enrich(vacancy: Vacancy, detail: dict) -> Vacancy:
     """Доклеивает полное описание и key_skills из карточки вакансии."""
     data = vacancy.model_dump()
     data["description"] = strip_html(detail.get("description")) or vacancy.description
-    data["skills"] = [
-        skill["name"] for skill in detail.get("key_skills", []) if skill.get("name")
-    ]
-    if detail.get("schedule"):
-        data["schedule"] = detail["schedule"].get("name")
-    if detail.get("employer", {}).get("name"):
+    skills = [skill["name"] for skill in detail.get("key_skills", []) if skill.get("name")]
+    data["skills"] = skills or vacancy.skills
+    if (detail.get("schedule") or {}).get("name"):
+        data["schedule"] = detail["schedule"]["name"]
+    if (detail.get("employer") or {}).get("name"):
         data["company"] = detail["employer"]["name"]
     return Vacancy(**data)

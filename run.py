@@ -1,8 +1,9 @@
 """Один прогон пайплайна MVP (шаг 1 из docs/mvp-windows.md).
 
-    hh.ru /vacancies -> предфильтр -> карточка вакансии -> скоринг -> SQLite -> Telegram
+    hh.ru (HTML поиска) -> предфильтр -> страница вакансии -> скоринг -> SQLite -> Telegram
 
 Ни одного LLM-вызова. Запускается из Task Scheduler через pythonw.exe (ADR-014).
+Источник данных — HTML страниц hh.ru: публичный API закрыт с апреля 2026 (ADR-015).
 """
 
 from __future__ import annotations
@@ -19,7 +20,8 @@ from dotenv import load_dotenv
 
 import bot as tg
 import db
-from hh import HHClient, Vacancy, enrich, from_search_item
+from hh import Vacancy, enrich
+from hh_html import BlockedError, HHHtmlClient
 from score import Profile, evaluate
 
 log = logging.getLogger("fuckhr")
@@ -40,11 +42,12 @@ def setup_logging(log_path: Path, verbose: bool) -> None:
     )
 
 
-def collect(client: HHClient, profile: Profile) -> dict[str, Vacancy]:
+def collect(client: HHHtmlClient, profile: Profile) -> dict[str, Vacancy]:
     """Собирает вакансии по всем запросам профиля.
 
-    Детальная карточка запрашивается только для того, что прошло предфильтр по
-    заголовку и вилке: это экономит сотни запросов к API на каждом прогоне.
+    Страница вакансии запрашивается только для того, что прошло предфильтр по
+    заголовку и вилке. При скрейпинге это важнее, чем было с API: каждый лишний
+    запрос приближает капчу.
     """
     found: dict[str, Vacancy] = {}
     for query in profile.queries:
@@ -52,14 +55,13 @@ def collect(client: HHClient, profile: Profile) -> dict[str, Vacancy]:
         if not text:
             continue
         log.info("запрос: %s", text)
-        for item in client.search(
+        for draft in client.search(
             text=text,
             area=query.get("area") or profile.areas or None,
             period=int(query.get("period", 7)),
             max_pages=int(query.get("max_pages", 3)),
             extra=query.get("extra"),
         ):
-            draft = from_search_item(item)
             rough = evaluate(draft, profile)
             if rough.rejected:
                 log.debug("отброшено на предфильтре: %s (%s)", draft.title, rough.reject_reason)
@@ -73,6 +75,9 @@ def main() -> int:
     parser.add_argument("--profile", default="profile.yaml")
     parser.add_argument("--limit", type=int, default=10, help="сколько карточек отправлять")
     parser.add_argument("--dry-run", action="store_true", help="без отправки в Telegram")
+    parser.add_argument(
+        "--no-details", action="store_true", help="не ходить за страницами вакансий"
+    )
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
@@ -81,21 +86,30 @@ def main() -> int:
     setup_logging(Path(os.getenv("LOG_PATH", "data/fuckhr.log")), args.verbose)
 
     profile = Profile.load(args.profile)
-    user_agent = os.getenv("HH_USER_AGENT", "")
 
     conn = db.connect(db_path)
     db.init_schema(conn)
 
     new_count = 0
-    with HHClient(user_agent) as client:
+    client = HHHtmlClient(
+        pause=float(os.getenv("HH_PAUSE", "2.0")),
+        cookie=os.getenv("HH_COOKIE") or None,
+        proxy=os.getenv("HH_PROXY") or None,
+    )
+    try:
         drafts = collect(client, profile)
         log.info("прошло предфильтр: %s", len(drafts))
         for draft in drafts.values():
-            try:
-                vacancy = enrich(draft, client.vacancy(draft.external_id))
-            except Exception:  # noqa: BLE001 — вакансия могла быть уже закрыта
-                log.warning("нет деталей по %s, берём черновик", draft.external_id)
-                vacancy = draft
+            vacancy = draft
+            if not args.no_details:
+                try:
+                    vacancy = enrich(draft, client.vacancy(draft.external_id))
+                except BlockedError:
+                    # Дальше ходить бессмысленно: сохраняем то, что уже собрали.
+                    log.error("hh.ru закрылся капчей на деталях, добирать остальное не будем")
+                    args.no_details = True
+                except Exception:  # noqa: BLE001 — вакансия могла быть уже закрыта
+                    log.warning("нет деталей по %s, берём черновик", draft.external_id)
             verdict = evaluate(vacancy, profile)
             # Слепок пишется для всего, даже для отклонённого: история публикаций
             # нужна будущему детектору независимо от нашего интереса (ADR-009, ADR-010).
@@ -104,6 +118,13 @@ def main() -> int:
                 continue
             if db.upsert_vacancy(conn, vacancy, verdict.score, verdict.reasons):
                 new_count += 1
+    except BlockedError as exc:
+        log.error("%s", exc)
+        print(f"hh.ru заблокировал сбор: {exc}")
+        conn.close()
+        return 2
+    finally:
+        client.close()
 
     rows = db.pending_cards(conn, profile.min_score, args.limit)
     log.info("новых вакансий: %s, к отправке: %s", new_count, len(rows))
