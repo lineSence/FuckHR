@@ -10,8 +10,8 @@ triggers:
       - wiki/references/llm-providers.md
       - wiki/architecture/model-routing.md
 
-  - id: litellm
-    keywords: [litellm, фолбэк, fallback, ротация, прокси, circuit breaker, cooldown]
+  - id: llm-gateway
+    keywords: [freellmapi, шлюз, gateway, base_url, litellm, фолбэк, fallback, ротация ключей, прокси, circuit breaker, cooldown, профиль local-only]
     load:
       - wiki/architecture/model-routing.md
       - wiki/rules/llm-usage.md
@@ -35,13 +35,19 @@ triggers:
       - wiki/rules/outreach.md
 
   - id: scraping-sources
-    keywords: [hh.ru, hh, джобборд, карьерная страница, greenhouse, lever, ashby, скрейпинг, парсер, капча, open api]
+    keywords: [hh.ru, hh, джобборд, карьерная страница, greenhouse, lever, ashby, скрейпинг, парсер, капча, open api, 403, cookie, initialstate, probe_hh]
     load:
+      - wiki/architecture/hh-html-scraping.md
       - wiki/references/data-sources.md
       - wiki/rules/legal.md
 
+  - id: runtime-windows
+    keywords: [windows, расписание, task scheduler, автозапуск, pythonw, systemd, wsl, docker, utf-8, sqlite-vec, блокировка базы]
+    load:
+      - wiki/architecture/runtime-windows.md
+
   - id: hr-bullshit-detector
-    keywords: [hr-брехня, клише, дружная команда, правдивость, отзывы, dream job, досье, компания]
+    keywords: [hr-брехня, клише, дружная команда, правдивость, отзывы, dream job, досье, компания, слепки, снапшот, история публикаций, перепубликация, текучка]
     load:
       - wiki/architecture/pipeline.md
       - wiki/rules/hr-signal-detection.md

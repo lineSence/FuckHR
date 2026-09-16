@@ -24,6 +24,10 @@
 - `wiki/architecture/overview.md` — модули, границы, ADR.
 - `wiki/architecture/pipeline.md` — этапы обработки вакансии от сбора до Telegram.
 - `wiki/architecture/model-routing.md` — FreeLLMAPI, профили, маршрутизация по этапам.
+- `wiki/architecture/tech-stack.md` — выбор технологий и отклонённые альтернативы (ADR-006…013).
+- `wiki/architecture/sources-and-outreach.md` — источники вакансий и схема выхода на контакт.
+- `wiki/architecture/runtime-windows.md` — ADR-014: Windows без WSL и Docker, Task Scheduler.
+- `wiki/architecture/hh-html-scraping.md` — ADR-015: сбор hh.ru из HTML, диагностика и капча.
 
 ## workflows
 
