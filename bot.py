@@ -6,6 +6,10 @@
 
 Кнопки в MVP меняют только оценку релевантности. Никакой отправки писем нет
 и не планируется — см. ADR-012 и [CORE-023].
+
+API Telegram из RU-сегмента напрямую недоступен, поэтому трафик идёт через
+прокси из TELEGRAM_PROXY / HTTPS_PROXY: aiohttp, в отличие от httpx, сам переменные
+окружения не читает — именно отсюда брались плавающие WinError 121.
 """
 
 from __future__ import annotations
@@ -20,8 +24,10 @@ from typing import Sequence
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.exceptions import TelegramNetworkError
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 import db
 
@@ -33,6 +39,19 @@ EXPERIENCE_RU = {
     "between3And6": "3–6 лет",
     "moreThan6": "больше 6 лет",
 }
+
+
+def proxy_url() -> str | None:
+    """Прокси для api.telegram.org.
+
+    TELEGRAM_PROXY имеет приоритет; иначе берём стандартные переменные, которые
+    уже использует httpx в сборщике — чтобы один VPN работал для всего проекта.
+    """
+    for name in ("TELEGRAM_PROXY", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"):
+        value = os.getenv(name)
+        if value:
+            return value
+    return None
 
 
 def format_card(row: sqlite3.Row, republished: int = 1) -> str:
@@ -67,7 +86,15 @@ def keyboard(key: str) -> InlineKeyboardMarkup:
 
 
 def _bot(token: str) -> Bot:
-    return Bot(token=token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    proxy = proxy_url()
+    if proxy:
+        log.info("Telegram через прокси %s", proxy)
+    session = AiohttpSession(proxy=proxy) if proxy else AiohttpSession()
+    return Bot(
+        token=token,
+        session=session,
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+    )
 
 
 async def send_cards(
@@ -75,31 +102,56 @@ async def send_cards(
     chat_id: str | int,
     rows: Sequence[sqlite3.Row],
     republished: dict[str, int] | None = None,
+    attempts: int = 3,
 ) -> list[str]:
-    """Отправляет карточки и возвращает ключи тех, которые дошли."""
+    """Отправляет карточки и возвращает ключи тех, которые дошли.
+
+    Сетевые ошибки в RU-сегменте нормальны и почти всегда лечатся повтором,
+    поэтому каждая карточка получает три попытки с паузой 2 → 4 с. Недошедшая
+    карточка не помечается отправленной и уйдёт в следующий прогон.
+    """
     republished = republished or {}
     delivered: list[str] = []
+    failed: list[str] = []
     bot = _bot(token)
     try:
         for row in rows:
-            try:
-                await bot.send_message(
-                    chat_id=chat_id,
-                    text=format_card(row, republished.get(row["key"], 1)),
-                    reply_markup=keyboard(row["key"]),
-                    disable_web_page_preview=True,
-                )
-                delivered.append(row["key"])
-                await asyncio.sleep(0.6)  # лимит Telegram на сообщения в один чат
-            except Exception:  # noqa: BLE001 — одна упавшая карточка не должна рвать прогон
-                log.exception("не удалось отправить карточку %s", row["key"])
+            for attempt in range(1, attempts + 1):
+                try:
+                    await bot.send_message(
+                        chat_id=chat_id,
+                        text=format_card(row, republished.get(row["key"], 1)),
+                        reply_markup=keyboard(row["key"]),
+                        disable_web_page_preview=True,
+                    )
+                    delivered.append(row["key"])
+                    await asyncio.sleep(0.6)  # лимит Telegram на сообщения в один чат
+                    break
+                except TelegramNetworkError as exc:
+                    log.warning(
+                        "сеть подвела на %s, попытка %s/%s: %s",
+                        row["key"],
+                        attempt,
+                        attempts,
+                        exc,
+                    )
+                    if attempt == attempts:
+                        failed.append(row["key"])
+                        break
+                    await asyncio.sleep(2.0 * attempt)
+                except Exception:  # noqa: BLE001 — одна карточка не должна рвать прогон
+                    log.exception("не удалось отправить карточку %s", row["key"])
+                    failed.append(row["key"])
+                    break
     finally:
         await bot.session.close()
+    if failed:
+        log.warning("не дошло карточек: %s (уйдут в следующий прогон)", len(failed))
     return delivered
 
 
 async def run_polling(token: str, db_path: str) -> None:
-    """Опциональный режим: собирает нажатия кнопок в vacancies.feedback."""
+    """Собирает нажатия кнопок в vacancies.feedback."""
     bot = _bot(token)
     dp = Dispatcher()
     conn = db.connect(db_path)
@@ -107,10 +159,39 @@ async def run_polling(token: str, db_path: str) -> None:
 
     @dp.callback_query(F.data.startswith("fb:"))
     async def on_feedback(call: CallbackQuery) -> None:
-        _, value, key = (call.data or "").split(":", 2)
-        db.set_feedback(conn, key, value)
+        data = call.data or ""
+        try:
+            _, value, key = data.split(":", 2)
+        except ValueError:
+            log.error("непонятный callback_data: %r", data)
+            await call.answer("Не разобрал кнопку", show_alert=True)
+            return
+        updated = db.set_feedback(conn, key, value)
+        log.info("feedback %s -> %s (строк обновлено: %s)", key, value, updated)
+        if not updated:
+            # Ключ есть в кнопке, но нет в базе: чаще всего разные DB_PATH у run.py и bot.py.
+            await call.answer("Карточка не найдена в базе", show_alert=True)
+            return
         await call.answer("Записал" if value == "good" else "Понятно")
 
+    @dp.callback_query()
+    async def on_unknown_callback(call: CallbackQuery) -> None:
+        log.warning("неизвестный callback: %r", call.data)
+        await call.answer("Не моя кнопка")
+
+    @dp.message()
+    async def on_message(message: Message) -> None:
+        """Ответ на любой текст — простая проверка, жив ли polling."""
+        counts = db.stats(conn)
+        await message.answer(
+            "Слушаю кнопки. В базе: "
+            f"вакансий {counts.get('vacancies', 0)}, "
+            f"отправлено {counts.get('notified', 0)}.\n"
+            f"chat_id: {message.chat.id}"
+        )
+
+    me = await bot.get_me()
+    log.info("polling запущен для @%s, база %s", me.username, db_path)
     try:
         await dp.start_polling(bot)
     finally:

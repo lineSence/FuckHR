@@ -217,9 +217,15 @@ def mark_notified(conn: sqlite3.Connection, keys: Iterable[str]) -> None:
     conn.commit()
 
 
-def set_feedback(conn: sqlite3.Connection, key: str, value: str) -> None:
-    conn.execute("UPDATE vacancies SET feedback = ? WHERE key = ?", (value, key))
+def set_feedback(conn: sqlite3.Connection, key: str, value: str) -> int:
+    """Записывает оценку и возвращает число изменённых строк.
+
+    Нуль означает, что ключ из кнопки не найден в базе — обычно это разные DB_PATH
+    у run.py и bot.py, а не потеря данных.
+    """
+    cur = conn.execute("UPDATE vacancies SET feedback = ? WHERE key = ?", (value, key))
     conn.commit()
+    return cur.rowcount
 
 
 def stats(conn: sqlite3.Connection) -> dict[str, int]:
