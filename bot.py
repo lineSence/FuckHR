@@ -1,7 +1,7 @@
-"""Telegram-слой: отправка карточек и сбор реакций.
+"""Telegram-слой: отправка карточек, служебные сообщения и сбор реакций.
 
 Два режима работы:
-- send_cards() — одноразовая отправка из run.py, без polling;
+- send_cards() / send_alert() — одноразовая отправка из run.py, без polling;
 - python bot.py — долгоживущий polling, чтобы кнопки писали feedback в базу.
 
 Кнопки в MVP меняют только оценку релевантности. Никакой отправки писем нет
@@ -148,6 +148,28 @@ async def send_cards(
     if failed:
         log.warning("не дошло карточек: %s (уйдут в следующий прогон)", len(failed))
     return delivered
+
+
+async def send_alert(token: str, chat_id: str | int, text: str) -> bool:
+    """Служебное сообщение владельцу — без кнопок и без HTML-разметки.
+
+    Текст приходит из canary.py и содержит пути файлов, поэтому parse_mode снят:
+    одинокие < и & в путях иначе сломают отправку именно тогда, когда она нужна.
+    """
+    bot = _bot(token)
+    try:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            parse_mode=None,
+            disable_web_page_preview=True,
+        )
+        return True
+    except Exception:  # noqa: BLE001 — канарейка не должна ронять прогон
+        log.exception("не удалось отправить служебное сообщение")
+        return False
+    finally:
+        await bot.session.close()
 
 
 async def run_polling(token: str, db_path: str) -> None:
