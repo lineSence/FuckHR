@@ -20,8 +20,22 @@ RU-IP, доступность провайдеров проверяется эм
 
 Стек: Python 3.11+, LangGraph + langgraph-checkpoint-sqlite, **FreeLLMAPI** как единый LLM-endpoint,
 Ollama как нижний слот, instructor, SQLite + sqlite-vec, telethon, Playwright, aiogram 3,
-systemd timers. Решения и альтернативы — `wiki/architecture/tech-stack.md` и
+**Task Scheduler на Windows** (ADR-014; systemd timers — только если хост станет Linux).
+Решения и альтернативы — `wiki/architecture/tech-stack.md` и
 `wiki/architecture/sources-and-outreach.md`.
+
+## 1.1 Где проект сейчас (16.09.2026)
+
+Работает «ходячий скелет», шаг 1 из `docs/mvp-windows.md`:
+`hh.ru (HTML) → SQLite + слепки → детерминированный скоринг → карточка в Telegram`.
+Без единого LLM-вызова.
+
+Не сделано: LLM-слой (FreeLLMAPI + Ollama), детектор HR-брехни, contact discovery,
+черновики писем, запуск по расписанию. Порядок работ — `docs/roadmap.md`.
+
+Важно для приоритетов: `[CORE-018]` меряет успех связкой «досье + живой контакт»,
+а `[CORE-012]` требует локального профиля для всего, что касается людей. Значит,
+локальный LLM-слой — не украшение поверх скелета, а условие выхода на главную ценность.
 
 ## 2. Категории знаний
 
