@@ -44,7 +44,7 @@ CREATE INDEX IF NOT EXISTS idx_contacts_person ON contacts(person, company);
 CREATE INDEX IF NOT EXISTS idx_contacts_status ON contacts(status);
 """
 
-# Статусы из [OUT-007]. sent_manually ставит только владелец кнопкой:
+# Статусы из [OUT-007]. sent_manually ставит только владелец:
 # система факта отправки не видит.
 DRAFTED = "drafted"
 SENT = "sent_manually"
@@ -87,7 +87,7 @@ BANNED_CHANNEL_HOSTS = (
     "vk.com", "ok.ru", "instagram.com", "facebook.com", "tiktok.com", "twitter.com", "x.com",
 )
 
-NAME_RE = re.compile(r"\b([\u0410-\u042fЁ][\u0430-\u044fё]{2,})\s+([\u0410-\u042fЁ][\u0430-\u044fё]{2,})\b")
+NAME_RE = re.compile(r"\b([\u0410-\u042f\u0401][\u0430-\u044f\u0451]{2,})\s+([\u0410-\u042f\u0401][\u0430-\u044f\u0451]{2,})\b")
 
 TRANSLIT = {
     "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e", "ж": "zh",
