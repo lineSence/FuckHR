@@ -105,6 +105,8 @@ EMAIL_TEMPLATES = (
     "{first}_{last}@{domain}",
 )
 
+GITHUB_PROFILE = "https://github.com/"
+
 CONFIDENCE_RU = {
     "high": "высокая",
     "medium": "средняя",
@@ -304,7 +306,7 @@ def extract_channels(text: str, source_url: str | None = None) -> tuple[tuple[Ca
                 channel_value=login,
                 role="публичный профиль GitHub",
                 role_rank=6,
-                source_url=f"https://github.com/{login}",
+                source_url=GITHUB_PROFILE + login,
                 confidence="medium",
             )
         )
