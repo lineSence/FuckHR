@@ -2,6 +2,11 @@
 
 Проверяется именно то, что невозможно увидеть глазами за один запуск: что на втором
 прогоне исчезнувшая вакансия получает слепок is_active = 0.
+
+Про настройки. У run.py больше нет флагов --profile и --limit: всё, кроме --dry-run
+и --verbose, берётся из настроек, которые правятся в интерфейсе. Поэтому тест готовит
+отдельный .env в tmp_path и подсунивает его через ENV_FILE и переменные окружения сразу:
+какой бы из двух источников ни оказался главным, рабочая база и реальный .env не затрагиваются.
 """
 
 from __future__ import annotations
@@ -11,6 +16,7 @@ from pathlib import Path
 
 import db
 import run
+import settings
 
 ROOT = Path(__file__).resolve().parents[1]
 DETAIL = {
@@ -42,18 +48,35 @@ class FakeClient:
         pass
 
 
+def configure(monkeypatch, tmp_path, name: str) -> dict[str, str]:
+    """Отдельные настройки на тест: свой .env, своя база, модель выключена."""
+    values = {
+        "RUN_LIMIT": "5",
+        "RUN_DETAILS": "1",
+        "RUN_PROFILE": str(ROOT / "profile.yaml"),
+        "LLM_ENABLED": "0",
+        "DB_PATH": str(tmp_path / (name + ".sqlite3")),
+        "LOG_PATH": str(tmp_path / (name + ".log")),
+        "FAILURE_DIR": str(tmp_path / "failures"),
+        "ALERT_STATE_PATH": str(tmp_path / "alerts.json"),
+    }
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "\n".join("{}={}".format(key, value) for key, value in values.items()) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ENV_FILE", str(env_path))
+    monkeypatch.setattr(settings, "ENV_PATH", env_path)
+    for key, value in values.items():
+        monkeypatch.setenv(key, value)
+    return values
+
+
 def run_pipeline(monkeypatch, tmp_path, vacancies) -> tuple[int, FakeClient]:
     fake = FakeClient(vacancies)
     monkeypatch.setattr(run, "HHHtmlClient", lambda **kwargs: fake)
-    monkeypatch.setenv("DB_PATH", str(tmp_path / "pipeline.sqlite3"))
-    monkeypatch.setenv("LOG_PATH", str(tmp_path / "pipeline.log"))
-    monkeypatch.setenv("FAILURE_DIR", str(tmp_path / "failures"))
-    monkeypatch.setenv("ALERT_STATE_PATH", str(tmp_path / "alerts.json"))
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        ["run.py", "--profile", str(ROOT / "profile.yaml"), "--dry-run", "--limit", "5"],
-    )
+    configure(monkeypatch, tmp_path, "pipeline")
+    monkeypatch.setattr(sys, "argv", ["run.py", "--dry-run"])
     return run.main(), fake
 
 
@@ -103,14 +126,9 @@ def test_blocked_source_returns_exit_code_two(monkeypatch, tmp_path, make_vacanc
 
     fake = BlockedClient([])
     monkeypatch.setattr(run, "HHHtmlClient", lambda **kwargs: fake)
-    monkeypatch.setenv("DB_PATH", str(tmp_path / "blocked.sqlite3"))
-    monkeypatch.setenv("LOG_PATH", str(tmp_path / "blocked.log"))
-    monkeypatch.setenv("ALERT_STATE_PATH", str(tmp_path / "alerts.json"))
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        ["run.py", "--profile", str(ROOT / "profile.yaml"), "--dry-run"],
-    )
+    configure(monkeypatch, tmp_path, "blocked")
+    monkeypatch.setattr(sys, "argv", ["run.py", "--dry-run"])
+
     assert run.main() == 2
 
     conn = db.connect(tmp_path / "blocked.sqlite3")
