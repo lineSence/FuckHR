@@ -17,7 +17,7 @@ def _hits(n: int = 2) -> list[websearch.Hit]:
 
 
 def test_без_ключа_провайдер_выключен() -> None:
-    provider = websearch.SearchProvider(api_key="")
+    provider = websearch.SearchProvider(provider=websearch.TAVILY, api_key="")
     assert provider.enabled is False
     assert provider.search("АКМЕ тимлид") == []
     assert provider.usage.skipped == 1
@@ -68,3 +68,75 @@ def test_в_запрос_уходит_только_компания_и_роль(
 def test_неизвестный_провайдер_ошибка() -> None:
     with pytest.raises(ValueError):
         websearch.SearchProvider(provider="ololo", api_key="k")
+
+
+# --- свой инстанс SearXNG ---
+
+
+def test_searxng_готовность_определяет_адрес_а_не_ключ() -> None:
+    без_адреса = websearch.SearchProvider(provider=websearch.SEARXNG, api_key="")
+    assert без_адреса.enabled is False
+    assert "SEARCH_BASE_URL" in без_адреса.disabled_reason
+
+    с_адресом = websearch.SearchProvider(
+        provider=websearch.SEARXNG, api_key="", base_url="https://searx.example.org/"
+    )
+    assert с_адресом.enabled is True
+    # Слеш на конце не должен превращаться в //search.
+    assert с_адресом.base_url == "https://searx.example.org"
+
+
+def test_searxng_разбирает_ответ_и_режет_по_лимиту(monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = {
+        "query": "АКМЕ",
+        "results": [
+            {"url": f"https://acme.ru/{i}", "title": f"Страница {i}", "content": "команда"}
+            for i in range(5)
+        ],
+    }
+    запросы: list[dict] = []
+
+    class Ответ:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return payload
+
+    def fake_get(url: str, **kwargs: object) -> Ответ:
+        запросы.append({"url": url, **kwargs})
+        return Ответ()
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+
+    provider = websearch.SearchProvider(
+        provider=websearch.SEARXNG, base_url="https://searx.example.org"
+    )
+    hits = provider.search("АКМЕ тимлид", limit=2)
+
+    assert [h.url for h in hits] == ["https://acme.ru/0", "https://acme.ru/1"]
+    assert hits[0].title == "Страница 0"
+    assert запросы[0]["url"] == "https://searx.example.org/search"
+    assert запросы[0]["params"]["format"] == "json"
+
+
+def test_searxng_html_вместо_json_не_роняет_этап(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Самая частая ошибка настройки: в settings.yml не включён формат json.
+    class Ответ:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            raise ValueError("not json")
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "get", lambda url, **kwargs: Ответ())
+
+    provider = websearch.SearchProvider(
+        provider=websearch.SEARXNG, base_url="https://searx.example.org"
+    )
+    assert provider.search("АКМЕ") == []
+    assert provider.usage.failures == 1
