@@ -5,7 +5,7 @@
 чем пользуются страницы.
 
 Правило шаблонов то же: только str.format с заранее вычисленными переменными, без
-вложенных f-строк: однажды это уже стоило SyntaxError.
+вложенных ф-строк: однажды это уже стоило SyntaxError.
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ import conditions
 import contacts
 import db
 import detector
+import dossier
 
 # Адрес зашит намеренно: интерфейс без авторизации не должен слушать сеть.
 HOST = "127.0.0.1"
@@ -75,11 +76,13 @@ button.secondary { background: #e9ebef; color: #1d1d1f; }
 NAV_ITEMS = (
     ("/", "Запуск"),
     ("/vacancies", "Вакансии"),
+    ("/companies", "Компании"),
     ("/contacts", "Контакты"),
     ("/search", "Поиск"),
     ("/llm", "Модель"),
     ("/profile", "Профиль"),
     ("/settings", "Настройки"),
+    ("/cleanup", "Очистка"),
 )
 
 NAV = "<nav>{}</nav>".format(
@@ -122,6 +125,7 @@ def open_db() -> sqlite3.Connection:
     contacts.ensure_schema(conn)
     detector.ensure_schema(conn)
     conditions.ensure_schema(conn)
+    dossier.ensure_schema(conn)
     return conn
 
 

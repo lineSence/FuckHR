@@ -1,19 +1,23 @@
 """Локальный веб-интерфейс: единственный пульт управления программой.
 
-Здесь три вещи, которые раньше жили в терминале:
+Здесь четыре вещи, которые раньше жили в терминале:
 
 - запуск: сбор, письма, проверка модели и тесты — кнопками, с полоской и живым
   логом; тот же вывод дублируется в терминал, где запущен интерфейс;
 - настройки: весь .env формой, profile.yaml целиком и подробные параметры поиска;
-- выдача: вакансии, условия, HR-флаги, контакты, выдача поиска, маршруты модели.
+- выдача: вакансии, условия, HR-флаги, досье на компании, контакты, выдача
+  поиска, маршруты модели;
+- очистка: удаление накопленных данных по целям, с подтверждением там, где
+  потеря необратима.
 
 В командной строке остаётся только запуск самих программ: python run.py и
 python outreach.py без флагов, параметры они берут из .env. Так же их запускает
 планировщик Windows, и настройки у них одни и те же.
 
 Файл сознательно тонкий: здесь только сервер и маршруты. Страницы живут в
-`ui_views.py` и `ui_forms.py`, общие детали — в `ui_core.py`. Имена страниц проброшены
-сюда же, чтобы webui.render_vacancies и подобные продолжали работать.
+`ui_views.py`, `ui_forms.py`, `ui_profile.py` и `ui_companies.py`, общие детали — в
+`ui_core.py`. Имена страниц проброшены сюда же, чтобы webui.render_vacancies и
+подобные продолжали работать.
 
 Границы, которые не нарушаются:
 
@@ -40,6 +44,13 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import jobs
 import settings
+from ui_companies import (
+    apply_cleanup,
+    company_rows,
+    render_cleanup,
+    render_companies,
+    render_company,
+)
 from ui_core import (
     DEFAULT_PORT,
     HOST,
@@ -144,6 +155,12 @@ class Handler(BaseHTTPRequestHandler):
                         conn, one("key"), with_draft=one("draft") == "1"
                     )
                     self._send(page("Вакансия", body))
+                elif parsed.path == "/companies":
+                    self._send(page("Компании", render_companies(conn)))
+                elif parsed.path == "/company":
+                    self._send(page("Досье", render_company(conn, one("name"))))
+                elif parsed.path == "/cleanup":
+                    self._send(page("Очистка", render_cleanup(conn)))
                 elif parsed.path == "/contacts":
                     self._send(page("Контакты", render_contacts(conn)))
                 elif parsed.path == "/search":
@@ -187,6 +204,18 @@ class Handler(BaseHTTPRequestHandler):
                 updates = settings.form_updates(form)
                 saved = settings.save(updates)
                 self._send(page("Настройки", render_settings(saved)))
+                return
+
+            if parsed.path == "/cleanup":
+                # Удаление единственное место, где результат показывается сразу, а не через
+                # редирект: владелец должен видеть, сколько строк исчезло.
+                conn = open_db()
+                try:
+                    removed, problems = apply_cleanup(conn, form)
+                    body = render_cleanup(conn, removed=removed, problems=problems)
+                    self._send(page("Очистка", body))
+                finally:
+                    conn.close()
                 return
 
             if parsed.path == "/search":
@@ -261,8 +290,10 @@ __all__ = (
     "NAV",
     "NAV_ITEMS",
     "STYLE",
+    "apply_cleanup",
     "area_field",
     "checkbox_field",
+    "company_rows",
     "contact_rows",
     "db_path",
     "esc",
@@ -272,6 +303,9 @@ __all__ = (
     "page",
     "profile_summary",
     "progress_block",
+    "render_cleanup",
+    "render_companies",
+    "render_company",
     "render_contacts",
     "render_llm",
     "render_profile",
@@ -287,9 +321,4 @@ __all__ = (
     "table",
     "text_field",
     "vacancy_one",
-    "vacancy_rows",
 )
-
-
-if __name__ == "__main__":
-    sys.exit(main())
