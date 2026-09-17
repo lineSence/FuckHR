@@ -12,8 +12,15 @@
 Одновременно идёт ровно одна задача. Два параллельных сбора бьются за блокировку
 sqlite и вдвое быстрее приводят к капче на hh.ru.
 
-Весь вывод копится в памяти (последние MAX_LINES строк) и пишется в файл под
-каталогом задач: лог нужен и после перезагрузки страницы.
+Весь вывод копится в памяти (последние MAX_LINES строк), пишется в файл под
+каталогом задач и дублируется в терминал, из которого запущен интерфейс:
+браузер удобен, но живой поток строк в консоли отвечает на вопрос «оно вообще живое?»
+быстрее любой страницы.
+
+Прогресс не сообщается задачей явно — он вычитывается из её же логов: строки вида
+«[3/30]» или «запрос 3/30». Сознательный компромисс: никакого протокола между
+процессами придумывать не надо, а если счётчика в логах нет, интерфейс просто
+покажет неопределённую полоску вместо вранья про проценты.
 """
 
 from __future__ import annotations
@@ -21,6 +28,7 @@ from __future__ import annotations
 import itertools
 import logging
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -35,6 +43,11 @@ ROOT = Path(__file__).resolve().parent
 LOG_DIR = ROOT / "data" / "jobs"
 MAX_LINES = 4000
 HISTORY = 20
+
+# Счётчики в логах. Сначала ищется явная форма в скобках, потом любое n/m:
+# второй вариант чаще ловит лишнее, поэтому он запасной.
+PROGRESS_RE = re.compile(r"\[(\d+)\s*/\s*(\d+)\]")
+PROGRESS_FALLBACK_RE = re.compile(r"(?<![\d.])(\d+)\s*/\s*(\d+)(?![\d.])")
 
 # Что разрешено запускать. Список закрытый: интерфейс никогда не собирает
 # командную строку из того, что пришло из браузера.
@@ -90,6 +103,8 @@ class Job:
     log_path: Path | None = None
     process: object | None = None
     stopped: bool = False
+    done: int | None = None
+    total: int | None = None
 
     @property
     def running(self) -> bool:
@@ -111,16 +126,49 @@ class Job:
             return "готово"
         return "завершилась с кодом {}".format(self.code)
 
+    @property
+    def progress(self) -> tuple[int, int] | None:
+        """(сделано, всего) или None, если задача не сообщала счёта."""
+        if self.done is None or not self.total:
+            return None
+        return min(self.done, self.total), self.total
+
+    @property
+    def percent(self) -> int | None:
+        pair = self.progress
+        if pair is None:
+            return None
+        done, total = pair
+        return int(round(100.0 * done / total))
+
     def tail(self, count: int = 200) -> list[str]:
         return self.lines[-count:]
+
+
+def parse_progress(line: str) -> tuple[int, int] | None:
+    """Извлекает счётчик из строки лога. Ноль и обратный счёт игнорируются."""
+    for pattern in (PROGRESS_RE, PROGRESS_FALLBACK_RE):
+        match = pattern.search(line)
+        if match is None:
+            continue
+        done, total = int(match.group(1)), int(match.group(2))
+        if total > 0 and done <= total:
+            return done, total
+    return None
 
 
 class Runner:
     """Одна активная задача плюс короткая история запусков."""
 
-    def __init__(self, root: Path | None = None, log_dir: Path | None = None) -> None:
+    def __init__(
+        self,
+        root: Path | None = None,
+        log_dir: Path | None = None,
+        echo: bool = True,
+    ) -> None:
         self.root = Path(root or ROOT)
         self.log_dir = Path(log_dir or LOG_DIR)
+        self.echo = echo
         self._lock = threading.Lock()
         self._jobs: list[Job] = []
 
@@ -195,14 +243,32 @@ class Runner:
 
     # —— внутреннее ——
 
+    def _echo(self, job: Job, line: str) -> None:
+        """Дублирует строку в терминал интерфейса.
+
+        Падение печати не должно ронять задачу: на Windows консоль может не взять
+        символ, а если интерфейс запущен службой, stdout вообще может быть закрыт.
+        """
+        if not self.echo:
+            return
+        try:
+            sys.stdout.write("[{}] {}\n".format(job.task, line))
+            sys.stdout.flush()
+        except Exception:  # noqa: BLE001 — терминал — удобство, а не обязательство
+            pass
+
     def _append(self, job: Job, line: str, handle: object | None) -> None:
+        counter = parse_progress(line)
         with self._lock:
             job.lines.append(line)
             if len(job.lines) > MAX_LINES:
                 del job.lines[:-MAX_LINES]
+            if counter is not None:
+                job.done, job.total = counter
         if handle is not None:
             handle.write(line + "\n")
             handle.flush()
+        self._echo(job, line)
 
     def _run(self, job: Job) -> None:
         command = [sys.executable, "-u", *job.argv]
@@ -241,12 +307,11 @@ class Runner:
             job.finished_at = time.time()
             if handle is not None:
                 handle.close()
-            log.info(
-                "задача %s завершена: %s за %.1f с",
-                job.task,
-                job.status,
-                job.duration,
+            summary = "задача {} — {} за {:.1f} с".format(
+                job.task, job.status, job.duration
             )
+            log.info("%s", summary)
+            self._echo(job, summary)
 
 
 def task_list() -> list[tuple[str, str, str]]:
@@ -258,4 +323,13 @@ def task_list() -> list[tuple[str, str, str]]:
 runner = Runner()
 
 
-__all__ = ("HISTORY", "Job", "MAX_LINES", "Runner", "TASKS", "runner", "task_list")
+__all__ = (
+    "HISTORY",
+    "Job",
+    "MAX_LINES",
+    "Runner",
+    "TASKS",
+    "parse_progress",
+    "runner",
+    "task_list",
+)
