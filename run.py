@@ -12,6 +12,11 @@
 из интерфейса и из планировщика, и параметры у них должны совпадать. Флаги
 --dry-run и --verbose остались: это не настройки, а режим одного запуска.
 
+Что означает лимит (RUN_LIMIT). Он ограничивает именно сбор: как только
+набралось N вакансий, прошедших предфильтр, остальные страницы и запросы не
+запрашиваются. Раньше лимит резал только список к отправке, и «собери одну
+вакансию» честно обходило все страницы всех запросов с паузами между ними.
+
 У прогона четыре обязанности, а не одна:
 1. собрать и отправить карточки;
 2. зафиксировать историю — и появление, и исчезновение вакансии (ADR-010);
@@ -58,51 +63,80 @@ log = logging.getLogger("fuckhr")
 
 
 def setup_logging(log_path: Path, verbose: bool) -> None:
+    """Лог всегда идёт и в файл, и в stdout.
+
+    Строки в stdout — единственный источник обратной связи для интерфейса и
+    планировщика: он читает их и по счётчикам вида «[3/30]» рисует полоску.
+    Раньше stdout появлялся только при --verbose, и запуск из браузера выглядел
+    как зависание. Теперь --verbose меняет только подробность (DEBUG).
+    """
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    handlers: list[logging.Handler] = [
-        RotatingFileHandler(log_path, maxBytes=2_000_000, backupCount=3, encoding="utf-8")
-    ]
-    if verbose:
-        handlers.append(logging.StreamHandler(sys.stdout))
+    stream = logging.StreamHandler(sys.stdout)
+    stream.setFormatter(logging.Formatter("%(levelname)s %(name)s %(message)s"))
+    file_handler = RotatingFileHandler(
+        log_path, maxBytes=2_000_000, backupCount=3, encoding="utf-8"
+    )
+    file_handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+    )
     logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-        handlers=handlers,
+        level=logging.DEBUG if verbose else logging.INFO,
+        handlers=[file_handler, stream],
         force=True,
     )
 
 
 def collect(
-    client: HHHtmlClient, profile: Profile
+    client: HHHtmlClient, profile: Profile, limit: int = 0
 ) -> tuple[dict[str, Vacancy], dict[str, Vacancy]]:
-    """Собирает вакансии по всем запросам профиля.
+    """Собирает вакансии по запросам профиля, но не больше limit штук.
 
     Возвращает две карты: всё увиденное и то, что прошло предфильтр. Первая нужна
     истории: «вакансия видна в выдаче» — факт о рынке, независимый от нашего интереса.
 
-    Страница вакансии запрашивается только для того, что прошло предфильтр по
-    заголовку и вилке: каждый лишний запрос приближает капчу.
+    limit останавливает обход сразу как только набралось нужное число: генератор
+    поиска бросается недочитанным, и остальные страницы не запрашиваются. Каждая
+    незапрошенная страница — это сэкономленные две-три секунды паузы и шаг от капчи.
     """
     seen: dict[str, Vacancy] = {}
     passed: dict[str, Vacancy] = {}
-    for query in profile.queries:
-        text = query.get("text")
-        if not text:
-            continue
-        log.info("запрос: %s", text)
-        for draft in client.search(
+    queries = [q for q in profile.queries if q.get("text")]
+    for index, query in enumerate(queries, start=1):
+        if limit and len(passed) >= limit:
+            log.info("лимит %s набран, остальные запросы не трогаем", limit)
+            break
+        text = query["text"]
+        log.info("[%s/%s] запрос: %s", index, len(queries), text)
+        pages = client.search(
             text=text,
             area=query.get("area") or profile.areas or None,
             period=int(query.get("period", 7)),
             max_pages=int(query.get("max_pages", 3)),
             extra=query.get("extra"),
-        ):
-            seen.setdefault(draft.key, draft)
-            rough = evaluate(draft, profile)
-            if rough.rejected:
-                log.debug("отброшено на предфильтре: %s (%s)", draft.title, rough.reject_reason)
-                continue
-            passed.setdefault(draft.key, draft)
+        )
+        try:
+            for draft in pages:
+                seen.setdefault(draft.key, draft)
+                rough = evaluate(draft, profile)
+                if rough.rejected:
+                    log.debug(
+                        "отброшено на предфильтре: %s (%s)",
+                        draft.title,
+                        rough.reject_reason,
+                    )
+                    continue
+                passed.setdefault(draft.key, draft)
+                if limit and len(passed) >= limit:
+                    log.info(
+                        "собрали %s вакансий при лимите %s, больше страниц не запрашиваем",
+                        len(passed),
+                        limit,
+                    )
+                    break
+        finally:
+            # Генератор закрываем явно: иначе он доживает до сборки мусора и не
+            # очевидно когда отпустит соединение.
+            pages.close()
     return seen, passed
 
 
@@ -157,7 +191,7 @@ def main() -> int:
         description="FuckHR: один прогон сбора. Настройки — в webui.py"
     )
     parser.add_argument("--dry-run", action="store_true", help="без отправки в Telegram")
-    parser.add_argument("--verbose", action="store_true", help="лог также в консоль")
+    parser.add_argument("--verbose", action="store_true", help="подробный лог (DEBUG)")
     args = parser.parse_args()
 
     load_dotenv()
@@ -197,9 +231,12 @@ def main() -> int:
         failure_dir=settings.get("FAILURE_DIR", "data/failures"),
     )
     try:
-        seen, drafts = collect(client, profile)
+        seen, drafts = collect(client, profile, options.limit)
         log.info("увидели: %s, прошло предфильтр: %s", len(seen), len(drafts))
-        for draft in drafts.values():
+        total = len(drafts)
+        for position, draft in enumerate(drafts.values(), start=1):
+            # Счётчик в квадратных скобках — то, по чему интерфейс рисует полоску.
+            log.info("[%s/%s] %s — %s", position, total, draft.title, draft.company)
             vacancy = draft
             if with_details:
                 try:
@@ -219,9 +256,11 @@ def main() -> int:
             # нужна детектору независимо от нашего интереса (ADR-009, ADR-010).
             db.add_snapshot(conn, vacancy)
             if verdict.rejected:
+                log.info("    отклонена: %s", verdict.reject_reason)
                 continue
             if db.upsert_vacancy(conn, vacancy, verdict.score, verdict.reasons):
                 new_count += 1
+            log.info("    скор %.1f", verdict.score)
 
             # Этап extract. Только для вакансий, прошедших скоринг: гонять модель
             # по отклонённым — жечь бюджет вызовов ради данных, которые никто не прочтёт.
@@ -241,7 +280,6 @@ def main() -> int:
     except BlockedError as exc:
         blocked = True
         log.error("%s", exc)
-        print(f"hh.ru заблокировал сбор: {exc}")
     finally:
         client.close()
 
@@ -250,10 +288,14 @@ def main() -> int:
     if seen:
         db.touch_seen(conn, seen.keys())
 
-    # Вторая половина истории: что исчезло из выдачи. Только после чистого прогона:
-    # при капче или сломанном парсере мы бы «закрыли» всю базу разом и испортили историю.
-    if not blocked and not client.fallback_pages and seen:
+    # Вторая половина истории: что исчезло из выдачи. Только после чистого
+    # прогона без лимита: при капче, сломанном парсере или оборванном по лимиту
+    # сборе мы бы «закрыли» живые вакансии разом и испортили историю.
+    partial = bool(options.limit) and len(drafts) >= options.limit
+    if not blocked and not partial and not client.fallback_pages and seen:
         db.deactivate_missing(conn, seen.keys())
+    elif partial:
+        log.info("сбор оборван лимитом — пропавшие вакансии не отмечаем")
 
     notify_if_broken(
         canary.RunStats(
@@ -275,12 +317,12 @@ def main() -> int:
 
     if args.dry_run:
         for row in rows:
-            print(f"{row['score']:5.1f}  {row['title']} — {row['company']}")
-            print(f"        {row['url']}")
+            log.info("%5.1f  %s — %s", row["score"], row["title"], row["company"])
+            log.info("        %s", row["url"])
             for line in conditions.lines(conn, row["key"]):
-                print(f"        {line}")
+                log.info("        %s", line)
             for line in signals.get(row["key"], []):
-                print(f"        {line}")
+                log.info("        %s", line)
     elif rows:
         token = os.getenv("TELEGRAM_BOT_TOKEN")
         chat_id = os.getenv("TELEGRAM_CHAT_ID")
@@ -299,14 +341,14 @@ def main() -> int:
             db.mark_notified(conn, delivered)
             log.info("отправлено карточек: %s", len(delivered))
 
-    filled, total = db.published_at_coverage(conn)
+    filled, total_snapshots = db.published_at_coverage(conn)
     flagged, assessed = detector.coverage(conn)
     log.info(
         "итого в базе: %s, слепков с датой публикации: %s из %s, "
         "отчётов детектора с флагами: %s из %s",
         db.stats(conn),
         filled,
-        total,
+        total_snapshots,
         flagged,
         assessed,
     )
@@ -324,6 +366,7 @@ def main() -> int:
             with_conditions,
             vacancies_total,
         )
+    log.info("прогон завершён")
     conn.close()
     return 2 if blocked else 0
 
