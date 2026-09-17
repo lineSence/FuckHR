@@ -1,37 +1,44 @@
-"""Один прогон пайплайна MVP (шаги 1–3 из docs/mvp-windows.md).
+"""Один прогон пайплайна MVP.
 
     hh.ru (HTML поиска) -> предфильтр -> страница вакансии -> скоринг
-    -> условия работы -> детектор утверждений -> SQLite -> Telegram
+    -> условия работы -> детектор утверждений -> SQLite
+    -> досье на компании (параллельно) -> Telegram
 
 Источник данных — HTML страниц hh.ru: публичный API закрыт с апреля 2026
 (ADR-015). Запускается из Task Scheduler через pythonw.exe (ADR-014).
 
 Настроек в командной строке больше нет. Сколько собирать, по какому профилю,
 ходить ли за описаниями и использовать ли модель — всё это живёт в .env и
-правится в веб-интерфейсе (webui.py). Причина простая: запусков три — руками,
-из интерфейса и из планировщика, и параметры у них должны совпадать. Флаги
---dry-run и --verbose остались: это не настройки, а режим одного запуска.
+правится в веб-интерфейсе (webui.py). Флаги --dry-run и --verbose остались:
+это не настройки, а режим одного запуска.
 
 Что означает лимит (RUN_LIMIT). Он ограничивает именно сбор: как только
 набралось N вакансий, прошедших предфильтр, остальные страницы и запросы не
-запрашиваются. Раньше лимит резал только список к отправке, и «собери одну
-вакансию» честно обходило все страницы всех запросов с паузами между ними.
+запрашиваются.
 
-У прогона четыре обязанности, а не одна:
+У прогона пять обязанностей:
 1. собрать и отправить карточки;
 2. зафиксировать историю — и появление, и исчезновение вакансии (ADR-010);
 3. сопоставить утверждения вакансии с этой историей (detector.py, ADR-009);
-4. пожаловаться, если сам сломался (canary.py), а не тихо вернуть ноль.
+4. собрать досье на компании, чьи вакансии прошли порог (dossier.py);
+5. пожаловаться, если сам сломался (canary.py), а не тихо вернуть ноль.
 
-Где здесь модель (ADR-005, ADR-017). Два этапа и оба необязательные:
+Почему досье собирается параллельно и после порога. Сбор с hh.ru последователен
+сознательно: паузы между запросами — единственная защита от капчи, и
+распараллелить его — значит потерять источник. А внешний поиск по компаниям
+идёт на другие домены, стоит секунды на компанию и зависит только от сети — его
+можно и нужно вести в несколько потоков. Порог здесь главный фильтр цены:
+досье собирается только по тем конторам, чей оффер вообще интересен.
 
-- extract — вытащить условия работы из описания (формат, график, вилка),
-  там где регулярки бессильны против живого языка;
-- hr_filter — показать пальцем на проверяемые утверждения в тексте.
+Писем здесь нет и не будет. Контакты и черновики готовит outreach.py по
+явному запросу владельца: письмо — решение человека, а не побочный эффект
+ночного сканирования ([OUT-006], ADR-012).
 
-Сбор, предфильтр, скоринг, история и канарейка остаются детерминированными
-[CORE-015]: с выключенной моделью и при любой её ошибке прогон доходит до конца
-и выдаёт тот же список вакансий, просто беднее деталями [CORE-017].
+Где здесь модель (ADR-005, ADR-017). Три этапа и все необязательные: extract
+(условия из описания), hr_filter (указать на проверяемые утверждения), company
+(сводка по отзывам словами). Сбор, предфильтр, скоринг, история, флаги досье и
+канарейка остаются детерминированными [CORE-015]: с выключенной моделью и при
+любой её ошибке прогон доходит до конца, просто беднее деталями [CORE-017].
 """
 
 from __future__ import annotations
@@ -41,6 +48,7 @@ import asyncio
 import logging
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -52,14 +60,18 @@ import conditions
 import db
 import detector
 import detector_llm
+import dossier
 import llm
 import llm_tasks
 import settings
+import websearch
 from hh import Vacancy, enrich
 from hh_html import BlockedError, HHHtmlClient
 from score import Profile, evaluate
 
 log = logging.getLogger("fuckhr")
+
+MAX_RESEARCH_WORKERS = 8  # выше — верный способ получить бан у апстримов SearXNG
 
 
 def setup_logging(log_path: Path, verbose: bool) -> None:
@@ -69,6 +81,9 @@ def setup_logging(log_path: Path, verbose: bool) -> None:
     планировщика: он читает их и по счётчикам вида «[3/30]» рисует полоску.
     Раньше stdout появлялся только при --verbose, и запуск из браузера выглядел
     как зависание. Теперь --verbose меняет только подробность (DEBUG).
+
+    Потоки досье пишут в тот же лог: имя потока в формате нужно, иначе
+    переплетённые строки нескольких компаний невозможно различить.
     """
     log_path.parent.mkdir(parents=True, exist_ok=True)
     stream = logging.StreamHandler(sys.stdout)
@@ -77,7 +92,7 @@ def setup_logging(log_path: Path, verbose: bool) -> None:
         log_path, maxBytes=2_000_000, backupCount=3, encoding="utf-8"
     )
     file_handler.setFormatter(
-        logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+        logging.Formatter("%(asctime)s %(levelname)s %(name)s [%(threadName)s] %(message)s")
     )
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.INFO,
@@ -154,9 +169,105 @@ def build_gateway(conn, disabled: bool) -> llm.Gateway | None:
         log.info("модель не настроена (%s), идём без неё", gateway.disabled_reason)
         return None
     for stage, profile, route, model in gateway.describe_routes():
-        if stage in {"extract", "hr_filter"}:
+        if stage in {"extract", "hr_filter", "company"}:
             log.info("этап %s: профиль %s, маршрут %s, модель %s", stage, profile, route, model)
     return gateway
+
+
+def research_workers() -> int:
+    """Сколько компаний изучается одновременно."""
+    raw = int(settings.as_float(settings.get("RESEARCH_WORKERS", "4"), 4.0))
+    return max(1, min(MAX_RESEARCH_WORKERS, raw))
+
+
+def _research_one(
+    db_path: Path, company: str, site_url: str | None, use_llm: bool, limit: int
+) -> dossier.Dossier:
+    """Работа одного потока: своё соединение, свой провайдер, свой шлюз.
+
+    Соединение sqlite нельзя делить между потоками, поэтому каждый открывает
+    своё. Запись в общие таблицы из потоков не идёт — только кэши поиска и
+    модели, где конкурентная запись безопасна при WAL. Само досье сохраняет
+    главный поток.
+    """
+    conn = db.connect(db_path)
+    try:
+        provider = websearch.SearchProvider.from_env(conn)
+        gateway: llm.Gateway | None = None
+        if use_llm:
+            candidate = llm.Gateway.from_env(conn)
+            gateway = candidate if candidate.enabled else None
+        return dossier.build(
+            company, provider, gateway=gateway, site_url=site_url, limit=limit
+        )
+    finally:
+        conn.close()
+
+
+def research_companies(
+    conn,
+    db_path: Path,
+    companies: dict[str, str | None],
+    use_llm: bool,
+    force: bool = False,
+) -> dict[str, dossier.Dossier]:
+    """Собирает досье на список компаний в несколько потоков.
+
+    Свежие досье не пересобираются: за месяц отзывы о работодателе меняются
+    медленнее, чем исчерпывается потолок запросов к поиску.
+    """
+    dossier.ensure_schema(conn)
+    todo: dict[str, str | None] = {}
+    for company, site_url in companies.items():
+        if not company:
+            continue
+        if not force and dossier.is_fresh(dossier.load(conn, company)):
+            log.debug("досье на %s свежее, пропускаем", company)
+            continue
+        todo[company] = site_url
+
+    if not todo:
+        log.info("досье на все компании уже есть и свежее")
+        return {}
+
+    probe = websearch.SearchProvider.from_env(None)
+    if not probe.enabled:
+        log.warning(
+            "досье на %s компаний не собрать: %s",
+            len(todo),
+            probe.disabled_reason,
+        )
+        return {}
+
+    workers = min(research_workers(), len(todo))
+    log.info("изучаем компаний: %s, потоков: %s", len(todo), workers)
+
+    out: dict[str, dossier.Dossier] = {}
+    done = 0
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="dossier") as pool:
+        futures = {
+            pool.submit(_research_one, db_path, company, site_url, use_llm, 5): company
+            for company, site_url in todo.items()
+        }
+        for future in as_completed(futures):
+            company = futures[future]
+            done += 1
+            try:
+                result = future.result()
+            except Exception as exc:  # noqa: BLE001 — одна компания не роняет прогон
+                log.warning("досье на %s не собралось: %s", company, exc)
+                continue
+            # Счётчик в квадратных скобках — по нему интерфейс рисует полоску.
+            log.info(
+                "[%s/%s] досье: %s — %s",
+                done,
+                len(todo),
+                company,
+                dossier.RISK_RU.get(result.risk, result.risk),
+            )
+            dossier.store(conn, result)
+            out[company] = result
+    return out
 
 
 def notify_if_broken(stats: canary.RunStats, dry_run: bool) -> list[canary.Alert]:
@@ -212,6 +323,7 @@ def main() -> int:
     db.init_schema(conn)
     detector.ensure_schema(conn)
     conditions.ensure_schema(conn)
+    dossier.ensure_schema(conn)
 
     gateway = build_gateway(conn, not options.use_llm)
     extracted = 0
@@ -223,6 +335,8 @@ def main() -> int:
     with_details = options.details
     seen: dict[str, Vacancy] = {}
     drafts: dict[str, Vacancy] = {}
+    # Компании вакансий, прошедших скоринг: именно их изучаем после сбора.
+    to_research: dict[str, str | None] = {}
 
     client = HHHtmlClient(
         pause=settings.as_float(os.getenv("HH_PAUSE"), 2.0),
@@ -262,6 +376,12 @@ def main() -> int:
                 new_count += 1
             log.info("    скор %.1f", verdict.score)
 
+            # Порог пройдён — компания идёт в очередь на изучение. Сам поиск запускается
+            # после обхода hh.ru: мешать его с постраничным сбором — значит сбить паузы
+            # и приблизить капчу.
+            if verdict.score >= profile.min_score and vacancy.company:
+                to_research.setdefault(vacancy.company, getattr(vacancy, "site_url", None))
+
             # Этап extract. Только для вакансий, прошедших скоринг: гонять модель
             # по отклонённым — жечь бюджет вызовов ради данных, которые никто не прочтёт.
             if gateway is not None and vacancy.description.strip():
@@ -297,6 +417,14 @@ def main() -> int:
     elif partial:
         log.info("сбор оборван лимитом — пропавшие вакансии не отмечаем")
 
+    # Досье на компании. Идёт после hh.ru и до отправки карточек: без него в карточке
+    # не будет самой полезной строки — стоит ли вообще связываться с этими людьми.
+    researched: dict[str, dossier.Dossier] = {}
+    if to_research:
+        researched = research_companies(
+            conn, db_path, to_research, use_llm=options.use_llm
+        )
+
     notify_if_broken(
         canary.RunStats(
             collected=len(seen),
@@ -313,7 +441,16 @@ def main() -> int:
     rows = db.pending_cards(conn, profile.min_score, options.limit)
     log.info("новых вакансий: %s, к отправке: %s", new_count, len(rows))
 
-    signals = {row["key"]: detector.load_lines(conn, row["key"]) for row in rows}
+    # Строки под карточкой: сначала работодатель, потом утверждения вакансии.
+    # Порядок не косметика: красные флаги компании отменяют смысл читать дальше.
+    signals: dict[str, list[str]] = {}
+    for row in rows:
+        lines: list[str] = []
+        saved = dossier.load(conn, row["company"]) if row["company"] else None
+        if saved is not None:
+            lines += dossier.row_to_lines(saved)
+        lines += detector.load_lines(conn, row["key"])
+        signals[row["key"]] = lines
 
     if args.dry_run:
         for row in rows:
@@ -352,6 +489,16 @@ def main() -> int:
         flagged,
         assessed,
     )
+    if researched:
+        dossiers, red, empty = dossier.coverage(conn)
+        log.info(
+            "досье: собрано в этом прогоне %s, всего в базе %s, с красными флагами %s, "
+            "без единого отзыва %s",
+            len(researched),
+            dossiers,
+            red,
+            empty,
+        )
     if gateway is not None:
         usage = gateway.usage
         with_conditions, vacancies_total = conditions.coverage(conn)
