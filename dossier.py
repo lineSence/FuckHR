@@ -16,6 +16,11 @@
 Граница по данным. В поиск уходит только название компании. В отзывах часто
 встречаются ФИО руководителей и авторов — мы их не извлекаем и не складываем
 в базу: досье на контору, а не на людей [CORE-012].
+
+Отрицания. Маркеры и признаки ищутся подстрокой, поэтому «рекомендую» лежит
+внутри «не рекомендую», а «платят вовремя» — внутри «не платят вовремя». Перед
+зачётом позитивного совпадения проверяется префикс отрицания, иначе злой отзыв
+становится mixed и перестаёт красить работодателя.
 """
 
 from __future__ import annotations
@@ -206,6 +211,13 @@ POSITIVE_MARKERS = (
     "рекомендую", "лучшая компания", "доволен работой", "плюсы", "всё нравится",
 )
 
+# Отрицания перед позитивным совпадением. Без этой проверки «не платят вовремя»
+# считается похвалой: маркеры ищутся подстрокой, а не по словам.
+NEGATION_PREFIXES = (
+    "не ", "ни ", "никогда не ", "перестали ", "так и не ", "вообще не ",
+)
+NEGATION_WINDOW = 20  # сколько символов слева смотрим на отрицание
+
 RISK_UNKNOWN = "unknown"
 RISK_GREEN = "green"
 RISK_YELLOW = "yellow"
@@ -361,13 +373,58 @@ def extract_rating(text: str) -> float | None:
     return round(value, 2)
 
 
+def is_negated(low: str, at: int) -> bool:
+    """Стоит ли отрицание прямо перед совпадением.
+
+    Смотрим узкое окно слева: «не платят вовремя» — отрицание, а «платят
+    вовремя, не придраться» — нет.
+    """
+    before = low[max(0, at - NEGATION_WINDOW):at]
+    return any(before.endswith(prefix) for prefix in NEGATION_PREFIXES)
+
+
+def count_markers(markers: Sequence[str], low: str, *, skip_negated: bool) -> int:
+    """Сколько маркеров нашлось. Под отрицанием позитивные не считаются."""
+    total = 0
+    for marker in markers:
+        start = 0
+        while True:
+            at = low.find(marker, start)
+            if at < 0:
+                break
+            start = at + len(marker)
+            if skip_negated and is_negated(low, at):
+                continue
+            total += 1
+    return total
+
+
+def matched_needle(
+    low: str, needles: Sequence[str], *, skip_negated: bool
+) -> str | None:
+    """Первый сработавший признак или None. Отрицания пропускаются."""
+    for needle in needles:
+        start = 0
+        while True:
+            at = low.find(needle, start)
+            if at < 0:
+                break
+            start = at + len(needle)
+            if skip_negated and is_negated(low, at):
+                continue
+            return needle
+    return None
+
+
 def polarity_of(text: str) -> str:
     """Грубая тональность без модели: маркеры плюс признаки закономерностей."""
     low = (text or "").lower()
-    negative = sum(1 for marker in NEGATIVE_MARKERS if marker in low)
-    positive = sum(1 for marker in POSITIVE_MARKERS if marker in low)
+    negative = count_markers(NEGATIVE_MARKERS, low, skip_negated=False)
+    positive = count_markers(POSITIVE_MARKERS, low, skip_negated=True)
     for _code, _label, pol, weight, needles in PATTERN_RULES:
-        found = any(n in low for n in needles)
+        # Зелёные признаки под отрицанием не считаются: «не платят вовремя» —
+        # это жалоба, а не похвала.
+        found = matched_needle(low, needles, skip_negated=pol == "green")
         if not found:
             continue
         if pol == "red":
@@ -404,6 +461,9 @@ def find_patterns(reviews: Sequence[Review]) -> tuple[Pattern, ...]:
 
     Считаются отзывы, а не встреченные слова: один эмоциональный текст с пятью
     упоминаниями переработок — это один голос, а не закономерность.
+
+    Зелёные признаки под отрицанием не засчитываются: иначе отзыв «не платят
+    вовремя» давал бы green-флаг и подкрашивал risk_level в зелёный.
     """
     out: list[Pattern] = []
     for code, label, polarity, weight, needles in PATTERN_RULES:
@@ -412,7 +472,7 @@ def find_patterns(reviews: Sequence[Review]) -> tuple[Pattern, ...]:
         for review in reviews:
             text = review.text
             low = text.lower()
-            matched = next((n for n in needles if n in low), None)
+            matched = matched_needle(low, needles, skip_negated=polarity == "green")
             if not matched:
                 continue
             hits += 1
