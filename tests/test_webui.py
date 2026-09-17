@@ -14,6 +14,10 @@
 Про ключи вакансий. Vacancy.key считается от названия и компании, а не от id или URL:
 две вакансии с одинаковыми названием и компанией — одна и та же строка в базе, и
 второй upsert перезапишет скор первой. Именно на этом раньше ломался тест фильтра.
+
+Про тексты предупреждений. Проверяем факт предупреждения и класс блока, а не
+формулировку целиком: иначе любая правка текста в интерфейсе красит тесты
+красным, не найдя ни одной ошибки.
 """
 
 from __future__ import annotations
@@ -127,12 +131,24 @@ def test_сводка_профиля_читается_без_падения_на
 
 
 def test_страница_профиля_предупреждает_о_пустых_фактах(tmp_path: Path) -> None:
+    """Без фактов письма собираются без конкретики, и это надо говорить вслух."""
     profile = tmp_path / "profile.yaml"
     profile.write_text("facts: []\n", encoding="utf-8")
 
     html = webui.render_profile(str(profile))
 
-    assert "facts пуст" in html
+    assert "Факты о себе" in html
+    assert "class=warn" in html
+
+
+def test_страница_профиля_предупреждает_о_пустых_запросах(tmp_path: Path) -> None:
+    """Без запросов сбор молча возвращает нуль вакансий — самая обидная тишина."""
+    profile = tmp_path / "profile.yaml"
+    profile.write_text("queries: []\nfacts:\n  - факт\n", encoding="utf-8")
+
+    html = webui.render_profile(str(profile))
+
+    assert "Запросы не заданы" in html
 
 
 def test_выдача_поиска_показывается_с_доменом(conn, monkeypatch: pytest.MonkeyPatch) -> None:

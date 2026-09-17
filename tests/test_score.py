@@ -1,4 +1,13 @@
-"""Скоринг детерминирован ([CORE-015]), значит его можно прибить тестами насмерть."""
+"""Скоринг детерминирован ([CORE-015]), значит его можно прибить тестами насмерть.
+
+Профиль берётся из tests/fixtures/profile.yaml, а не из рабочего profile.yaml в корне.
+Раньше брался рабочий, и тесты падали от настройки фильтра под себя: сменишь навыки
+с python на «менеджер КРО» — и тестовая вакансия перестаёт проходить порог, хотя в коде
+ничего не ломалось. Проверяем формулу, а не вкусы владельца.
+
+За рабочим файлом остаётся одна проверка — что он вообще читается загрузчиком
+после редактирования через интерфейс. Значения в нём тесты не комментируют.
+"""
 
 from __future__ import annotations
 
@@ -9,11 +18,12 @@ import pytest
 from score import Profile, evaluate
 
 ROOT = Path(__file__).resolve().parents[1]
+FIXTURE = Path(__file__).resolve().parent / "fixtures" / "profile.yaml"
 
 
 @pytest.fixture(scope="module")
 def profile() -> Profile:
-    return Profile.load(ROOT / "profile.yaml")
+    return Profile.load(FIXTURE)
 
 
 def test_good_vacancy_passes_threshold(profile, make_vacancy):
@@ -52,3 +62,19 @@ def test_onsite_scores_lower_than_remote(profile, make_vacancy):
         profile,
     )
     assert onsite.score < remote.score
+
+
+def test_рабочий_профиль_читается_загрузчиком():
+    """Страховка от сломанного YAML после ручных правок или сохранения из формы.
+
+    Конкретные запросы, навыки и порог здесь сознательно не проверяются: это личный
+    файл владельца, и он вправе менять там всё.
+    """
+    working = ROOT / "profile.yaml"
+    if not working.exists():
+        pytest.skip("рабочего profile.yaml нет, проверять нечего")
+
+    loaded = Profile.load(working)
+
+    assert isinstance(loaded.queries, list)
+    assert loaded.min_score >= 0
