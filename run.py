@@ -6,6 +6,12 @@
 Источник данных — HTML страниц hh.ru: публичный API закрыт с апреля 2026
 (ADR-015). Запускается из Task Scheduler через pythonw.exe (ADR-014).
 
+Настроек в командной строке больше нет. Сколько собирать, по какому профилю,
+ходить ли за описаниями и использовать ли модель — всё это живёт в .env и
+правится в веб-интерфейсе (webui.py). Причина простая: запусков три — руками,
+из интерфейса и из планировщика, и параметры у них должны совпадать. Флаги
+--dry-run и --verbose остались: это не настройки, а режим одного запуска.
+
 У прогона четыре обязанности, а не одна:
 1. собрать и отправить карточки;
 2. зафиксировать историю — и появление, и исчезновение вакансии (ADR-010);
@@ -19,7 +25,7 @@
 - hr_filter — показать пальцем на проверяемые утверждения в тексте.
 
 Сбор, предфильтр, скоринг, история и канарейка остаются детерминированными
-[CORE-015]: с --no-llm и при любой ошибке модели прогон доходит до конца
+[CORE-015]: с выключенной моделью и при любой её ошибке прогон доходит до конца
 и выдаёт тот же список вакансий, просто беднее деталями [CORE-017].
 """
 
@@ -43,6 +49,7 @@ import detector
 import detector_llm
 import llm
 import llm_tasks
+import settings
 from hh import Vacancy, enrich
 from hh_html import BlockedError, HHHtmlClient
 from score import Profile, evaluate
@@ -106,7 +113,7 @@ def build_gateway(conn, disabled: bool) -> llm.Gateway | None:
     описаниям не должен стоить ни одного вызова [LLM-006].
     """
     if disabled:
-        log.info("модель отключена флагом --no-llm")
+        log.info("модель выключена в настройках (LLM_ENABLED)")
         return None
     gateway = llm.Gateway.from_env(conn)
     if not gateway.enabled:
@@ -146,53 +153,55 @@ def notify_if_broken(stats: canary.RunStats, dry_run: bool) -> list[canary.Alert
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="FuckHR MVP: один прогон")
-    parser.add_argument("--profile", default="profile.yaml")
-    parser.add_argument("--limit", type=int, default=10, help="сколько карточек отправлять")
-    parser.add_argument("--dry-run", action="store_true", help="без отправки в Telegram")
-    parser.add_argument(
-        "--no-details", action="store_true", help="не ходить за страницами вакансий")
-    parser.add_argument(
-        "--no-llm",
-        action="store_true",
-        help="прогнать только детерминированную часть, без вызовов модели",
+    parser = argparse.ArgumentParser(
+        description="FuckHR: один прогон сбора. Настройки — в webui.py"
     )
-    parser.add_argument("--verbose", action="store_true")
+    parser.add_argument("--dry-run", action="store_true", help="без отправки в Telegram")
+    parser.add_argument("--verbose", action="store_true", help="лог также в консоль")
     args = parser.parse_args()
 
     load_dotenv()
-    db_path = Path(os.getenv("DB_PATH", "data/fuckhr.sqlite3"))
-    setup_logging(Path(os.getenv("LOG_PATH", "data/fuckhr.log")), args.verbose)
+    options = settings.collect_options()
+    db_path = Path(settings.get("DB_PATH", "data/fuckhr.sqlite3"))
+    setup_logging(Path(settings.get("LOG_PATH", "data/fuckhr.log")), args.verbose)
+    log.info(
+        "настройки: лимит %s, профиль %s, описания %s, модель %s",
+        options.limit,
+        options.profile,
+        "да" if options.details else "нет",
+        "да" if options.use_llm else "нет",
+    )
 
-    profile = Profile.load(args.profile)
+    profile = Profile.load(options.profile)
 
     conn = db.connect(db_path)
     db.init_schema(conn)
     detector.ensure_schema(conn)
     conditions.ensure_schema(conn)
 
-    gateway = build_gateway(conn, args.no_llm)
+    gateway = build_gateway(conn, not options.use_llm)
     extracted = 0
 
     new_count = 0
     enriched = 0
     empty_descriptions = 0
     blocked = False
+    with_details = options.details
     seen: dict[str, Vacancy] = {}
     drafts: dict[str, Vacancy] = {}
 
     client = HHHtmlClient(
-        pause=float(os.getenv("HH_PAUSE", "2.0")),
+        pause=settings.as_float(os.getenv("HH_PAUSE"), 2.0),
         cookie=os.getenv("HH_COOKIE") or None,
         proxy=os.getenv("HH_PROXY") or None,
-        failure_dir=os.getenv("FAILURE_DIR", "data/failures"),
+        failure_dir=settings.get("FAILURE_DIR", "data/failures"),
     )
     try:
         seen, drafts = collect(client, profile)
         log.info("увидели: %s, прошло предфильтр: %s", len(seen), len(drafts))
         for draft in drafts.values():
             vacancy = draft
-            if not args.no_details:
+            if with_details:
                 try:
                     vacancy = enrich(draft, client.vacancy(draft.external_id))
                     enriched += 1
@@ -202,7 +211,7 @@ def main() -> int:
                     # Дальше ходить бессмысленно: сохраняем то, что уже собрали.
                     log.error("hh.ru закрылся капчей на деталях, добирать остальное не будем")
                     blocked = True
-                    args.no_details = True
+                    with_details = False
                 except Exception:  # noqa: BLE001 — вакансия могла быть уже закрыта
                     log.warning("нет деталей по %s, берём черновик", draft.external_id)
             verdict = evaluate(vacancy, profile)
@@ -259,7 +268,7 @@ def main() -> int:
         dry_run=args.dry_run,
     )
 
-    rows = db.pending_cards(conn, profile.min_score, args.limit)
+    rows = db.pending_cards(conn, profile.min_score, options.limit)
     log.info("новых вакансий: %s, к отправке: %s", new_count, len(rows))
 
     signals = {row["key"]: detector.load_lines(conn, row["key"]) for row in rows}
@@ -273,14 +282,22 @@ def main() -> int:
             for line in signals.get(row["key"], []):
                 print(f"        {line}")
     elif rows:
-        token = os.environ["TELEGRAM_BOT_TOKEN"]
-        chat_id = os.environ["TELEGRAM_CHAT_ID"]
-        republished = {row["key"]: db.republish_count(conn, row["key"]) for row in rows}
-        delivered = asyncio.run(
-            tg.send_cards(token, chat_id, rows, republished, signals)
-        )
-        db.mark_notified(conn, delivered)
-        log.info("отправлено карточек: %s", len(delivered))
+        token = os.getenv("TELEGRAM_BOT_TOKEN")
+        chat_id = os.getenv("TELEGRAM_CHAT_ID")
+        if not token or not chat_id:
+            # Раньше здесь был KeyError и прогон терял всю работу на последнем шаге.
+            # Собранное уже в базе и видно в интерфейсе [CORE-017].
+            log.warning(
+                "Telegram не настроен: %s карточек ждут в базе, смотри их в интерфейсе",
+                len(rows),
+            )
+        else:
+            republished = {row["key"]: db.republish_count(conn, row["key"]) for row in rows}
+            delivered = asyncio.run(
+                tg.send_cards(token, chat_id, rows, republished, signals)
+            )
+            db.mark_notified(conn, delivered)
+            log.info("отправлено карточек: %s", len(delivered))
 
     filled, total = db.published_at_coverage(conn)
     flagged, assessed = detector.coverage(conn)
