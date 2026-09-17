@@ -22,6 +22,15 @@
 Остальное как было: кэш по хэшу промпта всегда включён [LLM-006], любая ошибка
 возвращает None, а не исключение [CORE-017], [LLM-009].
 
+Об ошибках адреса. Ответы 4xx и 5xx разные по природе, и обращаться с ними надо
+по-разному. 500, 502, 503, таймаут и 429 — состояние мира, оно меняется, повтор
+осмыслен. 400 и 404 — суждение о самом запросе: нет такой модели, не тот формат,
+слишком длинный контекст. Повторять такое три раза — втрое дольше ждать того же
+отказа, поэтому такие ответы признаются окончательными сразу.
+
+И главное: причина отказа живёт в теле ответа, а не в статусе. Без неё запись
+«400 Bad Request» сообщает ровно ничего, поэтому тело читается и попадает в лог.
+
 Настройка прокси:
 
     LLM_PROXY_BASE_URL=http://127.0.0.1:4000/v1
@@ -29,6 +38,11 @@
     LLM_PROXY_MODEL_FAST=gpt-4o-mini
     LLM_PROXY_MODEL_SMART=claude-3-7-sonnet
     LLM_PROXY_MODEL_LONG=gemini-1.5-pro
+    LLM_PROXY_MODEL_LOCAL=qwen3:8b
+
+Имена берутся из model_name в config.yaml прокси. Если имя для профиля не задано,
+в запрос уйдёт само название профиля (auto:fast, local-only и так далее) — и если
+такого алиаса у прокси нет, он ответит 400. Об этом предупреждает warn_unmapped().
 """
 
 from __future__ import annotations
@@ -91,9 +105,26 @@ PROXY_MODEL_ENV = {
     EMBEDDINGS: "LLM_PROXY_MODEL_EMBEDDINGS",
 }
 
+# Коды, при которых повтор имеет смысл: это состояние сервиса, не запроса.
+RETRY_STATUSES = frozenset({408, 409, 425, 429, 500, 502, 503, 504, 529})
+MAX_ERROR_CHARS = 600
+
 
 class ProfileError(RuntimeError):
     """Неизвестный этап или попытка увести ПД из local-only."""
+
+
+class ApiError(RuntimeError):
+    """Ответ адреса с кодом ошибки и разобранным телом."""
+
+    def __init__(self, status: int, message: str) -> None:
+        self.status = int(status)
+        self.message = message or "тело ответа пустое"
+        super().__init__("HTTP {}: {}".format(self.status, self.message))
+
+    @property
+    def retryable(self) -> bool:
+        return self.status in RETRY_STATUSES
 
 
 @dataclass
@@ -135,6 +166,28 @@ def profile_for(stage: str) -> str:
 def ensure_cache(conn: sqlite3.Connection) -> None:
     conn.executescript(CACHE_SCHEMA)
     conn.commit()
+
+
+def error_message(payload: Any, fallback: str = "") -> str:
+    """Вытаскивает человеческую причину из тела ошибки.
+
+    OpenAI-совместимые сервисы отвечают {"error": {"message": ...}}, LiteLLM
+    иногда кладёт текст в detail, а Ollama — просто в error строкой.
+    """
+    if isinstance(payload, dict):
+        for key in ("error", "detail", "message"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()[:MAX_ERROR_CHARS]
+            if isinstance(value, dict):
+                for inner in ("message", "detail", "code", "type"):
+                    text = value.get(inner)
+                    if isinstance(text, str) and text.strip():
+                        return text.strip()[:MAX_ERROR_CHARS]
+            if isinstance(value, list) and value:
+                return json.dumps(value, ensure_ascii=False)[:MAX_ERROR_CHARS]
+        return json.dumps(payload, ensure_ascii=False)[:MAX_ERROR_CHARS]
+    return (fallback or "").strip()[:MAX_ERROR_CHARS]
 
 
 def _digest(
@@ -192,6 +245,9 @@ class Gateway:
         self.usage = Usage()
         self._transport = transport
         self.conn = conn
+        # Профили, по которым прокси уже отказал: второй раз такой вызов делать
+        # незачем — конфиг прокси внутри одного прогона не меняется.
+        self._rejected: dict[tuple[str, str], str] = {}
         if conn is not None:
             ensure_cache(conn)
 
@@ -231,6 +287,34 @@ class Gateway:
         """
         return self.proxy_models.get(profile, profile)
 
+    def unmapped_profiles(self) -> list[tuple[str, str, str]]:
+        """Профили без явного имени модели: (профиль, что уйдёт, переменная).
+
+        Главная причина 400 от прокси: мы просим модель «local-only», а такого
+        имени в его config.yaml нет.
+        """
+        out = []
+        for profile, env_name in PROXY_MODEL_ENV.items():
+            if profile not in self.proxy_models:
+                out.append((profile, profile, env_name))
+        return out
+
+    def warn_unmapped(self, profiles: Sequence[str] = ()) -> None:
+        """Предупреждает о профилях, для которых имя модели не задано."""
+        if not self.proxy_base_url:
+            return
+        wanted = set(profiles) if profiles else None
+        for profile, sent, env_name in self.unmapped_profiles():
+            if wanted is not None and profile not in wanted:
+                continue
+            log.warning(
+                "для профиля %s имя модели не задано, на прокси уйдёт model=%r; "
+                "если такого алиаса в config.yaml нет, будет 400 — задай %s",
+                profile,
+                sent,
+                env_name,
+            )
+
     def route_for(self, stage: str) -> Route | None:
         """Где будет считаться этап. None — считать негде.
 
@@ -240,7 +324,9 @@ class Gateway:
            обратное через LLM_PERSONAL_VIA_PROXY;
         2. остальные предпочитают прокси: модели там сильнее;
         3. если нужный адрес не задан — берётся второй, кроме случая ПД без
-           разрешения: там фолбэка на прокси нет вообще.
+           разрешения: там фолбэка на прокси нет вообще;
+        4. если прокси уже отказал по этой модели в этом же прогоне — идём
+           на локальный адрес, если он вообще есть.
         """
         profile = profile_for(stage)
         personal = stage in PERSONAL_STAGES
@@ -250,16 +336,15 @@ class Gateway:
             if self.base_url
             else None
         )
+        proxy_model = self._proxy_model(profile)
         proxy = (
-            Route(
-                ROUTE_PROXY,
-                self.proxy_base_url,
-                self.proxy_api_key,
-                self._proxy_model(profile),
-            )
+            Route(ROUTE_PROXY, self.proxy_base_url, self.proxy_api_key, proxy_model)
             if self.proxy_base_url
             else None
         )
+        if proxy is not None and (ROUTE_PROXY, proxy_model) in self._rejected:
+            # Отказ по сути запроса не пройдёт и со второй вакансией.
+            proxy = None
 
         if personal and not self.personal_via_proxy:
             if proxy is not None and local is None:
@@ -360,7 +445,16 @@ class Gateway:
             headers=headers,
             timeout=self.timeout,
         )
-        response.raise_for_status()
+        if response.status_code >= 400:
+            # Статус без тела бесполезен: всё по делу — имя модели, лимит контекста,
+            # неверный параметр — лежит в теле ответа.
+            try:
+                payload: Any = response.json()
+            except ValueError:
+                payload = None
+            raise ApiError(
+                response.status_code, error_message(payload, response.text)
+            )
         # Без этой строки невозможно узнать, какая модель сгенерировала ответ.
         log.info(
             "llm %s/%s -> %s",
@@ -370,8 +464,12 @@ class Gateway:
             or response.headers.get("x-litellm-model-id")
             or "неизвестно",
         )
-        payload: dict[str, Any] = response.json()
-        return payload["choices"][0]["message"]["content"] or ""
+        payload = response.json()
+        choices = payload.get("choices") or []
+        if not choices:
+            # Пустой choices бывает при сработавшем фильтре провайдера.
+            raise ApiError(200, error_message(payload, "ответ без choices"))
+        return (choices[0].get("message") or {}).get("content") or ""
 
     def complete(
         self,
@@ -405,14 +503,29 @@ class Gateway:
                 else:
                     text = self._http_call(route, messages, temperature)
             except Exception as exc:  # noqa: BLE001 — модель не должна ронять прогон
+                final = isinstance(exc, ApiError) and not exc.retryable
                 log.warning(
-                    "%s ответил ошибкой (%s/%s, этап %s): %s",
+                    "%s/%s ответил ошибкой (%s/%s, этап %s): %s",
                     route.name,
+                    route.model,
                     attempt,
                     len(self.backoff),
                     stage,
                     exc,
                 )
+                if final:
+                    # Отказ по сути запроса: повтор даст то же самое, только медленнее.
+                    self.usage.failures += 1
+                    self._rejected[(route.name, route.model)] = str(exc)
+                    log.error(
+                        "%s отклонил запрос с model=%r — повторы не помогут. "
+                        "Проверь, есть ли такое имя в его config.yaml (GET /models), "
+                        "и задай его в %s",
+                        route.name,
+                        route.model,
+                        PROXY_MODEL_ENV.get(profile, "настройках моделей"),
+                    )
+                    return None
                 if attempt == len(self.backoff):
                     self.usage.failures += 1
                     return None
@@ -422,3 +535,26 @@ class Gateway:
             self._cache_put(digest, stage, profile, text)
             return text
         return None
+
+
+__all__ = (
+    "ApiError",
+    "EMBEDDINGS",
+    "FAST",
+    "Gateway",
+    "LOCAL",
+    "LONG",
+    "PERSONAL_STAGES",
+    "PROXY_MODEL_ENV",
+    "ProfileError",
+    "RETRY_STATUSES",
+    "ROUTE_LOCAL",
+    "ROUTE_PROXY",
+    "Route",
+    "SMART",
+    "STAGE_PROFILES",
+    "Usage",
+    "ensure_cache",
+    "error_message",
+    "profile_for",
+)
