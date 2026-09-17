@@ -71,13 +71,25 @@ class Draft:
 
 
 def load_facts(profile_path: str | Path = "profile.yaml") -> tuple[str, ...]:
-    """Факты о себе — единственный разрешённый источник самоописания [OUT-005]."""
+    """Факты о себе — единственный разрешённый источник самоописания [OUT-005].
+
+    Пустой пункт списка YAML разбирает в None, а str(None) даёт непустую строку
+    "None": если её не отбросить до приведения к строке, в письмо уезжает факт,
+    которого владелец не писал. Поэтому None отбрасывается отдельно [CORE-019].
+    """
     path = Path(profile_path)
     if not path.exists():
         return ()
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    facts = data.get("facts") or []
-    return tuple(str(f).strip() for f in facts if str(f).strip())
+    raw = data.get("facts") or []
+    facts: list[str] = []
+    for item in raw:
+        if item is None or isinstance(item, bool):
+            continue
+        text = str(item).strip()
+        if text:
+            facts.append(text)
+    return tuple(facts)
 
 
 def apply_candidate(row: sqlite3.Row) -> contacts.Candidate:
@@ -293,7 +305,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     provider = websearch.SearchProvider.from_env(conn)
     if not provider.enabled:
-        log.info("внешний поиск выключен: ищем только в том, что уже собрано")
+        log.info(
+            "внешний поиск выключен (%s): ищем только в том, что уже собрано",
+            provider.disabled_reason,
+        )
 
     rows = top_rows(conn, args.min_score, args.limit)
     if not rows:
@@ -350,7 +365,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not args.allow_generic and prepared == 0:
         log.info(
             "прямых контактов в тексте вакансий почти не бывает: "
-            "задай SEARCH_API_KEY или запусти с --allow-generic"
+            "настрой внешний поиск (SEARCH_BASE_URL для своего SearXNG "
+            "или SEARCH_API_KEY для tavily/brave) либо запусти с --allow-generic"
         )
     conn.close()
     return 0
