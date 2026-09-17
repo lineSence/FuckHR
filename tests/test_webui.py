@@ -10,6 +10,10 @@
    сырой HTML; без экранирования чужая разметка выполнится в браузере владельца.
 
 Сеть не трогаем: провайдер поиска либо выключен, либо подменяется transport.
+
+Про ключи вакансий. Vacancy.key считается от названия и компании, а не от id или URL:
+две вакансии с одинаковыми названием и компанией — одна и та же строка в базе, и
+второй upsert перезапишет скор первой. Именно на этом раньше ломался тест фильтра.
 """
 
 from __future__ import annotations
@@ -19,8 +23,10 @@ from pathlib import Path
 import pytest
 import yaml
 
+import conditions
 import contacts
 import db
+import detector
 import webui
 import websearch
 
@@ -51,16 +57,45 @@ def test_пустые_строки_формы_не_становятся_факт
 
 
 def test_список_вакансий_фильтруется_по_скору(conn, make_vacancy) -> None:
-    db.upsert_vacancy(conn, make_vacancy(external_id="1", url="https://hh.ru/vacancy/1"), 80.0, ["высокий"])
-    db.upsert_vacancy(conn, make_vacancy(external_id="2", url="https://hh.ru/vacancy/2"), 30.0, ["низкий"])
+    db.upsert_vacancy(
+        conn,
+        make_vacancy(external_id="1", title="Python разработчик", company="ООО Ромашка"),
+        80.0,
+        ["высокий"],
+    )
+    db.upsert_vacancy(
+        conn,
+        make_vacancy(external_id="2", title="Backend Python", company="ООО Ландыш"),
+        30.0,
+        ["низкий"],
+    )
 
     rows = webui.vacancy_rows(conn, min_score=60.0, limit=10)
 
     assert [row["score"] for row in rows] == [80.0]
 
 
+def test_одинаковые_название_и_компания_считаются_одной_вакансией(conn, make_vacancy) -> None:
+    """Закрепляет поведение дедупа, на котором споткнулся тест выше.
+
+    Разные external_id и разные URL новой строки не дают: ключ считается от названия
+    и компании, и это сознательное решение: перепубликацию мы как раз ловим.
+    """
+    db.upsert_vacancy(conn, make_vacancy(external_id="1", url="https://hh.ru/vacancy/1"), 80.0, [])
+    db.upsert_vacancy(conn, make_vacancy(external_id="2", url="https://hh.ru/vacancy/2"), 30.0, [])
+
+    rows = webui.vacancy_rows(conn, min_score=0.0, limit=10)
+
+    assert len(rows) == 1
+    assert rows[0]["score"] == 30.0  # последний upsert перезаписал скор
+
+
 def test_чужой_html_из_базы_не_попадает_в_страницу(conn, make_vacancy) -> None:
+    # Страница вакансий показывает покрытие контактов и условий, а фикстура conn
+    # создаёт только базовую схему. В живом интерфейсе это делает open_db().
     contacts.ensure_schema(conn)
+    conditions.ensure_schema(conn)
+    detector.ensure_schema(conn)
     db.upsert_vacancy(
         conn,
         make_vacancy(company="<script>alert(1)</script>"),
