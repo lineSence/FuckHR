@@ -31,14 +31,21 @@ python outreach.py без флагов, параметры они берут и�
 Запуск:
     python webui.py                 # http://127.0.0.1:8765
     python webui.py --port 9000
+
+В фоне (Windows) — без консольного окна, через pythonw.exe:
+    .venv\\Scripts\\pythonw.exe webui.py
+
+Точка входа внизу файла обязательна и проверяется тестом: без неё
+`python webui.py` просто импортирует модуль и молча выходит с кодом 0 —
+самый неприятный вид поломки: пустой вывод и нулевой статус.
 """
 
 from __future__ import annotations
 
 import argparse
+import errno
 import logging
 import os
-import sys
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -270,7 +277,21 @@ def main(argv: list[str] | None = None) -> int:
         log.warning("python-dotenv не установлен: читаю только переменные окружения")
 
     Handler.profile_path = settings.get("RUN_PROFILE", "profile.yaml")
-    server = HTTPServer((HOST, args.port), Handler)
+    try:
+        server = HTTPServer((HOST, args.port), Handler)
+    except OSError as exc:
+        # Самый частый случай — интерфейс уже запущен в фоне. Трасса здесь
+        # бесполезна, полезна подсказка.
+        if exc.errno in (errno.EADDRINUSE, getattr(errno, "WSAEADDRINUSE", 10048)):
+            log.error(
+                "порт %s уже занят: интерфейс либо уже работает на http://%s:%s, "
+                "либо порт занял другой процесс; возьми другой через --port",
+                args.port,
+                HOST,
+                args.port,
+            )
+            return 1
+        raise
     log.info("интерфейс здесь: http://%s:%s (Ctrl+C чтобы остановить)", HOST, args.port)
     log.info("база: %s · настройки: %s", db_path(), settings.ENV_PATH)
     log.info("лог задач дублируется в этот терминал")
@@ -322,3 +343,7 @@ __all__ = (
     "text_field",
     "vacancy_one",
 )
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
