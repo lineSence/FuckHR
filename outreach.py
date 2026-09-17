@@ -1,37 +1,33 @@
-"""Сборка черновика письма и CLI этапа contact discovery.
+"""Сборка черновика письма и запуск этапа contact discovery.
 
 Система ничего не отправляет (ADR-012, [OUT-006]). Конечный артефакт —
-текст, который владелец копирует в свой почтовый клиент. Ни SMTP, ни
-очереди, ни учётных данных почты здесь нет и не должно быть.
+текст, который владелец копирует в свой почтовый клиент.
 
-Про режим --allow-generic. Замер на живой базе: 159 вакансий с полными
-описаниями, адрес почты нашёлся в одной (и та — ИП, где работодатель и есть
-человек). Это не дефект парсера: hh.ru вырезает контакты из текста, потому что
-живῶёт с отклика через себя. Значит этап, у которого на входе только описание
-вакансии, обречён отдавать ноль — и молча выбрасывать хорошие вакансии.
+Настроек в командной строке больше нет: сколько вакансий брать, с какого
+скора, пускать ли вакансии без прямого контакта и использовать ли модель —
+всё это живёт в .env и правится в веб-интерфейсе (webui.py). Остались два
+режимных флага: --dry-run и --verbose.
 
-Поэтому есть два режима. По умолчанию — только прямой контакт, как требует
-[OUT-001]: нашли нанимающего менеджера — пишем ему. С --allow-generic вакансия
-без контакта не пропадает: собирается то же письмо, но как сопроводительное к
-отклику, и в карточке прямо сказано, что прямого контакта нет. Хуже, чем письмо
-руководителю разработки, лучше, чем отклик в пустоту без повода и фактов.
+Про режим OUTREACH_ALLOW_GENERIC. Замер на живой базе: 159 вакансий с полными
+описаниями, адрес почты нашёлся в одной (и та — ИП). Это не дефект парсера:
+hh.ru вырезает контакты из текста, потому что живёт с отклика через себя.
+Поэтому есть два режима. Строгий — только прямой контакт [OUT-001]. В мягком
+вакансия без контакта не пропадает: то же письмо, но как сопроводительное к
+отклику, и в карточке прямо сказано, что прямого контакта нет.
 
-Где здесь модель (ADR-017). Три необязательных шага поверх детерминированного
-результата, и каждый умеет откатываться:
+Где здесь модель (ADR-017). Три необязательных шага, каждый умеет откатываться:
 
 - company  — справка о компании из выдачи поиска → повод написать;
 - contacts — выбор адресата из уже найденных кандидатов;
 - draft    — правка языка письма без добавления фактов и чисел.
 
 Два последних видят ФИО и адреса живых людей, поэтому маршрут им выбирает
-llm.Gateway по правилам [CORE-012], а не этот модуль. С --no-llm и без
-настроенного шлюза этап работает ровно так, как работал до моделей.
+llm.Gateway по правилам [CORE-012]. С выключенной моделью этап работает ровно
+так, как работал до моделей.
 
 Запуск:
-    python outreach.py --limit 5 --dry-run
-    python outreach.py --limit 5 --dry-run --allow-generic
-    python outreach.py --limit 5 --dry-run --no-llm
-    python outreach.py --limit 3            # запишет контакты в базу и отправит карточки в Telegram
+    python outreach.py --dry-run
+    python outreach.py
 """
 
 from __future__ import annotations
@@ -54,6 +50,7 @@ import db
 import detector
 import llm
 import llm_tasks
+import settings
 import websearch
 
 log = logging.getLogger("outreach")
@@ -360,55 +357,54 @@ def setup_logging(verbose: bool = False) -> None:
     )
 
 
+def build_gateway(conn: sqlite3.Connection, disabled: bool) -> llm.Gateway | None:
+    """Шлюз или None. None — штатный режим, а не авария [CORE-017]."""
+    if disabled:
+        log.info("модель выключена в настройках (LLM_ENABLED)")
+        return None
+    candidate = llm.Gateway.from_env(conn)
+    if not candidate.enabled:
+        log.info("модель не настроена (%s), идём без неё", candidate.disabled_reason)
+        return None
+    for stage, profile, route, model in candidate.describe_routes():
+        if stage in {"company", "contacts", "draft"}:
+            log.info(
+                "этап %s: профиль %s, маршрут %s, модель %s", stage, profile, route, model
+            )
+    return candidate
+
+
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Поиск нанимающего менеджера и черновик письма")
-    parser.add_argument("--limit", type=int, default=5, help="сколько вакансий взять сверху")
-    parser.add_argument("--min-score", type=float, default=60.0)
-    parser.add_argument("--profile", default="profile.yaml")
+    parser = argparse.ArgumentParser(
+        description="Поиск нанимающего менеджера и черновик письма. Настройки — в webui.py"
+    )
     parser.add_argument("--dry-run", action="store_true", help="ничего не писать и не шлать")
-    parser.add_argument("--check-mx", action="store_true", help="проверять MX домена (нужен dnspython)")
-    parser.add_argument(
-        "--allow-generic",
-        action="store_true",
-        help="не выбрасывать вакансию без прямого контакта: дать сопроводительное к отклику",
-    )
-    parser.add_argument(
-        "--no-llm",
-        action="store_true",
-        help="без вызовов модели: шаблонное письмо и первый кандидат по ранжированию",
-    )
-    parser.add_argument("--verbose", action="store_true")
+    parser.add_argument("--verbose", action="store_true", help="подробный лог")
     args = parser.parse_args(argv)
 
     setup_logging(args.verbose)
-    facts = load_facts(args.profile)
-    if not facts:
-        log.warning("в %s пустой блок facts — в черновике будет заглушка", args.profile)
+    options = settings.outreach_options()
+    log.info(
+        "настройки: лимит %s, порог %s, профиль %s, без прямого контакта %s, MX %s, модель %s",
+        options.limit,
+        options.min_score,
+        options.profile,
+        "да" if options.allow_generic else "нет",
+        "да" if options.check_mx else "нет",
+        "да" if options.use_llm else "нет",
+    )
 
-    conn = db.connect(os.getenv("DB_PATH", "data/fuckhr.sqlite3"))
+    facts = load_facts(options.profile)
+    if not facts:
+        log.warning("в %s пустой блок facts — в черновике будет заглушка", options.profile)
+
+    conn = db.connect(settings.get("DB_PATH", "data/fuckhr.sqlite3"))
     db.init_schema(conn)
     contacts.ensure_schema(conn)
     detector.ensure_schema(conn)
     conditions.ensure_schema(conn)
 
-    gateway: llm.Gateway | None = None
-    if args.no_llm:
-        log.info("модель отключена флагом --no-llm")
-    else:
-        candidate = llm.Gateway.from_env(conn)
-        if candidate.enabled:
-            gateway = candidate
-            for stage, profile, route, model in gateway.describe_routes():
-                if stage in {"company", "contacts", "draft"}:
-                    log.info(
-                        "этап %s: профиль %s, маршрут %s, модель %s",
-                        stage,
-                        profile,
-                        route,
-                        model,
-                    )
-        else:
-            log.info("модель не настроена (%s), идём без неё", candidate.disabled_reason)
+    gateway = build_gateway(conn, not options.use_llm)
 
     provider = websearch.SearchProvider.from_env(conn)
     if not provider.enabled:
@@ -417,9 +413,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             provider.disabled_reason,
         )
 
-    rows = top_rows(conn, args.min_score, args.limit)
+    rows = top_rows(conn, options.min_score, options.limit)
     if not rows:
-        log.info("нет вакансий со скором >= %s", args.min_score)
+        log.info("нет вакансий со скором >= %s", options.min_score)
         return 0
 
     cards: list[str] = []
@@ -431,8 +427,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             row,
             facts,
             provider,
-            check_mx=args.check_mx,
-            allow_generic=args.allow_generic,
+            check_mx=options.check_mx,
+            allow_generic=options.allow_generic,
             gateway=gateway,
         )
         if skip_reason:
@@ -485,11 +481,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             usage.failures,
             usage.skipped,
         )
-    if not args.allow_generic and prepared == 0:
+    if not options.allow_generic and prepared == 0:
         log.info(
             "прямых контактов в тексте вакансий почти не бывает: "
-            "настрой внешний поиск (SEARCH_BASE_URL для своего SearXNG "
-            "или SEARCH_API_KEY для tavily/brave) либо запусти с --allow-generic"
+            "включи внешний поиск и режим «сопроводительное к отклику» в настройках"
         )
     conn.close()
     return 0
