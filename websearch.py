@@ -20,7 +20,7 @@
 Настройка своего инстанса:
 
     SEARCH_PROVIDER=searxng
-    SEARCH_BASE_URL=https://searx.example.org
+    SEARCH_BASE_URL=http://127.0.0.1:8888
     SEARCH_BASIC_AUTH=user:pass   # если закрыт реверс-прокси, иначе оставь пустым
 
 В settings.yml инстанса обязательно включить JSON, иначе отдаёт только HTML:
@@ -29,6 +29,18 @@
       formats:
         - html
         - json
+
+Тонкая настройка выдачи (всё необязательное, пустое значение = как решит инстанс):
+
+    SEARCH_ENGINES=google,brave,yandex   # какие движки спрашивать
+    SEARCH_LANGUAGE=ru-RU
+    SEARCH_CATEGORIES=general
+    SEARCH_TIME_RANGE=                   # day | week | month | year
+    SEARCH_SAFESEARCH=0
+    SEARCH_PAGES=1                       # сколько страниц выдачи добирать
+
+Эти параметры входят в ключ кэша: сменил движки — прошлые ответы не
+подставляются, иначе настройка выглядела бы сломанной.
 """
 
 from __future__ import annotations
@@ -68,6 +80,87 @@ ENDPOINTS = {
 # Ключ нужен не всем: свой инстанс аутентификации не требует.
 KEYLESS_PROVIDERS = (SEARXNG,)
 
+TIME_RANGES = ("", "day", "week", "month", "year")
+
+# Описание настроек для интерфейса: ключ, подпись, тип, значение по умолчанию,
+# пояснение. Здесь, а не в settings.py, потому что это знание про SearXNG,
+# и меняться оно будет вместе с этим клиентом.
+SEARXNG_FIELDS: tuple[tuple[str, str, str, str, str], ...] = (
+    (
+        "SEARCH_BASE_URL",
+        "Адрес инстанса",
+        "text",
+        "",
+        "Через SSH-туннель это http://127.0.0.1:8888. Без адреса поиск выключен.",
+    ),
+    (
+        "SEARCH_BASIC_AUTH",
+        "Логин:пароль",
+        "text",
+        "",
+        "Только если инстанс закрыт реверс-прокси. За туннелем не нужно.",
+    ),
+    (
+        "SEARCH_ENGINES",
+        "Движки",
+        "text",
+        "",
+        "Через запятую: google,brave,yandex,wikipedia. Пусто — как настроен инстанс. "
+        "duckduckgo часто отвечает капчей, от него больше вреда, чем пользы.",
+    ),
+    (
+        "SEARCH_LANGUAGE",
+        "Язык выдачи",
+        "text",
+        "ru-RU",
+        "ru-RU для российских компаний; all — не ограничивать.",
+    ),
+    (
+        "SEARCH_CATEGORIES",
+        "Категории",
+        "text",
+        "general",
+        "general хватает. Категории вроде it сужают выдачу до профильных движков.",
+    ),
+    (
+        "SEARCH_TIME_RANGE",
+        "Период",
+        "text",
+        "",
+        "Пусто | day | week | month | year. Для страниц «о команде» ограничение вредно: "
+        "они старые.",
+    ),
+    (
+        "SEARCH_SAFESEARCH",
+        "Safesearch",
+        "int",
+        "0",
+        "0 — не фильтровать, 1 — умеренно, 2 — строго.",
+    ),
+    (
+        "SEARCH_PAGES",
+        "Страниц выдачи",
+        "int",
+        "1",
+        "Сколько страниц добирать, если на первой мало ссылок. Каждая страница — "
+        "отдельный запрос к апстримам, 2–3 безопасный максимум.",
+    ),
+    (
+        "SEARCH_TIMEOUT",
+        "Таймаут, с",
+        "int",
+        "20",
+        "Инстанс опрашивает несколько движков подряд, меньше 10 с ставить бессмысленно.",
+    ),
+    (
+        "SEARCH_MAX_CALLS",
+        "Потолок запросов за прогон",
+        "int",
+        "60",
+        "Защита и от бана у апстримов, и от бесконечного цикла в коде.",
+    ),
+)
+
 
 @dataclass(frozen=True)
 class Hit:
@@ -89,8 +182,10 @@ def ensure_cache(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def _digest(provider: str, query: str, limit: int) -> str:
-    payload = json.dumps([provider, query, limit], ensure_ascii=False, sort_keys=True)
+def _digest(provider: str, query: str, limit: int, variant: str = "") -> str:
+    payload = json.dumps(
+        [provider, query, limit, variant], ensure_ascii=False, sort_keys=True
+    )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -120,6 +215,11 @@ class SearchProvider:
         base_url: str | None = None,
         basic_auth: str | None = None,
         language: str = "ru-RU",
+        engines: str = "",
+        categories: str = "general",
+        time_range: str = "",
+        safesearch: int = 0,
+        pages: int = 1,
     ) -> None:
         if provider not in PROVIDERS:
             raise ValueError(f"неизвестный провайдер поиска: {provider}")
@@ -131,21 +231,47 @@ class SearchProvider:
         self.transport = transport
         self.base_url = (base_url or "").strip().rstrip("/")
         self.basic_auth = (basic_auth or "").strip()
-        self.language = language
+        self.language = (language or "").strip()
+        self.engines = ",".join(
+            part.strip() for part in (engines or "").split(",") if part.strip()
+        )
+        self.categories = (categories or "").strip()
+        self.time_range = (time_range or "").strip().lower()
+        if self.time_range not in TIME_RANGES:
+            log.warning(
+                "неизвестный период поиска %r, игнорирую", self.time_range
+            )
+            self.time_range = ""
+        self.safesearch = int(safesearch)
+        self.pages = max(1, int(pages))
         self.usage = Usage()
         if conn is not None:
             ensure_cache(conn)
 
     @classmethod
     def from_env(cls, conn: sqlite3.Connection | None = None) -> "SearchProvider":
+        def number(name: str, default: str) -> float:
+            raw = (os.getenv(name) or "").strip() or default
+            try:
+                return float(raw)
+            except ValueError:
+                log.warning("%s=%r не число, беру %s", name, raw, default)
+                return float(default)
+
         return cls(
             provider=(os.getenv("SEARCH_PROVIDER") or SEARXNG).strip().lower(),
             api_key=os.getenv("SEARCH_API_KEY"),
             conn=conn,
-            timeout=float(os.getenv("SEARCH_TIMEOUT", "20")),
-            max_calls=int(os.getenv("SEARCH_MAX_CALLS", "60")),
+            timeout=number("SEARCH_TIMEOUT", "20"),
+            max_calls=int(number("SEARCH_MAX_CALLS", "60")),
             base_url=os.getenv("SEARCH_BASE_URL"),
             basic_auth=os.getenv("SEARCH_BASIC_AUTH"),
+            language=os.getenv("SEARCH_LANGUAGE") or "ru-RU",
+            engines=os.getenv("SEARCH_ENGINES") or "",
+            categories=os.getenv("SEARCH_CATEGORIES") or "general",
+            time_range=os.getenv("SEARCH_TIME_RANGE") or "",
+            safesearch=int(number("SEARCH_SAFESEARCH", "0")),
+            pages=int(number("SEARCH_PAGES", "1")),
         )
 
     @property
@@ -165,6 +291,38 @@ class SearchProvider:
         if self.provider in KEYLESS_PROVIDERS:
             return "не задан SEARCH_BASE_URL"
         return "не задан SEARCH_API_KEY"
+
+    def _variant(self) -> str:
+        """Подпись настроек для ключа кэша: иначе смена движков ничего не меняет."""
+        if self.provider != SEARXNG:
+            return ""
+        return "|".join(
+            [
+                self.base_url,
+                self.engines,
+                self.language,
+                self.categories,
+                self.time_range,
+                str(self.safesearch),
+                str(self.pages),
+            ]
+        )
+
+    def describe(self) -> list[tuple[str, str]]:
+        """Что именно уйдёт в инстанс — для страницы проверки поиска."""
+        return [
+            ("провайдер", self.provider),
+            ("адрес", self.base_url or "не задан"),
+            ("движки", self.engines or "как настроен инстанс"),
+            ("язык", self.language or "любой"),
+            ("категории", self.categories or "general"),
+            ("период", self.time_range or "без ограничения"),
+            ("safesearch", str(self.safesearch)),
+            ("страниц выдачи", str(self.pages)),
+            ("таймаут", "{:.0f} с".format(self.timeout)),
+            ("потолок запросов", str(self.max_calls)),
+            ("доступ", "логин:пароль задан" if self.basic_auth else "без авторизации"),
+        ]
 
     def _cache_get(self, digest: str) -> list[Hit] | None:
         if self.conn is None:
@@ -198,6 +356,25 @@ class SearchProvider:
         )
         self.conn.commit()
 
+    def _searxng_params(self, query: str, pageno: int) -> dict[str, object]:
+        """Пустые параметры не отправляются: у инстанса свои значения по умолчанию."""
+        params: dict[str, object] = {
+            "q": query,
+            "format": "json",
+            "safesearch": self.safesearch,
+        }
+        if pageno > 1:
+            params["pageno"] = pageno
+        if self.language:
+            params["language"] = self.language
+        if self.categories:
+            params["categories"] = self.categories
+        if self.engines:
+            params["engines"] = self.engines
+        if self.time_range:
+            params["time_range"] = self.time_range
+        return params
+
     def _searxng_call(self, query: str, limit: int) -> list[Hit]:
         """Свой инстанс: GET /search?format=json.
 
@@ -211,37 +388,41 @@ class SearchProvider:
             user, _, password = self.basic_auth.partition(":")
             auth = (user, password)
 
-        response = httpx.get(
-            self.base_url + "/search",
-            params={
-                "q": query,
-                "format": "json",
-                "language": self.language,
-                "safesearch": 0,
-                "categories": "general",
-            },
-            headers={"Accept": "application/json"},
-            auth=auth,
-            timeout=self.timeout,
-            follow_redirects=True,
-        )
-        response.raise_for_status()
-        try:
-            payload = response.json()
-        except ValueError as exc:
-            raise RuntimeError(
-                "инстанс SearXNG ответил не JSON: добавь формат json в search.formats в settings.yml"
-            ) from exc
-
-        items = payload.get("results") or []
-        return [
-            Hit(
-                title=str(i.get("title") or ""),
-                url=str(i.get("url") or ""),
-                snippet=str(i.get("content") or ""),
+        seen: set[str] = set()
+        hits: list[Hit] = []
+        for pageno in range(1, self.pages + 1):
+            response = httpx.get(
+                self.base_url + "/search",
+                params=self._searxng_params(query, pageno),
+                headers={"Accept": "application/json"},
+                auth=auth,
+                timeout=self.timeout,
+                follow_redirects=True,
             )
-            for i in items[:limit]
-        ]
+            response.raise_for_status()
+            try:
+                payload = response.json()
+            except ValueError as exc:
+                raise RuntimeError(
+                    "инстанс SearXNG ответил не JSON: добавь формат json в search.formats в settings.yml"
+                ) from exc
+
+            items = payload.get("results") or []
+            for item in items:
+                url = str(item.get("url") or "")
+                if url and url in seen:
+                    continue
+                seen.add(url)
+                hits.append(
+                    Hit(
+                        title=str(item.get("title") or ""),
+                        url=url,
+                        snippet=str(item.get("content") or ""),
+                    )
+                )
+            if len(hits) >= limit or not items:
+                break
+        return hits[:limit]
 
     def _http_call(self, query: str, limit: int) -> list[Hit]:
         import httpx
@@ -294,10 +475,11 @@ class SearchProvider:
             log.info("внешний поиск выключен: %s", self.disabled_reason)
             return []
 
-        digest = _digest(self.provider, query, limit)
+        digest = _digest(self.provider, query, limit, self._variant())
         cached = self._cache_get(digest)
         if cached is not None:
             self.usage.cached += 1
+            log.info("поиск из кэша: %s (%s ссылок)", query, len(cached))
             return cached
 
         if self.usage.calls >= self.max_calls:
@@ -305,6 +487,7 @@ class SearchProvider:
             log.warning("потолок запросов к поиску исчерпан (%s)", self.max_calls)
             return []
 
+        log.info("поиск: %s", query)
         caller = self.transport or self._http_call_adapter
         try:
             hits = list(caller(self.provider, query, limit))
@@ -314,6 +497,7 @@ class SearchProvider:
             return []
 
         self.usage.calls += 1
+        log.info("найдено ссылок: %s", len(hits))
         self._cache_put(digest, query, hits)
         return hits
 
@@ -324,7 +508,9 @@ class SearchProvider:
         """Объединяет результаты по нескольким запросам, убирая дубли по URL."""
         seen: set[str] = set()
         out: list[Hit] = []
-        for query in queries:
+        total = len(queries)
+        for number, query in enumerate(queries, 1):
+            log.info("запрос %s/%s", number, total)
             for hit in self.search(query, limit=limit):
                 if hit.url and hit.url not in seen:
                     seen.add(hit.url)
