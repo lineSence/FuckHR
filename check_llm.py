@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import os
 import sys
 from typing import Sequence
 
@@ -121,4 +120,4 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main(os.sys.argv[1:] if False else None))
+    sys.exit(main())
