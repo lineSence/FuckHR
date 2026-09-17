@@ -1,8 +1,14 @@
-"""Страницы с формами: поиск с подробными настройками SearXNG, модель, профиль.
+"""Страницы с формами: поиск с подробными настройками SearXNG и модель.
 
 Зачем настройки поиска живут рядом с выдачей, а не на общей странице настроек:
 движки, язык и период подбираются только одним способом — меняешь и сразу
 смотришь, что отдал инстанс.
+
+Форма профиля переехала в ui_profile: она перестала быть формой над YAML и стала
+отдельным экраном фильтра с собственными блоками и предпросмотром порога.
+Здесь остались точечное сохранение фактов и короткая сводка профиля, которые
+нужны другим страницам, плюс реэкспорт render_profile/save_profile для старых
+импортов.
 """
 
 from __future__ import annotations
@@ -16,18 +22,11 @@ import yaml
 
 import contacts
 import llm
-import outreach
 import profile_form
 import settings
 import websearch
-from ui_core import (
-    area_field,
-    checkbox_field,
-    esc,
-    number_field,
-    table,
-    text_field,
-)
+from ui_core import esc, number_field, table, text_field
+from ui_profile import LIST_HINTS, render_profile, save_profile
 
 
 # ———— поиск ————
@@ -182,6 +181,20 @@ def render_llm(conn: sqlite3.Connection, probe: bool = False) -> str:
         )
     parts.append(table(["Этап", "Профиль", "Маршрут", "Модель"], rows))
 
+    unmapped = gateway.unmapped_profiles() if gateway.proxy_base_url else []
+    if unmapped:
+        items = "".join(
+            "<li>{profile}: уйдёт model={sent}, задать в {env}</li>".format(
+                profile=esc(profile), sent=esc(sent), env=esc(env)
+            )
+            for profile, sent, env in unmapped
+        )
+        parts.append(
+            "<div class=warn>У части профилей нет имени модели на прокси. Если "
+            "такого алиаса нет в его config.yaml, запрос вернёт 400 Bad Request."
+            "<ul>{}</ul></div>".format(items)
+        )
+
     if settings.flag("LLM_PERSONAL_VIA_PROXY"):
         parts.append(
             "<div class=danger>Включён режим, при котором ФИО и адреса живых людей "
@@ -215,13 +228,12 @@ def render_llm(conn: sqlite3.Connection, probe: bool = False) -> str:
     return "".join(parts)
 
 
-# ———— профиль ————
+# ———— профиль: точечные операции ————
 
 
 def save_facts(profile_path: str | Path, text: str) -> tuple[str, ...]:
     """Перезаписывает только блок facts, остальное в профиле не трогает.
 
-    Точечное сохранение фактов; полная форма профиля живёт в profile_form.
     Пустые строки отбрасываются здесь же: именно они разбирались в None и уезжали
     в письмо как факт о себе.
     """
@@ -239,13 +251,14 @@ def save_facts(profile_path: str | Path, text: str) -> tuple[str, ...]:
 
 
 def profile_summary(profile_path: str | Path) -> list[tuple[str, str]]:
-    """Короткая сводка профиля."""
+    """Короткая сводка профиля для страницы запуска."""
     path = Path(profile_path)
     if not path.exists():
         return [("файл", "{} не найден".format(path))]
-    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    data = profile_form.load(path)
     queries = data.get("queries") or []
     salary = data.get("salary") or {}
+    geo = data.get("geo") or {}
     skills = data.get("skills") or []
     query_names = []
     for item in queries:
@@ -253,175 +266,20 @@ def profile_summary(profile_path: str | Path) -> list[tuple[str, str]]:
             query_names.append(str(item.get("text", "")))
         else:
             query_names.append(str(item))
+    areas = ", ".join(
+        profile_form.area_label(code) for code in (geo.get("areas") or [])
+    )
     return [
         ("запросы", ", ".join(q for q in query_names if q) or "не заданы"),
+        ("где ищем", areas or "не задано"),
         ("минимум на руки", str(salary.get("min_net", "не задан"))),
         ("порог скоринга", str(data.get("min_score", "не задан"))),
         ("навыки", ", ".join(str(s) for s in skills) or "не заданы"),
     ]
 
 
-LIST_HINTS = {
-    "skills": "По одному на строку. Дают основную часть скора.",
-    "nice_to_have": "Добавляют баллы, но не обязательны.",
-    "stop_words": "Вакансия с таким словом отбрасывается до скоринга.",
-}
-
-
-def render_profile(
-    profile_path: str,
-    saved: int | None = None,
-    problems: Sequence[str] = (),
-) -> str:
-    """Полный редактор profile.yaml прямо в интерфейсе.
-
-    Неизвестные ключи файла сохраняются: ручные правки в YAML не теряются.
-    """
-    data = profile_form.load(profile_path)
-    values = profile_form.form_values(data)
-
-    parts: list[str] = []
-    if saved is not None:
-        parts.append(
-            "<div class=ok>Сохранено в {}. Фактов: {}</div>".format(
-                esc(profile_path), saved
-            )
-        )
-    for problem in problems:
-        parts.append("<div class=warn>{}</div>".format(esc(problem)))
-
-    if not values["facts"] and saved is None:
-        parts.append(
-            "<div class=warn>Блок facts пуст. Без него каждое письмо собирается с "
-            "заглушкой вместо повода писать.</div>"
-        )
-
-    parts.append('<form method=post action="/profile">')
-
-    parts.append("<h2>Запросы к hh.ru</h2>")
-    parts.append(
-        area_field(
-            "queries",
-            "Один запрос на строку",
-            values["queries"],
-            "Формат: текст | регион | дней | страниц. Например: python разработчик | 113 | 7 | 3. "
-            "Регионы hh.ru: 1 — Москва, 2 — Петербург, 113 — вся Россия. Пропущенные поля "
-            "заменяются значениями сбора по умолчанию.",
-        )
-    )
-
-    parts.append("<h2>Зарплата</h2><div class=cols>")
-    parts.append(
-        number_field(
-            "salary_min_net",
-            "Минимум на руки",
-            values["salary_min_net"],
-            "Гросс пересчитывается с вычетом 13%.",
-        )
-    )
-    parts.append(
-        text_field(
-            "salary_currency",
-            "Валюта",
-            values["salary_currency"],
-            "Обычно RUR.",
-            "RUR",
-        )
-    )
-    parts.append("</div>")
-    parts.append(
-        checkbox_field(
-            "salary_allow_missing",
-            "Пропускать дальше вакансии без указанной зарплаты",
-            values["salary_allow_missing"],
-            "Выключить — и большая часть рынка отсеется сразу: зарплату часто не пишут.",
-        )
-    )
-
-    parts.append("<h2>Навыки и стоп-слова</h2>")
-    for key, label in profile_form.LIST_FIELDS:
-        parts.append(area_field(key, label, values[key], LIST_HINTS.get(key, "")))
-
-    parts.append("<h2>География и опыт</h2>")
-    parts.append(
-        text_field(
-            "geo_areas",
-            "Регионы",
-            values["geo_areas"],
-            "Числа через запятую. 113 — вся Россия.",
-            "113",
-        )
-    )
-    parts.append(
-        checkbox_field("geo_remote_ok", "Удалёнка подходит", values["geo_remote_ok"])
-    )
-    checks = []
-    for key, label in profile_form.EXPERIENCE:
-        checks.append(
-            (
-                '<label><input type=checkbox name=experience_ok value="{key}"{checked}> '
-                "{label}</label>"
-            ).format(
-                key=esc(key),
-                checked=" checked" if key in values["experience_ok"] else "",
-                label=esc(label),
-            )
-        )
-    parts.append(
-        (
-            "<div class=field><label>Подходящий опыт</label>"
-            "<div class=checks>{checks}</div>"
-            "<div class=hint>Обозначения hh.ru. Снять всё — значит выключить фильтр "
-            "по опыту.</div></div>"
-        ).format(checks="".join(checks))
-    )
-
-    parts.append("<h2>Веса скоринга</h2>")
-    parts.append(
-        "<p class=muted>Сумма должна быть 100: иначе порог скора не с чем сравнивать.</p>"
-    )
-    parts.append("<div class=cols>")
-    for key, label in profile_form.WEIGHTS:
-        parts.append(number_field("weight_" + key, label, values["weights"].get(key, 0)))
-    parts.append("</div>")
-    parts.append(
-        number_field(
-            "min_score",
-            "Порог скора для карточки",
-            values["min_score"],
-            "Вакансии ниже порога попадают в базу, но не идут в Telegram.",
-        )
-    )
-
-    parts.append("<h2>Факты о себе</h2>")
-    parts.append(
-        area_field(
-            "facts",
-            "По одному на строку, с цифрами",
-            values["facts"],
-            "Только эти строки попадают в письмо: ничего кроме них система о вас не напишет.",
-        )
-    )
-
-    parts.append("<p><button>Сохранить профиль</button></p></form>")
-    parts.append(
-        "<p class=muted>Файл: {}. Новые значения подхватываются со следующего запуска "
-        "задачи.</p>".format(esc(profile_path))
-    )
-    return "".join(parts)
-
-
-def save_profile(
-    profile_path: str, form: dict[str, list[str]]
-) -> tuple[int, list[str]]:
-    """Принимает форму целиком и возвращает (сколько фактов, замечания)."""
-    data = profile_form.load(profile_path)
-    updated, problems = profile_form.apply_form(data, form)
-    profile_form.save(profile_path, updated)
-    return len(updated.get("facts") or []), problems
-
-
 __all__ = (
+    "LIST_HINTS",
     "profile_summary",
     "render_llm",
     "render_profile",
