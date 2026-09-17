@@ -2,8 +2,9 @@
 
 Здесь три вещи, которые раньше жили в терминале:
 
-- запуск: сбор, письма, проверка модели и тесты — кнопками, с живым логом;
-- настройки: весь .env формой, с пояснениями и масками для секретов;
+- запуск: сбор, письма, проверка модели и тесты — кнопками, с живым логом
+  и полоской прогресса; тот же лог дублируется в терминал интерфейса;
+- настройки: весь .env формой, профиль целиком и подробные параметры поиска;
 - выдача: вакансии, условия, HR-флаги, контакты, поиск, маршруты модели.
 
 В командной строке остаётся только запуск самих программ: python run.py и
@@ -16,9 +17,13 @@ python outreach.py без флагов, параметры они берут и�
   его наружу нельзя;
 - ничего не отправляет — ни писем, ни сообщений [CORE-023]; кнопки запуска
   запускают те же программы, что и руками, с теми же правилами;
-- на диск пишет только .env, блок facts в profile.yaml и логи задач;
+- на диск пишет только .env, profile.yaml и логи задач;
 - без новых зависимостей: http.server из стандартной библиотеки справляется с одним
   пользователем, а Flask и FastAPI тянут за собой стек, который потом обновлять.
+
+Про обратную связь. JavaScript сознательно не используется: страница запуска
+обновляет себя мета-обновлением, полоска — тег progress. Если задача не сообщает
+счёта шагов, полоска показывается неопределённой — это честнее выдуманных процентов.
 
 Про стиль шаблонов: только str.format с заранее вычисленными переменными, без
 вложенных f-строк: однажды это уже стоило SyntaxError на ровном месте.
@@ -51,6 +56,7 @@ import detector
 import jobs
 import llm
 import outreach
+import profile_form
 import settings
 import websearch
 
@@ -85,7 +91,7 @@ pre { background: #f6f6f8; padding: 12px; border-radius: 6px; white-space: pre-w
       word-break: break-word; }
 .console { background: #1d1f23; color: #e6e6e6; max-height: 460px; overflow: auto;
            font: 13px/1.45 ui-monospace, Consolas, monospace; }
-textarea { width: 100%; min-height: 160px; font: 14px/1.5 ui-monospace, Consolas, monospace;
+textarea { width: 100%; min-height: 120px; font: 14px/1.5 ui-monospace, Consolas, monospace;
            padding: 10px; border: 1px solid #d2d2d7; border-radius: 6px; }
 input[type=text], input[type=number], input[type=password] { padding: 7px 9px;
            border: 1px solid #d2d2d7; border-radius: 6px; font-size: 14px; width: 100%;
@@ -100,6 +106,12 @@ button.secondary { background: #e9ebef; color: #1d1d1f; }
 .field .hint { font-size: 13px; color: #6b6b70; margin-top: 3px; }
 .pill { display: inline-block; padding: 1px 7px; border-radius: 99px; font-size: 12px;
         background: #eef1f5; margin-right: 6px; }
+.bar { display: flex; align-items: center; gap: 12px; margin: 10px 0; }
+.bar progress { width: 380px; height: 14px; }
+.cols { display: flex; gap: 18px; flex-wrap: wrap; }
+.cols .field { flex: 1 1 220px; margin: 8px 0; }
+.checks { display: flex; gap: 18px; flex-wrap: wrap; margin: 6px 0 2px; }
+.checks label { font-weight: 400; }
 """
 
 NAV_ITEMS = (
@@ -161,14 +173,91 @@ def table(headers: Sequence[str], rows: Sequence[Sequence[str]]) -> str:
     return "<table><tr>{}</tr>{}</table>".format(head, body)
 
 
+def text_field(
+    name: str, label: str, value: object, hint: str = "", placeholder: object = ""
+) -> str:
+    return (
+        "<div class=field><label>{label}</label>"
+        '<input type=text name="{name}" value="{value}" placeholder="{placeholder}">'
+        "{hint}</div>"
+    ).format(
+        label=esc(label),
+        name=esc(name),
+        value=esc(value),
+        placeholder=esc(placeholder),
+        hint="<div class=hint>{}</div>".format(esc(hint)) if hint else "",
+    )
+
+
+def number_field(name: str, label: str, value: object, hint: str = "") -> str:
+    return (
+        "<div class=field><label>{label}</label>"
+        '<input type=number step=any name="{name}" value="{value}">'
+        "{hint}</div>"
+    ).format(
+        label=esc(label),
+        name=esc(name),
+        value=esc(value),
+        hint="<div class=hint>{}</div>".format(esc(hint)) if hint else "",
+    )
+
+
+def area_field(name: str, label: str, value: object, hint: str = "") -> str:
+    return (
+        "<div class=field><label>{label}</label>"
+        '<textarea name="{name}">{value}</textarea>'
+        "{hint}</div>"
+    ).format(
+        label=esc(label),
+        name=esc(name),
+        value=esc(value),
+        hint="<div class=hint>{}</div>".format(esc(hint)) if hint else "",
+    )
+
+
+def checkbox_field(name: str, label: str, checked: bool, hint: str = "") -> str:
+    return (
+        "<div class=field>"
+        '<label><input type=checkbox name="{name}" value="1"{checked}> {label}</label>'
+        "{hint}</div>"
+    ).format(
+        name=esc(name),
+        checked=" checked" if checked else "",
+        label=esc(label),
+        hint="<div class=hint>{}</div>".format(esc(hint)) if hint else "",
+    )
+
+
 # ———— запуск ————
 
 
+def progress_block(job: jobs.Job) -> str:
+    """Полоска загрузки.
+
+    Если в логах нашёлся счётчик вида «[3/30]» — показываем реальный процент.
+    Если не нашёлся — неопределённая полоска без чисел. Выдумывать проценты
+    хуже, чем признаться, что шаги неизвестны [CORE-019].
+    """
+    pair = job.progress
+    if pair is None:
+        if not job.running:
+            return ""
+        bar = "<progress></progress>"
+        label = "шаги неизвестны, смотри лог"
+    else:
+        done, total = pair
+        bar = '<progress value="{}" max="{}"></progress>'.format(done, total)
+        label = "{} из {} · {}%".format(done, total, job.percent)
+    return '<div class=bar>{bar}<span class=muted>{label}</span></div>'.format(
+        bar=bar, label=esc(label)
+    )
+
+
 def render_run(active_id: int | None = None, note: str = "") -> tuple[str, int]:
-    """Главная страница: кнопки запуска и лог последней задачи.
+    """Главная страница: кнопки запуска, полоска и лог последней задачи.
 
     Возвращает тело и интервал автообновления: пока задача идёт, страница
-    обновляется сама. Мета-обновление вместо JS — чтобы не тащить фронтенд.
+    обновляется сама каждые две секунды.
     """
     parts = [note] if note else []
 
@@ -211,16 +300,18 @@ def render_run(active_id: int | None = None, note: str = "") -> tuple[str, int]:
         parts.append("<p class=muted>Запусков ещё не было.</p>")
         return "".join(parts), 0
 
-    head = (
-        "<h2>{title}</h2>"
-        "<p class=muted>Состояние: {status} · длится {duration:.0f} с · строк в логе: {lines}</p>"
-    ).format(
-        title=esc(job.title),
-        status=esc(job.status),
-        duration=job.duration,
-        lines=len(job.lines),
+    parts.append(
+        (
+            "<h2>{title}</h2>"
+            "<p class=muted>Состояние: {status} · длится {duration:.0f} с · строк в логе: {lines}</p>"
+        ).format(
+            title=esc(job.title),
+            status=esc(job.status),
+            duration=job.duration,
+            lines=len(job.lines),
+        )
     )
-    parts.append(head)
+    parts.append(progress_block(job))
 
     if job.running:
         parts.append(
@@ -233,6 +324,10 @@ def render_run(active_id: int | None = None, note: str = "") -> tuple[str, int]:
 
     parts.append(
         "<pre class=console>{}</pre>".format(esc("\n".join(job.tail(400)) or "ждём вывод…"))
+    )
+    parts.append(
+        "<p class=muted>Тот же вывод идёт в терминал, где запущен webui.py, и в файл "
+        "data/jobs.</p>"
     )
 
     history = [item for item in jobs.runner.history() if item.id != job.id]
@@ -250,7 +345,7 @@ def render_run(active_id: int | None = None, note: str = "") -> tuple[str, int]:
         parts.append("<h2>Прошлые запуски</h2>")
         parts.append(table(["Задача", "Итог", "Длительность", "Начало"], rows))
 
-    return "".join(parts), 3 if job.running else 0
+    return "".join(parts), 2 if job.running else 0
 
 
 # ———— настройки ————
@@ -537,7 +632,47 @@ def render_contacts(conn: sqlite3.Connection) -> str:
     )
 
 
-def render_search(conn: sqlite3.Connection, query: str, company: str) -> str:
+# ———— поиск ----
+
+
+def search_settings_form(saved: Sequence[str] = ()) -> str:
+    """Подробные параметры SearXNG рядом с живой выдачей.
+
+    Здесь, а не на общей странице настроек, потому что подбираются эти параметры
+    только одним способом: меняешь движок — сразу смотришь, что он отдал.
+    """
+    values = settings.load()
+    parts = []
+    if saved:
+        parts.append("<div class=ok>Сохранено: {}</div>".format(esc(", ".join(saved))))
+
+    parts.append('<form method=post action="/search">')
+    parts.append("<div class=cols>")
+    for key, label, kind, default, hint in websearch.SEARXNG_FIELDS:
+        current = values.get(key, "")
+        if current == "":
+            current = os.getenv(key, "")
+        full_hint = "{} · {}".format(key, hint)
+        if kind == "int":
+            parts.append(number_field(key, label, current or default, full_hint))
+        else:
+            parts.append(text_field(key, label, current, full_hint, default))
+    parts.append("</div>")
+    parts.append("<p><button>Сохранить параметры поиска</button></p></form>")
+    parts.append(
+        "<p class=muted>Пустое текстовое поле стирает значение и возвращает поведение "
+        "инстанса по умолчанию. Параметры входят в ключ кэша: после изменения "
+        "тот же запрос выполнится заново, а не вернётся из кэша.</p>"
+    )
+    return "".join(parts)
+
+
+def render_search(
+    conn: sqlite3.Connection,
+    query: str,
+    company: str,
+    saved: Sequence[str] = (),
+) -> str:
     """Живая проверка выдачи: видно, что именно отдаёт поиск до ранжирования."""
     provider = websearch.SearchProvider.from_env(conn)
     state = "готов" if provider.enabled else esc(provider.disabled_reason)
@@ -549,26 +684,34 @@ def render_search(conn: sqlite3.Connection, query: str, company: str) -> str:
         '<form method=get action="/search">'
         'Или запросы по компании <input type=text name=company value="{company}" style="width:40%"> '
         "<button>Показать и выполнить</button></form>"
-        "<p class=muted>Провайдер: {provider} · адрес: {base_url} · {state}</p>"
-    ).format(
-        query=esc(query),
-        company=esc(company),
-        provider=esc(provider.provider),
-        base_url=esc(provider.base_url or "не задан"),
-        state=state,
+        "<p class=muted>Состояние: {state}</p>"
+    ).format(query=esc(query), company=esc(company), state=state)
+
+    rows = [[esc(name), esc(value)] for name, value in provider.describe()]
+    current = "<h2>С какими параметрами идёт запрос</h2>" + table(
+        ["Параметр", "Значение"], rows
     )
+    form = "<h2>Настройки поиска</h2>" + search_settings_form(saved)
 
     if not provider.enabled:
-        return head + (
-            '<div class=warn>Внешний поиск выключен, искать негде. '
-            'Адрес инстанса задаётся в <a href="/settings">настройках</a>.</div>'
+        return (
+            head
+            + '<div class=warn>Внешний поиск выключен, искать негде: не задан SEARCH_BASE_URL. '
+            "Заполни адрес инстанса ниже — через SSH-туннель это http://127.0.0.1:8888.</div>"
+            + form
+            + current
         )
 
     queries = [query] if query else []
     if company:
         queries = list(websearch.contact_queries(company))
     if not queries:
-        return head + "<p class=muted>Введи запрос или название компании.</p>"
+        return (
+            head
+            + "<p class=muted>Введи запрос или название компании.</p>"
+            + form
+            + current
+        )
 
     parts = [head, "<h2>Запросы</h2><pre>{}</pre>".format(esc("\n".join(queries)))]
     hits = provider.search_many(queries, limit=5)
@@ -587,10 +730,10 @@ def render_search(conn: sqlite3.Connection, query: str, company: str) -> str:
 
     if not hits:
         parts.append(
-            "<div class=warn>Пустая выдача. Проверь, жив ли туннель и отвечает ли "
-            "инстанс форматом json.</div>"
+            "<div class=warn>Пустая выдача. Проверь, жив ли туннель, отвечает ли "
+            "инстанс форматом json и не сузили ли выборку движки или период.</div>"
         )
-        return "".join(parts)
+        return "".join(parts) + form + current
 
     body = []
     for hit in hits:
@@ -601,7 +744,17 @@ def render_search(conn: sqlite3.Connection, query: str, company: str) -> str:
             [link, esc(contacts.domain_of(hit.url) or ""), esc(hit.snippet[:300])]
         )
     parts.append(table(["Страница", "Домен", "Сниппет"], body))
-    return "".join(parts)
+    return "".join(parts) + form + current
+
+
+def search_updates(form: dict[str, list[str]]) -> dict[str, str]:
+    """Только известные ключи поиска: в .env не попадает ничего из браузера сверх списка."""
+    updates: dict[str, str] = {}
+    for key, _label, _kind, _default, _hint in websearch.SEARXNG_FIELDS:
+        if key not in form:
+            continue
+        updates[key] = (form.get(key) or [""])[0].strip()
+    return updates
 
 
 def render_llm(conn: sqlite3.Connection, probe: bool = False) -> str:
@@ -674,6 +827,9 @@ def render_llm(conn: sqlite3.Connection, probe: bool = False) -> str:
 def save_facts(profile_path: str | Path, text: str) -> tuple[str, ...]:
     """Перезаписывает только блок facts, остальное в профиле не трогает.
 
+    Остаётся ради точечного сохранения фактов со страницы вакансии: полная форма
+    профиля живёт в profile_form.
+
     Пустые строки отбрасываются здесь же: именно они разбирались в None и уезжали
     в письмо как факт о себе.
     """
@@ -691,7 +847,7 @@ def save_facts(profile_path: str | Path, text: str) -> tuple[str, ...]:
 
 
 def profile_summary(profile_path: str | Path) -> list[tuple[str, str]]:
-    """Короткая сводка профиля для просмотра — без редактирования."""
+    """Короткая сводка профиля — для шапки страницы."""
     path = Path(profile_path)
     if not path.exists():
         return [("файл", "{} не найден".format(path))]
@@ -713,31 +869,148 @@ def profile_summary(profile_path: str | Path) -> list[tuple[str, str]]:
     ]
 
 
-def render_profile(profile_path: str, saved: int | None = None) -> str:
-    facts = outreach.load_facts(profile_path)
-    rows = [[esc(name), esc(value)] for name, value in profile_summary(profile_path)]
+def render_profile(
+    profile_path: str,
+    saved: int | None = None,
+    problems: Sequence[str] = (),
+) -> str:
+    """Полный редактор profile.yaml.
 
-    note = ""
+    Правится всё, ради чего раньше открывался редактор: запросы, зарплата,
+    навыки, стоп-слова, география, опыт, веса, порог и факты. Неизвестные ключи
+    сохраняются: ручные правки в YAML не теряются.
+    """
+    data = profile_form.load(profile_path)
+    values = profile_form.form_values(data)
+
+    parts: list[str] = []
     if saved is not None:
-        note = "<div class=ok>Сохранено фактов: {}</div>".format(saved)
-    elif not facts:
-        note = (
+        parts.append(
+            "<div class=ok>Сохранено в {}. Фактов: {}</div>".format(
+                esc(profile_path), saved
+            )
+        )
+    for problem in problems:
+        parts.append("<div class=warn>{}</div>".format(esc(problem)))
+
+    if not values["facts"] and saved is None:
+        parts.append(
             "<div class=warn>Блок facts пуст. Без него каждое письмо собирается с заглушкой "
             "вместо повода писать.</div>"
         )
 
-    return (
-        note
-        + "<h2>Факты о себе</h2>"
-        + "<p class=muted>По одному на строку, с цифрами. Только эти строки попадают в письмо: "
-        + "ничего кроме них система о вас не напишет.</p>"
-        + '<form method=post action="/profile">'
-        + "<textarea name=facts>{}</textarea>".format(esc("\n".join(facts)))
-        + "<p><button>Сохранить</button></p></form>"
-        + "<h2>Остальное в профиле</h2>"
-        + "<p class=muted>Чтение; запросы и навыки правятся в profile.yaml.</p>"
-        + table(["Параметр", "Значение"], rows)
+    parts.append('<form method=post action="/profile">')
+
+    parts.append("<h2>Запросы к hh.ru</h2>")
+    parts.append(
+        area_field(
+            "queries",
+            "Один запрос на строку",
+            values["queries"],
+            "Формат: текст | регион | дней | страниц. Например: python разработчик | 113 | 7 | 3. "
+            "Регионы hh.ru: 1 — Москва, 2 — Петербург, 113 — вся Россия. "
+            "Пропущенные поля заменяются значениями сбора по умолчанию.",
+        )
     )
+
+    parts.append("<h2>Зарплата</h2><div class=cols>")
+    parts.append(
+        number_field(
+            "salary_min_net",
+            "Минимум на руки",
+            values["salary_min_net"],
+            "Гросс пересчитывается с вычетом 13%.",
+        )
+    )
+    parts.append(
+        text_field(
+            "salary_currency", "Валюта", values["salary_currency"], "Обычно RUR.", "RUR"
+        )
+    )
+    parts.append("</div>")
+    parts.append(
+        checkbox_field(
+            "salary_allow_missing",
+            "Пропускать вакансии без указанной зарплаты дальше",
+            values["salary_allow_missing"],
+            "Выключить — и большая часть рынка отсеется сразу: зарплату часто не пишут.",
+        )
+    )
+
+    parts.append("<h2>Навыки и стоп-слова</h2>")
+    hints = {
+        "skills": "По одному на строку. Дают основную часть скора.",
+        "nice_to_have": "Желательные: добавляют баллы, но не обязательны.",
+        "stop_words": "Вакансия с таким словом отбрасывается до скоринга.",
+    }
+    for key, label in profile_form.LIST_FIELDS:
+        parts.append(area_field(key, label, values[key], hints.get(key, "")))
+
+    parts.append("<h2>География и опыт</h2>")
+    parts.append(
+        text_field(
+            "geo_areas",
+            "Регионы",
+            values["geo_areas"],
+            "Числа через запятую. 113 — вся Россия.",
+            "113",
+        )
+    )
+    parts.append(
+        checkbox_field(
+            "geo_remote_ok", "Удалёнка подходит", values["geo_remote_ok"]
+        )
+    )
+    checks = []
+    for key, label in profile_form.EXPERIENCE:
+        checked = " checked" if key in values["experience_ok"] else ""
+        checks.append(
+            '<label><input type=checkbox name=experience_ok value="{key}"{checked}> {label}</label>'.format(
+                key=esc(key), checked=checked, label=esc(label)
+            )
+        )
+    parts.append(
+        "<div class=field><label>Подходящий опыт</label>"
+        "<div class=checks>{}</div>"
+        "<div class=hint>Обозначения hh.ru. Снять всё — значит выключить фильтр по опыту.</div>"
+        "</div>".format("".join(checks))
+    )
+
+    parts.append("<h2>Веса скоринга</h2>")
+    parts.append(
+        "<p class=muted>Сумма должна быть 100: иначе порог скора не с чем сравнивать.</p>"
+    )
+    parts.append("<div class=cols>")
+    for key, label in profile_form.WEIGHTS:
+        parts.append(
+            number_field("weight_" + key, label, values["weights"].get(key, 0))
+        )
+    parts.append("</div>")
+    parts.append(
+        number_field(
+            "min_score",
+            "Порог скора для карточки",
+            values["min_score"],
+            "Вакансии ниже порога попадают в базу, но не идут в Telegram.",
+        )
+    )
+
+    parts.append("<h2>Факты о себе</h2>")
+    parts.append(
+        area_field(
+            "facts",
+            "По одному на строку, с цифрами",
+            values["facts"],
+            "Только эти строки попадают в письмо: ничего кроме них система о вас не напишет.",
+        )
+    )
+
+    parts.append("<p><button>Сохранить профиль</button></p></form>")
+    parts.append(
+        "<p class=muted>Файл: {}. Новые значения подхватываются со следующего запуска "
+        "задачи.</p>".format(esc(profile_path))
+    )
+    return "".join(parts)
 
 
 # ———— сервер ————
@@ -796,100 +1069,4 @@ class Handler(BaseHTTPRequestHandler):
             conn = open_db()
             try:
                 if parsed.path == "/vacancies":
-                    min_score = settings.as_float(one("min_score", "0"), 0.0)
-                    limit = min(settings.as_int(one("limit", "50"), 50), 500)
-                    self._send(page("Вакансии", render_vacancies(conn, min_score, limit)))
-                elif parsed.path == "/vacancy":
-                    body = render_vacancy(conn, one("key"), with_draft=one("draft") == "1")
-                    self._send(page("Вакансия", body))
-                elif parsed.path == "/contacts":
-                    self._send(page("Контакты", render_contacts(conn)))
-                elif parsed.path == "/search":
-                    body = render_search(conn, one("q"), one("company"))
-                    self._send(page("Проверка поиска", body))
-                elif parsed.path == "/llm":
-                    self._send(page("Модель", render_llm(conn, one("probe") == "1")))
-                else:
-                    self._send(page("Не найдено", "<p>Такой страницы нет.</p>"), 404)
-            finally:
-                conn.close()
-        except Exception as exc:  # noqa: BLE001 — интерфейс не должен падать целиком
-            log.exception("ошибка при обработке %s", self.path)
-            self._send(page("Ошибка", "<pre>{}</pre>".format(esc(exc))), 500)
-
-    def do_POST(self) -> None:  # noqa: N802
-        parsed = urllib.parse.urlparse(self.path)
-        try:
-            form = self._form()
-
-            if parsed.path == "/run":
-                task = (form.get("task") or [""])[0]
-                try:
-                    job = jobs.runner.start(task)
-                except (KeyError, RuntimeError) as exc:
-                    body, refresh = render_run(
-                        None, "<div class=warn>{}</div>".format(esc(exc))
-                    )
-                    self._send(page("Запуск", body, refresh))
-                    return
-                self._redirect("/?job={}".format(job.id))
-                return
-
-            if parsed.path == "/stop":
-                job_id = settings.as_int((form.get("job") or [""])[0], 0)
-                jobs.runner.stop(job_id)
-                self._redirect("/?job={}".format(job_id))
-                return
-
-            if parsed.path == "/settings":
-                updates = settings.form_updates(form)
-                saved = settings.save(updates)
-                self._send(page("Настройки", render_settings(saved)))
-                return
-
-            if parsed.path == "/profile":
-                text = (form.get("facts") or [""])[0]
-                facts = save_facts(self.profile_path, text)
-                self._send(
-                    page("Профиль", render_profile(self.profile_path, saved=len(facts)))
-                )
-                return
-
-            self._send(page("Не найдено", "<p>Такой страницы нет.</p>"), 404)
-        except Exception as exc:  # noqa: BLE001
-            log.exception("ошибка при обработке POST %s", self.path)
-            self._send(page("Ошибка", "<pre>{}</pre>".format(esc(exc))), 500)
-
-
-def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Локальный интерфейс FuckHR")
-    parser.add_argument("--port", type=int, default=DEFAULT_PORT)
-    parser.add_argument("--verbose", action="store_true")
-    args = parser.parse_args(argv)
-
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
-    try:
-        from dotenv import load_dotenv
-
-        load_dotenv()
-    except ImportError:
-        log.warning("python-dotenv не установлен: читаю только переменные окружения")
-
-    Handler.profile_path = settings.get("RUN_PROFILE", "profile.yaml")
-    server = HTTPServer((HOST, args.port), Handler)
-    log.info("интерфейс здесь: http://%s:%s (Ctrl+C чтобы остановить)", HOST, args.port)
-    log.info("база: %s · настройки: %s", db_path(), settings.ENV_PATH)
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        log.info("остановлен")
-    finally:
-        server.server_close()
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())
+                    min_score =
