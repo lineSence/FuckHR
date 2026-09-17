@@ -1,23 +1,27 @@
-"""Локальный веб-интерфейс: настройка и разбор выдачи.
+"""Локальный веб-интерфейс: единственный пульт управления программой.
 
-Зачем он есть. Диагностика через однострочники в PowerShell работает, но плохо
-масштабируется: посмотреть сотню вакансий, сравнить скоринг, проверить, что
-отдаёт поиск по конкретной компании, и тут же поправить facts — в терминале это
-десяток команд, в браузере — четыре страницы.
+Здесь три вещи, которые раньше жили в терминале:
+
+- запуск: сбор, письма, проверка модели и тесты — кнопками, с живым логом;
+- настройки: весь .env формой, с пояснениями и масками для секретов;
+- выдача: вакансии, условия, HR-флаги, контакты, поиск, маршруты модели.
+
+В командной строке остаётся только запуск самих программ: python run.py и
+python outreach.py без флагов, параметры они берут из .env. Так же их запускает
+планировщик Windows, и настройки у них одни и те же.
 
 Границы, которые не нарушаются:
 
 - слушает только 127.0.0.1: ни авторизации, ни CSRF-защиты здесь нет, и выставлять
   его наружу нельзя;
-- ничего не отправляет — ни писем, ни сообщений [CORE-023];
-- не собирает вакансии: сбор остаётся за run.py, интерфейс только смотрит;
-- единственная запись на диск — блок facts в profile.yaml;
+- ничего не отправляет — ни писем, ни сообщений [CORE-023]; кнопки запуска
+  запускают те же программы, что и руками, с теми же правилами;
+- на диск пишет только .env, блок facts в profile.yaml и логи задач;
 - без новых зависимостей: http.server из стандартной библиотеки справляется с одним
-  пользователем, а Flask и FastAPI тянут за собой стек, который потом надо обновлять.
+  пользователем, а Flask и FastAPI тянут за собой стек, который потом обновлять.
 
-Про стиль шаблонов: там, где в разметке есть кавычки атрибутов, используется
-str.format с заранее вычисленными переменными, а не вложенные f-строки: так не
-возникает частокола из экранирования и строка остаётся читаемой.
+Про стиль шаблонов: только str.format с заранее вычисленными переменными, без
+вложенных f-строк: однажды это уже стоило SyntaxError на ровном месте.
 
 Запуск:
     python webui.py                 # http://127.0.0.1:8765
@@ -32,6 +36,7 @@ import logging
 import os
 import sqlite3
 import sys
+import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -39,10 +44,14 @@ from typing import Sequence
 
 import yaml
 
+import conditions
 import contacts
 import db
 import detector
+import jobs
+import llm
 import outreach
+import settings
 import websearch
 
 log = logging.getLogger("webui")
@@ -56,9 +65,10 @@ body { font: 15px/1.5 -apple-system, Segoe UI, Roboto, sans-serif; margin: 0 aut
        max-width: 1000px; padding: 24px; color: #1d1d1f; }
 a { color: #0b62d6; }
 nav { display: flex; gap: 16px; margin-bottom: 24px; padding-bottom: 12px;
-      border-bottom: 1px solid #e3e3e6; }
+      border-bottom: 1px solid #e3e3e6; flex-wrap: wrap; }
 h1 { font-size: 22px; margin: 0 0 16px; }
 h2 { font-size: 17px; margin: 24px 0 8px; }
+h3 { font-size: 15px; margin: 18px 0 6px; }
 table { border-collapse: collapse; width: 100%; }
 th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid #ececef;
          vertical-align: top; }
@@ -67,39 +77,64 @@ th { font-weight: 600; font-size: 13px; color: #6b6b70; }
 .muted { color: #6b6b70; }
 .warn { background: #fff6e5; border: 1px solid #f0d9a8; padding: 10px 12px;
         border-radius: 6px; margin: 12px 0; }
+.danger { background: #fdecec; border: 1px solid #f0b9b9; padding: 10px 12px;
+        border-radius: 6px; margin: 12px 0; }
+.ok { background: #eaf7ee; border: 1px solid #b6e0c2; padding: 10px 12px;
+      border-radius: 6px; margin: 12px 0; }
 pre { background: #f6f6f8; padding: 12px; border-radius: 6px; white-space: pre-wrap;
       word-break: break-word; }
+.console { background: #1d1f23; color: #e6e6e6; max-height: 460px; overflow: auto;
+           font: 13px/1.45 ui-monospace, Consolas, monospace; }
 textarea { width: 100%; min-height: 160px; font: 14px/1.5 ui-monospace, Consolas, monospace;
            padding: 10px; border: 1px solid #d2d2d7; border-radius: 6px; }
-input[type=text], input[type=number] { padding: 7px 9px; border: 1px solid #d2d2d7;
-           border-radius: 6px; font-size: 14px; }
+input[type=text], input[type=number], input[type=password] { padding: 7px 9px;
+           border: 1px solid #d2d2d7; border-radius: 6px; font-size: 14px; width: 100%;
+           box-sizing: border-box; }
 button { padding: 8px 14px; border: 0; border-radius: 6px; background: #0b62d6;
          color: #fff; font-size: 14px; cursor: pointer; }
+button.secondary { background: #e9ebef; color: #1d1d1f; }
+.tasks { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.tasks form { margin: 0; }
+.field { margin: 12px 0; }
+.field label { display: block; font-weight: 600; font-size: 14px; margin-bottom: 3px; }
+.field .hint { font-size: 13px; color: #6b6b70; margin-top: 3px; }
 .pill { display: inline-block; padding: 1px 7px; border-radius: 99px; font-size: 12px;
         background: #eef1f5; margin-right: 6px; }
 """
 
-NAV = (
-    '<nav><a href="/">Вакансии</a><a href="/contacts">Контакты</a>'
-    '<a href="/search">Проверка поиска</a><a href="/profile">Профиль</a></nav>'
+NAV_ITEMS = (
+    ("/", "Запуск"),
+    ("/vacancies", "Вакансии"),
+    ("/contacts", "Контакты"),
+    ("/search", "Поиск"),
+    ("/llm", "Модель"),
+    ("/profile", "Профиль"),
+    ("/settings", "Настройки"),
+)
+
+NAV = "<nav>{}</nav>".format(
+    "".join('<a href="{}">{}</a>'.format(href, name) for href, name in NAV_ITEMS)
 )
 
 
 def esc(value: object) -> str:
-    """Всё, что пришло из базы или из поиска, попадает в HTML только через это.
+    """Всё, что пришло из базы, поиска или лога, попадает в HTML только через это.
 
     В описаниях вакансий и сниппетах выдачи регулярно приезжает сырой HTML.
     """
     return html.escape("" if value is None else str(value), quote=True)
 
 
-def page(title: str, body: str) -> str:
+def page(title: str, body: str, refresh: int = 0) -> str:
+    meta = ""
+    if refresh:
+        meta = '<meta http-equiv=refresh content="{}">'.format(int(refresh))
     return (
         "<!doctype html><html lang=ru><head><meta charset=utf-8>"
         '<meta name=viewport content="width=device-width, initial-scale=1">'
-        "<title>{title} — FuckHR</title><style>{style}</style></head><body>"
+        "{meta}<title>{title} — FuckHR</title><style>{style}</style></head><body>"
         "{nav}<h1>{title}</h1>{body}</body></html>"
-    ).format(title=esc(title), style=STYLE, nav=NAV, body=body)
+    ).format(meta=meta, title=esc(title), style=STYLE, nav=NAV, body=body)
 
 
 def db_path() -> str:
@@ -112,7 +147,195 @@ def open_db() -> sqlite3.Connection:
     db.init_schema(conn)
     contacts.ensure_schema(conn)
     detector.ensure_schema(conn)
+    conditions.ensure_schema(conn)
     return conn
+
+
+def table(headers: Sequence[str], rows: Sequence[Sequence[str]]) -> str:
+    """Ячейки приходят уже готовым HTML: экранирует вызывающая сторона."""
+    head = "".join("<th>{}</th>".format(esc(h)) for h in headers)
+    body = "".join(
+        "<tr>" + "".join("<td>{}</td>".format(cell) for cell in row) + "</tr>"
+        for row in rows
+    )
+    return "<table><tr>{}</tr>{}</table>".format(head, body)
+
+
+# ———— запуск ————
+
+
+def render_run(active_id: int | None = None, note: str = "") -> tuple[str, int]:
+    """Главная страница: кнопки запуска и лог последней задачи.
+
+    Возвращает тело и интервал автообновления: пока задача идёт, страница
+    обновляется сама. Мета-обновление вместо JS — чтобы не тащить фронтенд.
+    """
+    parts = [note] if note else []
+
+    buttons = []
+    for key, title, hint in jobs.task_list():
+        buttons.append(
+            (
+                '<form method=post action="/run">'
+                '<input type=hidden name=task value="{key}">'
+                '<button title="{hint}">{title}</button></form>'
+            ).format(key=esc(key), hint=esc(hint), title=esc(title))
+        )
+    parts.append("<div class=tasks>{}</div>".format("".join(buttons)))
+
+    notes = settings.missing_required()
+    if notes:
+        items = "".join("<li>{}</li>".format(esc(item)) for item in notes)
+        parts.append(
+            '<div class=warn><b>Перед запуском стоит знать:</b><ul>{}</ul>'
+            '<a href="/settings">Открыть настройки</a></div>'.format(items)
+        )
+
+    collect = settings.collect_options()
+    outreach_opts = settings.outreach_options()
+    parts.append(
+        (
+            "<p class=muted>Сейчас так: сбор {limit} вакансий, письма от скора {min_score:.0f} "
+            "до {letters} штук, модель {llm_state}. "
+            '<a href="/settings">Изменить</a></p>'
+        ).format(
+            limit=collect.limit,
+            min_score=outreach_opts.min_score,
+            letters=outreach_opts.limit,
+            llm_state="включена" if collect.use_llm else "выключена",
+        )
+    )
+
+    job = jobs.runner.get(active_id) if active_id else jobs.runner.last()
+    if job is None:
+        parts.append("<p class=muted>Запусков ещё не было.</p>")
+        return "".join(parts), 0
+
+    head = (
+        "<h2>{title}</h2>"
+        "<p class=muted>Состояние: {status} · длится {duration:.0f} с · строк в логе: {lines}</p>"
+    ).format(
+        title=esc(job.title),
+        status=esc(job.status),
+        duration=job.duration,
+        lines=len(job.lines),
+    )
+    parts.append(head)
+
+    if job.running:
+        parts.append(
+            (
+                '<form method=post action="/stop">'
+                '<input type=hidden name=job value="{}">'
+                "<button class=secondary>Остановить</button></form>"
+            ).format(job.id)
+        )
+
+    parts.append(
+        "<pre class=console>{}</pre>".format(esc("\n".join(job.tail(400)) or "ждём вывод…"))
+    )
+
+    history = [item for item in jobs.runner.history() if item.id != job.id]
+    if history:
+        rows = []
+        for item in history[:8]:
+            rows.append(
+                [
+                    '<a href="/?job={}">{}</a>'.format(item.id, esc(item.title)),
+                    esc(item.status),
+                    "{:.0f} с".format(item.duration),
+                    esc(time.strftime("%H:%M:%S", time.localtime(item.started_at))),
+                ]
+            )
+        parts.append("<h2>Прошлые запуски</h2>")
+        parts.append(table(["Задача", "Итог", "Длительность", "Начало"], rows))
+
+    return "".join(parts), 3 if job.running else 0
+
+
+# ———— настройки ————
+
+
+def render_settings(saved: Sequence[str] = ()) -> str:
+    values = settings.load()
+    parts = []
+
+    if saved:
+        parts.append(
+            "<div class=ok>Сохранено: {}</div>".format(esc(", ".join(saved)))
+        )
+
+    notes = settings.missing_required()
+    if notes:
+        items = "".join("<li>{}</li>".format(esc(item)) for item in notes)
+        parts.append("<div class=warn><ul>{}</ul></div>".format(items))
+
+    parts.append(
+        "<p class=muted>Всё сохраняется в {}. Секреты показаны маской: пустое поле оставляет "
+        "текущее значение, слово «очистить» стирает его.</p>".format(
+            esc(settings.ENV_PATH)
+        )
+    )
+    parts.append('<form method=post action="/settings">')
+
+    for group, fields in settings.groups():
+        parts.append("<h2>{}</h2>".format(esc(group)))
+        for field in fields:
+            current = values.get(field.key, "")
+            hint = field.help
+            if field.kind == settings.BOOL:
+                checked = " checked" if settings.as_bool(current, settings.as_bool(field.default)) else ""
+                control = (
+                    '<label><input type=checkbox name="{key}" value="1"{checked}> {label}</label>'
+                ).format(key=esc(field.key), checked=checked, label=esc(field.label))
+                parts.append(
+                    '<div class=field>{control}<div class=hint>{key} · {hint}</div></div>'.format(
+                        control=control, key=esc(field.key), hint=esc(hint)
+                    )
+                )
+                continue
+
+            if field.is_secret:
+                shown = ""
+                placeholder = settings.mask(current)
+                input_type = "password"
+            else:
+                shown = current or field.default
+                placeholder = field.default
+                input_type = "number" if field.kind in (settings.INT, settings.FLOAT) else "text"
+
+            step = ""
+            if field.kind == settings.INT:
+                step = ' step="1"'
+            elif field.kind == settings.FLOAT:
+                step = ' step="any"'
+
+            parts.append(
+                (
+                    "<div class=field><label>{label}</label>"
+                    '<input type="{input_type}" name="{key}" value="{value}" '
+                    'placeholder="{placeholder}"{step}>'
+                    "<div class=hint>{key} · {hint}</div></div>"
+                ).format(
+                    label=esc(field.label),
+                    input_type=input_type,
+                    key=esc(field.key),
+                    value=esc(shown),
+                    placeholder=esc(placeholder),
+                    step=step,
+                    hint=esc(hint),
+                )
+            )
+
+    parts.append("<p><button>Сохранить</button></p></form>")
+    parts.append(
+        "<p class=muted>Новые значения подхватываются со следующего запуска задачи: "
+        "каждая задача — отдельный процесс со свежим .env.</p>"
+    )
+    return "".join(parts)
+
+
+# ———— выдача ————
 
 
 def vacancy_rows(
@@ -147,76 +370,26 @@ def contact_rows(conn: sqlite3.Connection, limit: int = 100) -> list[sqlite3.Row
     ).fetchall()
 
 
-def save_facts(profile_path: str | Path, text: str) -> tuple[str, ...]:
-    """Перезаписывает только блок facts, остальное в профиле не трогает.
-
-    Пустые строки отбрасываются здесь же, чтобы в файл не попали пустые пункты
-    списка: именно они разбирались в None и уезжали в письмо как факт о себе.
-    """
-    path = Path(profile_path)
-    data = {}
-    if path.exists():
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    facts = [line.strip() for line in text.splitlines() if line.strip()]
-    data["facts"] = facts
-    path.write_text(
-        yaml.safe_dump(data, allow_unicode=True, sort_keys=False, width=100),
-        encoding="utf-8",
-    )
-    return tuple(facts)
-
-
-def profile_summary(profile_path: str | Path) -> list[tuple[str, str]]:
-    """Короткая сводка профиля для просмотра — без редактирования."""
-    path = Path(profile_path)
-    if not path.exists():
-        return [("файл", "{} не найден".format(path))]
-    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    queries = data.get("queries") or []
-    salary = data.get("salary") or {}
-    skills = data.get("skills") or []
-    query_names = []
-    for item in queries:
-        if isinstance(item, dict):
-            query_names.append(str(item.get("text", "")))
-        else:
-            query_names.append(str(item))
-    return [
-        ("запросы", ", ".join(q for q in query_names if q) or "не заданы"),
-        ("минимум на руки", str(salary.get("min_net", "не задан"))),
-        ("порог скоринга", str(data.get("min_score", "не задан"))),
-        ("навыки", ", ".join(str(s) for s in skills) or "не заданы"),
-    ]
-
-
-def table(headers: Sequence[str], rows: Sequence[Sequence[str]]) -> str:
-    """Ячейки приходят уже готовым HTML: экранирует вызывающая сторона."""
-    head = "".join("<th>{}</th>".format(esc(h)) for h in headers)
-    body = "".join(
-        "<tr>" + "".join("<td>{}</td>".format(cell) for cell in row) + "</tr>"
-        for row in rows
-    )
-    return "<table><tr>{}</tr>{}</table>".format(head, body)
-
-
 def render_vacancies(conn: sqlite3.Connection, min_score: float, limit: int) -> str:
     rows = vacancy_rows(conn, min_score, limit)
     stats = db.stats(conn)
     direct, total = contacts.coverage(conn)
+    with_conditions, scanned = conditions.coverage(conn)
 
     form = (
-        '<form method=get action="/">'
-        'Скоринг от <input type=number step=1 name=min_score value="{min_score}"> '
-        'показать <input type=number step=10 name=limit value="{limit}"> '
+        '<form method=get action="/vacancies">'
+        'Скоринг от <input type=number step=1 name=min_score value="{min_score}" style="width:90px"> '
+        'показать <input type=number step=10 name=limit value="{limit}" style="width:90px"> '
         "<button>Применить</button></form>"
     ).format(min_score=int(min_score), limit=int(limit))
 
     summary = (
-        '<p class=muted>В базе: {vacancies} вакансий. '
-        "В логе контактов: {direct} с прямым контактом из {total}. "
-        "Найдено по фильтру: {found}.</p>"
+        '<p class=muted>В базе: {vacancies} вакансий. Разобраны условия: {conds} из {scanned}. '
+        "Прямых контактов: {direct} из {total}. Найдено по фильтру: {found}.</p>"
     ).format(
         vacancies=stats.get("vacancies", 0),
+        conds=with_conditions,
+        scanned=scanned,
         direct=direct,
         total=total,
         found=len(rows),
@@ -226,8 +399,8 @@ def render_vacancies(conn: sqlite3.Connection, min_score: float, limit: int) -> 
         return (
             form
             + summary
-            + "<div class=warn>Нет вакансий под фильтр. Если база пуста — сначала сбор: "
-            "<code>python run.py --limit 30</code></div>"
+            + '<div class=warn>Нет вакансий под фильтр. Если база пуста — сначала '
+            '<a href="/">сбор</a>.</div>'
         )
 
     body = []
@@ -238,7 +411,7 @@ def render_vacancies(conn: sqlite3.Connection, min_score: float, limit: int) -> 
         )
         body.append(
             [
-                '<span class=score>{:.0f}</span>'.format(score),
+                "<span class=score>{:.0f}</span>".format(score),
                 link,
                 esc(row["company"]),
                 esc((row["published_at"] or "")[:10]),
@@ -272,6 +445,18 @@ def render_vacancy(conn: sqlite3.Connection, key: str, with_draft: bool) -> str:
             "<h2>Почему такой скор</h2><pre>{}</pre>".format(esc(row["score_reasons"]))
         )
 
+    condition_lines = conditions.lines(conn, key)
+    if condition_lines:
+        parts.append(
+            "<h2>Условия из описания</h2><pre>{}</pre>".format(
+                esc("\n".join(condition_lines))
+            )
+        )
+        parts.append(
+            "<p class=muted>Каждая строка осталась только потому, что цитата нашлась "
+            "в тексте дословно.</p>"
+        )
+
     signal_lines = detector.load_lines(conn, key)
     if signal_lines:
         parts.append(
@@ -280,16 +465,26 @@ def render_vacancy(conn: sqlite3.Connection, key: str, with_draft: bool) -> str:
 
     if with_draft:
         provider = websearch.SearchProvider.from_env(conn)
-        facts = outreach.load_facts()
+        gateway = llm.Gateway.from_env(conn) if settings.flag("LLM_ENABLED") else None
+        facts = outreach.load_facts(settings.get("RUN_PROFILE", "profile.yaml"))
+        options = settings.outreach_options()
         discovery, draft, skip_reason = outreach.process_row(
-            conn, row, facts, provider, allow_generic=True
+            conn,
+            row,
+            facts,
+            provider,
+            check_mx=options.check_mx,
+            allow_generic=options.allow_generic,
+            gateway=gateway,
         )
         if skip_reason:
             parts.append(
                 "<h2>Черновик</h2><div class=warn>Пропуск: {}</div>".format(esc(skip_reason))
             )
         else:
-            card = outreach.format_card(row, discovery, draft, signal_lines)
+            card = outreach.format_card(
+                row, discovery, draft, signal_lines, condition_lines
+            )
             parts.append("<h2>Карточка и черновик</h2><pre>{}</pre>".format(esc(card)))
             if not facts:
                 parts.append(
@@ -300,7 +495,7 @@ def render_vacancy(conn: sqlite3.Connection, key: str, with_draft: bool) -> str:
         parts.append(
             (
                 '<p><a href="/vacancy?key={}&draft=1">Собрать черновик и найти контакт</a> '
-                "<span class=muted>(может дёрнуть внешний поиск, ничего не отправляет)</span></p>"
+                "<span class=muted>(может дёрнуть внешний поиск и модель, ничего не отправляет)</span></p>"
             ).format(urllib.parse.quote(key))
         )
 
@@ -315,13 +510,13 @@ def render_contacts(conn: sqlite3.Connection) -> str:
 
     if not rows:
         return header + (
-            "<div class=warn>Лог контактов пуст. Он заполняется при запуске "
-            "<code>python outreach.py</code> без --dry-run.</div>"
+            '<div class=warn>Лог контактов пуст. Он заполняется задачей '
+            '«Подготовка писем» на <a href="/">странице запуска</a>.</div>'
         )
 
     body = []
     for r in rows:
-        channel = '<span class=pill>{}</span>{}'.format(
+        channel = "<span class=pill>{}</span>{}".format(
             esc(r["channel_kind"]), esc(r["channel_value"])
         )
         confidence = esc(r["confidence"]) + (" · угадан" if r["guessed"] else "")
@@ -349,10 +544,10 @@ def render_search(conn: sqlite3.Connection, query: str, company: str) -> str:
 
     head = (
         '<form method=get action="/search">'
-        'Запрос <input type=text size=42 name=q value="{query}"> '
+        'Запрос <input type=text name=q value="{query}" style="width:60%"> '
         "<button>Искать</button></form>"
         '<form method=get action="/search">'
-        'Или запросы по компании <input type=text size=28 name=company value="{company}"> '
+        'Или запросы по компании <input type=text name=company value="{company}" style="width:40%"> '
         "<button>Показать и выполнить</button></form>"
         "<p class=muted>Провайдер: {provider} · адрес: {base_url} · {state}</p>"
     ).format(
@@ -365,8 +560,8 @@ def render_search(conn: sqlite3.Connection, query: str, company: str) -> str:
 
     if not provider.enabled:
         return head + (
-            "<div class=warn>Внешний поиск выключен, искать негде. "
-            "Для своего SearXNG задай SEARCH_BASE_URL в .env.</div>"
+            '<div class=warn>Внешний поиск выключен, искать негде. '
+            'Адрес инстанса задаётся в <a href="/settings">настройках</a>.</div>'
         )
 
     queries = [query] if query else []
@@ -409,13 +604,122 @@ def render_search(conn: sqlite3.Connection, query: str, company: str) -> str:
     return "".join(parts)
 
 
+def render_llm(conn: sqlite3.Connection, probe: bool = False) -> str:
+    """Какой этап на какую модель уходит — без запуска пайплайна."""
+    if not settings.flag("LLM_ENABLED"):
+        return (
+            '<div class=warn>Модель выключена в <a href="/settings">настройках</a>. '
+            "Пайплайн работает без неё целиком, просто грубее.</div>"
+        )
+
+    gateway = llm.Gateway.from_env(conn)
+    parts = []
+    if not gateway.enabled:
+        parts.append(
+            "<div class=danger>Шлюз не готов: {}</div>".format(esc(gateway.disabled_reason))
+        )
+
+    rows = []
+    for stage, profile, route, model in gateway.describe_routes():
+        personal = stage in llm.PERSONAL_STAGES
+        marker = ""
+        if personal and route == llm.ROUTE_PROXY:
+            marker = ' <span class=pill>персональные данные уходят наружу</span>'
+        rows.append(
+            [
+                esc(stage),
+                esc(profile),
+                esc(route) + marker,
+                esc(model or "не задана"),
+            ]
+        )
+    parts.append(table(["Этап", "Профиль", "Маршрут", "Модель"], rows))
+
+    if settings.flag("LLM_PERSONAL_VIA_PROXY"):
+        parts.append(
+            "<div class=danger>Включён режим, при котором ФИО и адреса живых людей "
+            "уходят на внешний прокси. Если прокси ходит наружу, а не в твою Ollama, "
+            "это утечка чужих персональных данных [CORE-012].</div>"
+        )
+
+    parts.append(
+        '<p><a href="/llm?probe=1">Спросить список моделей у прокси</a> '
+        '<span class=muted>(один запрос к /v1/models)</span></p>'
+    )
+
+    if probe:
+        try:
+            names = gateway.models()
+            if names:
+                items = "".join("<li>{}</li>".format(esc(name)) for name in names)
+                parts.append("<h2>Модели на прокси</h2><ul>{}</ul>".format(items))
+            else:
+                parts.append(
+                    "<div class=warn>Прокси не отдал список моделей. Чаще всего это отсутствующий "
+                    "ключ: без него LiteLLM отвечает 401.</div>"
+                )
+        except Exception as exc:  # noqa: BLE001 — сеть может лежать, это не повод падать
+            parts.append("<div class=danger>{}</div>".format(esc(exc)))
+
+    parts.append(
+        "<p class=muted>Живой вызов на выдуманном тексте — задача «Проверка модели» "
+        'на <a href="/">странице запуска</a>.</p>'
+    )
+    return "".join(parts)
+
+
+# ———— профиль ————
+
+
+def save_facts(profile_path: str | Path, text: str) -> tuple[str, ...]:
+    """Перезаписывает только блок facts, остальное в профиле не трогает.
+
+    Пустые строки отбрасываются здесь же: именно они разбирались в None и уезжали
+    в письмо как факт о себе.
+    """
+    path = Path(profile_path)
+    data = {}
+    if path.exists():
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    facts = [line.strip() for line in text.splitlines() if line.strip()]
+    data["facts"] = facts
+    path.write_text(
+        yaml.safe_dump(data, allow_unicode=True, sort_keys=False, width=100),
+        encoding="utf-8",
+    )
+    return tuple(facts)
+
+
+def profile_summary(profile_path: str | Path) -> list[tuple[str, str]]:
+    """Короткая сводка профиля для просмотра — без редактирования."""
+    path = Path(profile_path)
+    if not path.exists():
+        return [("файл", "{} не найден".format(path))]
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    queries = data.get("queries") or []
+    salary = data.get("salary") or {}
+    skills = data.get("skills") or []
+    query_names = []
+    for item in queries:
+        if isinstance(item, dict):
+            query_names.append(str(item.get("text", "")))
+        else:
+            query_names.append(str(item))
+    return [
+        ("запросы", ", ".join(q for q in query_names if q) or "не заданы"),
+        ("минимум на руки", str(salary.get("min_net", "не задан"))),
+        ("порог скоринга", str(data.get("min_score", "не задан"))),
+        ("навыки", ", ".join(str(s) for s in skills) or "не заданы"),
+    ]
+
+
 def render_profile(profile_path: str, saved: int | None = None) -> str:
     facts = outreach.load_facts(profile_path)
     rows = [[esc(name), esc(value)] for name, value in profile_summary(profile_path)]
 
     note = ""
     if saved is not None:
-        note = "<div class=warn>Сохранено фактов: {}</div>".format(saved)
+        note = "<div class=ok>Сохранено фактов: {}</div>".format(saved)
     elif not facts:
         note = (
             "<div class=warn>Блок facts пуст. Без него каждое письмо собирается с заглушкой "
@@ -431,9 +735,12 @@ def render_profile(profile_path: str, saved: int | None = None) -> str:
         + "<textarea name=facts>{}</textarea>".format(esc("\n".join(facts)))
         + "<p><button>Сохранить</button></p></form>"
         + "<h2>Остальное в профиле</h2>"
-        + "<p class=muted>Чтение; правится в profile.yaml.</p>"
+        + "<p class=muted>Чтение; запросы и навыки правятся в profile.yaml.</p>"
         + table(["Параметр", "Значение"], rows)
     )
+
+
+# ———— сервер ————
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -451,6 +758,18 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
+    def _redirect(self, location: str) -> None:
+        """После POST всегда редирект: иначе F5 повторяет запуск задачи."""
+        self.send_response(303)
+        self.send_header("Location", location)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def _form(self) -> dict[str, list[str]]:
+        length = int(self.headers.get("Content-Length") or 0)
+        raw = self.rfile.read(length).decode("utf-8")
+        return urllib.parse.parse_qs(raw, keep_blank_values=True)
+
     def do_GET(self) -> None:  # noqa: N802
         parsed = urllib.parse.urlparse(self.path)
         params = urllib.parse.parse_qs(parsed.query)
@@ -459,18 +778,26 @@ class Handler(BaseHTTPRequestHandler):
             return (params.get(name) or [default])[0]
 
         try:
-            if parsed.path == "/profile":
-                self._send(page("Профиль", render_profile(self.profile_path)))
-                return
             if parsed.path == "/favicon.ico":
                 self._send("", 404)
+                return
+            if parsed.path == "/":
+                job_id = settings.as_int(one("job"), 0) or None
+                body, refresh = render_run(job_id)
+                self._send(page("Запуск", body, refresh))
+                return
+            if parsed.path == "/settings":
+                self._send(page("Настройки", render_settings()))
+                return
+            if parsed.path == "/profile":
+                self._send(page("Профиль", render_profile(self.profile_path)))
                 return
 
             conn = open_db()
             try:
-                if parsed.path == "/":
-                    min_score = float(one("min_score", "0") or 0)
-                    limit = min(int(one("limit", "50") or 50), 500)
+                if parsed.path == "/vacancies":
+                    min_score = settings.as_float(one("min_score", "0"), 0.0)
+                    limit = min(settings.as_int(one("limit", "50"), 50), 500)
                     self._send(page("Вакансии", render_vacancies(conn, min_score, limit)))
                 elif parsed.path == "/vacancy":
                     body = render_vacancy(conn, one("key"), with_draft=one("draft") == "1")
@@ -480,6 +807,8 @@ class Handler(BaseHTTPRequestHandler):
                 elif parsed.path == "/search":
                     body = render_search(conn, one("q"), one("company"))
                     self._send(page("Проверка поиска", body))
+                elif parsed.path == "/llm":
+                    self._send(page("Модель", render_llm(conn, one("probe") == "1")))
                 else:
                     self._send(page("Не найдено", "<p>Такой страницы нет.</p>"), 404)
             finally:
@@ -490,26 +819,51 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         parsed = urllib.parse.urlparse(self.path)
-        if parsed.path != "/profile":
-            self._send(page("Не найдено", "<p>Такой страницы нет.</p>"), 404)
-            return
         try:
-            length = int(self.headers.get("Content-Length") or 0)
-            raw = self.rfile.read(length).decode("utf-8")
-            text = (urllib.parse.parse_qs(raw).get("facts") or [""])[0]
-            facts = save_facts(self.profile_path, text)
-            self._send(
-                page("Профиль", render_profile(self.profile_path, saved=len(facts)))
-            )
+            form = self._form()
+
+            if parsed.path == "/run":
+                task = (form.get("task") or [""])[0]
+                try:
+                    job = jobs.runner.start(task)
+                except (KeyError, RuntimeError) as exc:
+                    body, refresh = render_run(
+                        None, "<div class=warn>{}</div>".format(esc(exc))
+                    )
+                    self._send(page("Запуск", body, refresh))
+                    return
+                self._redirect("/?job={}".format(job.id))
+                return
+
+            if parsed.path == "/stop":
+                job_id = settings.as_int((form.get("job") or [""])[0], 0)
+                jobs.runner.stop(job_id)
+                self._redirect("/?job={}".format(job_id))
+                return
+
+            if parsed.path == "/settings":
+                updates = settings.form_updates(form)
+                saved = settings.save(updates)
+                self._send(page("Настройки", render_settings(saved)))
+                return
+
+            if parsed.path == "/profile":
+                text = (form.get("facts") or [""])[0]
+                facts = save_facts(self.profile_path, text)
+                self._send(
+                    page("Профиль", render_profile(self.profile_path, saved=len(facts)))
+                )
+                return
+
+            self._send(page("Не найдено", "<p>Такой страницы нет.</p>"), 404)
         except Exception as exc:  # noqa: BLE001
-            log.exception("не смог сохранить факты")
+            log.exception("ошибка при обработке POST %s", self.path)
             self._send(page("Ошибка", "<pre>{}</pre>".format(esc(exc))), 500)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Локальный интерфейс FuckHR")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
-    parser.add_argument("--profile", default="profile.yaml")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args(argv)
 
@@ -524,10 +878,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     except ImportError:
         log.warning("python-dotenv не установлен: читаю только переменные окружения")
 
-    Handler.profile_path = args.profile
+    Handler.profile_path = settings.get("RUN_PROFILE", "profile.yaml")
     server = HTTPServer((HOST, args.port), Handler)
     log.info("интерфейс здесь: http://%s:%s (Ctrl+C чтобы остановить)", HOST, args.port)
-    log.info("база: %s", db_path())
+    log.info("база: %s · настройки: %s", db_path(), settings.ENV_PATH)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
