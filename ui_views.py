@@ -2,6 +2,9 @@
 
 Ни одна функция здесь не знает про HTTP: на вход — соединение с базой и параметры,
 на выход — готовый HTML. За счёт этого страницы проверяются тестами без сервера.
+
+В шаблонах только str.format и только одинарные кавычки снаружи: внутри HTML живут
+двойные, и смешивание двух видов кавычек в одной склейке уже давало SyntaxError.
 """
 
 from __future__ import annotations
@@ -20,7 +23,7 @@ import llm
 import outreach
 import settings
 import websearch
-from ui_core import esc, number_field, table, text_field
+from ui_core import esc, table
 
 
 # ———— запуск ————
@@ -99,7 +102,8 @@ def render_run(active_id: int | None = None, note: str = "") -> tuple[str, int]:
     parts.append(
         (
             "<h2>{title}</h2>"
-            "<p class=muted>Состояние: {status} · длится {duration:.0f} с · строк в логе: {lines}</p>"
+            "<p class=muted>Состояние: {status} · длится {duration:.0f} с · "
+            "строк в логе: {lines}</p>"
         ).format(
             title=esc(job.title),
             status=esc(job.status),
@@ -177,16 +181,18 @@ def render_settings(saved: Sequence[str] = ()) -> str:
             if field.kind == settings.BOOL:
                 on = settings.as_bool(current, settings.as_bool(field.default))
                 control = (
-                    '<label><input type=checkbox name="{key}" value="1"{checked}> {label}</label>'
+                    '<label><input type=checkbox name="{key}" value="1"{checked}> '
+                    "{label}</label>"
                 ).format(
                     key=esc(field.key),
                     checked=" checked" if on else "",
                     label=esc(field.label),
                 )
                 parts.append(
-                    "<div class=field>{control}<div class=hint>{key} · {hint}</div></div>".format(
-                        control=control, key=esc(field.key), hint=esc(hint)
-                    )
+                    (
+                        "<div class=field>{control}"
+                        "<div class=hint>{key} · {hint}</div></div>"
+                    ).format(control=control, key=esc(field.key), hint=esc(hint))
                 )
                 continue
 
@@ -275,14 +281,16 @@ def render_vacancies(conn: sqlite3.Connection, min_score: float, limit: int) -> 
 
     form = (
         '<form method=get action="/vacancies">'
-        'Скоринг от <input type=number step=1 name=min_score value="{min_score}" style="width:90px"> '
-        'показать <input type=number step=10 name=limit value="{limit}" style="width:90px"> '
+        'Скоринг от <input type=number step=1 name=min_score value="{min_score}" '
+        'style="width:90px"> '
+        'показать <input type=number step=10 name=limit value="{limit}" '
+        'style="width:90px"> '
         "<button>Применить</button></form>"
     ).format(min_score=int(min_score), limit=int(limit))
 
     summary = (
-        "<p class=muted>В базе: {vacancies} вакансий. Разобраны условия: {conds} из {scanned}. "
-        "Прямых контактов: {direct} из {total}. Найдено по фильтру: {found}.</p>"
+        "<p class=muted>В базе: {vacancies} вакансий. Разобраны условия: {conds} из "
+        "{scanned}. Прямых контактов: {direct} из {total}. Найдено по фильтру: {found}.</p>"
     ).format(
         vacancies=stats.get("vacancies", 0),
         conds=with_conditions,
@@ -394,9 +402,9 @@ def render_vacancy(conn: sqlite3.Connection, key: str, with_draft: bool) -> str:
     else:
         parts.append(
             (
-                '<p><a href="/vacancy?key={}&draft=1">Собрать черновик и найти контакт</a> "
-                "<span class=muted>(может дёрнуть внешний поиск и модель, "
-                "ничего не отправляет)</span></p>"
+                '<p><a href="/vacancy?key={}&draft=1">Собрать черновик и найти контакт</a> '
+                '<span class=muted>(может дёрнуть внешний поиск и модель, '
+                'ничего не отправляет)</span></p>'
             ).format(urllib.parse.quote(key))
         )
 
