@@ -4,14 +4,21 @@
 досье — на вопрос «стоит ли писать вообще». Второе важнее: письмо нанимающему
 менеджеру в контору с задержками зарплаты — потраченный вечер, а не шанс.
 
-Что здесь считается детерминированно ([CORE-015]):
+Где что лежит после разбиения по [CORE-024]:
 
-- поиск отзывов по известным площадкам (site:…), а не по всему интернету;
-- оценка из текста регуляркой («3,2 из 5»);
-- закономерности — словарь признаков с полярностью и весом.
+- `dossier_rules.py` — площадки, признаки, маркеры, пороги;
+- `dossier_store.py` — таблицы и запросы SQLite;
+- здесь — разбор текстов и сборка досье.
 
-Модель добавляет только сводку словами и никогда не влияет на флаги и цифры: если шлюз
-выключен или ответил ошибкой, досье собирается без неё [CORE-017], [LLM-009].
+Имена из обоих модулей реэкспортируются ниже, поэтому `dossier.store`,
+`dossier.PATTERN_RULES` и прочее работают по-прежнему.
+
+Что здесь считается детерминированно ([CORE-015]): поиск отзывов по известным
+площадкам (site:…), оценка из текста регуляркой («3,2 из 5»), закономерности —
+словарь признаков с полярностью и весом.
+
+Модель добавляет только сводку словами и никогда не влияет на флаги и цифры:
+если шлюз выключен или ответил ошибкой, досье собирается без неё [CORE-017], [LLM-009].
 
 Граница по данным. В поиск уходит только название компании. В отзывах часто
 встречаются ФИО руководителей и авторов — мы их не извлекаем и не складываем
@@ -22,12 +29,6 @@
 зачётом позитивного совпадения проверяется префикс отрицания, иначе злой отзыв
 становится mixed и перестаёт красить работодателя.
 
-Порядок слов. Из того же подстрочного поиска следует вторая ловушка: «задерживают
-зарплату» и «зарплату задерживают» для кода — разные строки. Живые отзывы пишут
-и так, и так, поэтому в признаках перечислены обе перестановки. Добавляя новый
-признак, сразу выпишите его в том виде, в каком его пишет человек, а не в том,
-в каком удобно читать список.
-
 Тексты отзывов. Выдача поиска даёт заголовок и сниппет, а у отзовиков сниппет —
 рекламная подпись сайта. По ней ни закономерностей, ни тональности не видно,
 поэтому страницы найденных отзывов открываются целиком (reviewpage.py), и весь
@@ -37,227 +38,47 @@
 
 from __future__ import annotations
 
-import json
 import logging
-import re
-import sqlite3
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
 from typing import Sequence
 
 import contacts
 import reviewpage
+from dossier_rules import (  # noqa: F401 — реэкспорт для старых вызовов
+    MAX_LLM_CHARS,
+    MAX_LLM_REVIEWS,
+    MAX_QUOTE_CHARS,
+    NEGATION_PREFIXES,
+    NEGATION_WINDOW,
+    NEGATIVE_MARKERS,
+    PATTERN_RULES,
+    POSITIVE_MARKERS,
+    RATING_RE,
+    REVIEW_SITES,
+    RISK_GREEN,
+    RISK_RED,
+    RISK_RU,
+    RISK_UNKNOWN,
+    RISK_YELLOW,
+    SITE_NAMES,
+    SITE_TRUST,
+    STALE_AFTER_DAYS,
+    STARS_RE,
+)
+from dossier_store import (  # noqa: F401 — реэкспорт для старых вызовов
+    SCHEMA,
+    _now,
+    coverage,
+    ensure_schema,
+    is_fresh,
+    list_dossiers,
+    load,
+    load_reviews,
+    row_to_lines,
+    store,
+)
 
 log = logging.getLogger(__name__)
-
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS company_dossier (
-    company       TEXT PRIMARY KEY,
-    domain        TEXT,
-    site_url      TEXT,
-    review_count  INTEGER NOT NULL DEFAULT 0,
-    avg_rating    REAL,
-    risk          TEXT NOT NULL DEFAULT 'unknown',
-    patterns      TEXT NOT NULL DEFAULT '[]',
-    red_flags     TEXT NOT NULL DEFAULT '[]',
-    green_flags   TEXT NOT NULL DEFAULT '[]',
-    summary       TEXT,
-    summary_by    TEXT,
-    sources       TEXT NOT NULL DEFAULT '[]',
-    updated_at    TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS company_reviews (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    company    TEXT NOT NULL,
-    site       TEXT,
-    url        TEXT NOT NULL,
-    title      TEXT,
-    snippet    TEXT,
-    body       TEXT,
-    rating     REAL,
-    polarity   TEXT NOT NULL DEFAULT 'unknown',
-    created_at TEXT NOT NULL,
-    UNIQUE (company, url)
-);
-
-CREATE INDEX IF NOT EXISTS idx_reviews_company ON company_reviews(company);
-CREATE INDEX IF NOT EXISTS idx_dossier_risk ON company_dossier(risk);
-"""
-
-# Площадки с отзывами сотрудников. Список закрытый сознательно: открытый поиск
-# по «отзывы о компании X» даёт рекламные агрегаторы и накрученные отзывы.
-# trust — насколько площадка похожа на живые отзывы, а не на карточку компании.
-REVIEW_SITES: tuple[tuple[str, str, float], ...] = (
-    ("dreamjob.ru", "Dream Job", 1.0),
-    ("pravda-sotrudnikov.ru", "Правда сотрудников", 1.0),
-    ("orabote.top", "О работе", 0.9),
-    ("otzyvy-sotrudnikov.ru", "Отзывы сотрудников", 0.8),
-    ("antijob.net", "Antijob", 0.7),
-    ("career.habr.com", "Хабр Карьера", 0.9),
-    ("habr.com", "Хабр", 0.6),
-    ("glassdoor.com", "Glassdoor", 0.8),
-)
-
-SITE_NAMES = {host: name for host, name, _ in REVIEW_SITES}
-SITE_TRUST = {host: trust for host, _, trust in REVIEW_SITES}
-
-# Закономерности: код, формулировка для человека, полярность, вес, признаки.
-# Вес нужен, чтобы отделить «не платят» от «старый офис»: первое закрывает вопрос,
-# второе — вкусовщина.
-#
-# Признаки — подстроки, а не слова, поэтому порядок слов важен: для человека
-# «задерживают зарплату» и «зарплату задерживают» — одно и то же, для find_patterns
-# — два разных признака. Перестановки выписаны руками; морфологию не подключаем
-# ради одной таблицы правил [CORE-015].
-PATTERN_RULES: tuple[tuple[str, str, str, int, tuple[str, ...]], ...] = (
-    (
-        "salary_delay",
-        "Задержки и проблемы с выплатами",
-        "red",
-        5,
-        (
-            "задерживают зарплат", "зарплату задерживают", "зарплата задерживается",
-            "зарплату не платят", "зарплату не выплат",
-            "задержка зарплат", "задержки зарплат", "с задержкой зарплат",
-            "зарплату платят с задержк", "платят с задержк", "платят с опоздани",
-            "задерживают выплат", "задержка выплат", "задержки выплат",
-            "задерживают аванс", "не выплатил", "не платят",
-            "кинули на деньги", "должали зарплату",
-        ),
-    ),
-    (
-        "grey_salary",
-        "Серая зарплата или оформление",
-        "red",
-        4,
-        ("в конверт", "серая зарплат", "серый оклад", "без оформления", "по гпх вместо"),
-    ),
-    (
-        "overtime",
-        "Переработки как норма",
-        "red",
-        3,
-        (
-            "переработк", "овертайм", "работа по выходным", "задерживаться до ночи",
-            "неоплачиваемые переработ", "горит дедлайн постоянно",
-        ),
-    ),
-    (
-        "churn",
-        "Высокая текучка",
-        "red",
-        3,
-        ("текучк", "никто не задерживается", "все уволились", "команда полностью сменилась"),
-    ),
-    (
-        "micromanagement",
-        "Микроменеджмент и слежка",
-        "red",
-        3,
-        (
-            "микроменеджмент", "тотальный контроль", "тайм-трекер", "скриншоты экрана",
-            "следят за каждым", "отчёт каждый час",
-        ),
-    ),
-    (
-        "toxic",
-        "Токсичное руководство",
-        "red",
-        4,
-        (
-            "кричит на сотрудник", "хамство", "унижени", "токсичн",
-            "самодур", "публичные разборы",
-        ),
-    ),
-    (
-        "fake_vacancy",
-        "Вакансия не совпадает с реальностью",
-        "red",
-        4,
-        (
-            "обещали одно", "обманули на собеседовани", "вилка оказалась",
-            "по факту другие обязанности", "на испытательном урезали",
-        ),
-    ),
-    (
-        "chaos",
-        "Нет процессов, хаос в задачах",
-        "red",
-        2,
-        ("нет процессов", "полный хаос", "требования меняются каждый", "легаси без тестов"),
-    ),
-    (
-        "hr_pressure",
-        "Давление на найме и многоэтапные отборы",
-        "red",
-        2,
-        ("пять этапов", "тестовое на неделю", "стресс-интервью", "бесплатное тестовое"),
-    ),
-    (
-        "pays_on_time",
-        "Платят вовремя, белая зарплата",
-        "green",
-        3,
-        ("платят вовремя", "белая зарплат", "зарплата без задержек", "индексация зарплат"),
-    ),
-    (
-        "sane_management",
-        "Адекватное руководство",
-        "green",
-        2,
-        ("адекватный руководител", "адекватное руководств", "нет микроменеджмент", "слышат команду"),
-    ),
-    (
-        "tech_culture",
-        "Интересные задачи и техкультура",
-        "green",
-        2,
-        ("интересные задач", "сильная команд", "есть ревью код", "есть тесты и ci"),
-    ),
-    (
-        "remote_ok",
-        "Реальная удалёнка и гибкий график",
-        "green",
-        1,
-        ("гибкий график", "полностью удалённо", "полностью удаленно", "никто не сидит в офисе"),
-    ),
-)
-
-RATING_RE = re.compile(r"(\d[.,]\d|\d)\s*(?:из|/)\s*(?:5|10)\b")
-STARS_RE = re.compile(r"рейтинг[^\d]{0,12}(\d[.,]\d|\d)", re.IGNORECASE)
-
-NEGATIVE_MARKERS = (
-    "не рекомендую", "не советую", "бегите", "ужас", "кошмар", "обходите стороной",
-    "разочарова", "обман", "минусы",
-)
-POSITIVE_MARKERS = (
-    "рекомендую", "лучшая компания", "доволен работой", "плюсы", "всё нравится",
-)
-
-# Отрицания перед позитивным совпадением. Без этой проверки «не платят вовремя»
-# считается похвалой: маркеры ищутся подстрокой, а не по словам.
-NEGATION_PREFIXES = (
-    "не ", "ни ", "никогда не ", "перестали ", "так и не ", "вообще не ",
-)
-NEGATION_WINDOW = 20  # сколько символов слева смотрим на отрицание
-
-RISK_UNKNOWN = "unknown"
-RISK_GREEN = "green"
-RISK_YELLOW = "yellow"
-RISK_RED = "red"
-
-RISK_RU = {
-    RISK_UNKNOWN: "нет данных",
-    RISK_GREEN: "претензий не видно",
-    RISK_YELLOW: "есть к чему придраться",
-    RISK_RED: "красные флаги",
-}
-
-STALE_AFTER_DAYS = 30  # досье старше месяца собирается заново
-MAX_QUOTE_CHARS = 240
-MAX_LLM_REVIEWS = 12
-MAX_LLM_CHARS = 1500  # сколько текста одного отзыва уходит в модель
 
 
 @dataclass(frozen=True)
@@ -338,21 +159,6 @@ class Dossier:
     def read_count(self) -> int:
         """Сколько отзывов прочитано со страницы, а не по сниппету выдачи."""
         return sum(1 for r in self.reviews if r.has_body)
-
-
-def ensure_schema(conn: sqlite3.Connection) -> None:
-    conn.executescript(SCHEMA)
-    # Миграция для баз, созданных до чтения страниц: колонки body там нет,
-    # а ронять прогон из-за этого нельзя.
-    columns = {row[1] for row in conn.execute("PRAGMA table_info(company_reviews)")}
-    if "body" not in columns:
-        log.info("добавляю колонку body в company_reviews")
-        conn.execute("ALTER TABLE company_reviews ADD COLUMN body TEXT")
-    conn.commit()
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
 def review_queries(company: str) -> list[str]:
@@ -654,7 +460,7 @@ def summarize(gateway: object | None, dossier: Dossier) -> tuple[str | None, str
         preface + "\n"
         "Назови 3–5 повторяющихся закономерностей одним списком, без введения.\n"
         "Правила: опирайся только на текст; если данных мало — скажи это прямо; "
-        "не выдумывай цифры; не упоминай имён людей.\n\n{body}"
+        "не выдумывай цифр; не упоминай имён людей.\n\n{body}"
     ).format(company=dossier.company, body="\n\n".join(excerpts))
 
     try:
@@ -719,167 +525,6 @@ def format_lines(dossier: Dossier, limit: int = 3) -> list[str]:
     for pattern in dossier.green_flags[:2]:
         lines.append("+ {} (упоминаний: {})".format(pattern.label, pattern.hits))
     return lines
-
-
-def store(conn: sqlite3.Connection, dossier: Dossier) -> None:
-    """Перезаписывает досье и добавляет новые отзывы."""
-    ensure_schema(conn)
-    conn.execute(
-        """
-        INSERT INTO company_dossier (
-            company, domain, site_url, review_count, avg_rating, risk,
-            patterns, red_flags, green_flags, summary, summary_by, sources, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(company) DO UPDATE SET
-            domain = excluded.domain,
-            site_url = excluded.site_url,
-            review_count = excluded.review_count,
-            avg_rating = excluded.avg_rating,
-            risk = excluded.risk,
-            patterns = excluded.patterns,
-            red_flags = excluded.red_flags,
-            green_flags = excluded.green_flags,
-            summary = excluded.summary,
-            summary_by = excluded.summary_by,
-            sources = excluded.sources,
-            updated_at = excluded.updated_at
-        """,
-        (
-            dossier.company,
-            dossier.domain,
-            dossier.site_url,
-            dossier.review_count,
-            dossier.avg_rating,
-            dossier.risk,
-            json.dumps(
-                [
-                    {
-                        "code": p.code,
-                        "label": p.label,
-                        "polarity": p.polarity,
-                        "hits": p.hits,
-                        "quotes": list(p.quotes),
-                    }
-                    for p in dossier.patterns
-                ],
-                ensure_ascii=False,
-            ),
-            json.dumps([p.label for p in dossier.red_flags], ensure_ascii=False),
-            json.dumps([p.label for p in dossier.green_flags], ensure_ascii=False),
-            dossier.summary,
-            dossier.summary_by,
-            json.dumps(list(dossier.sources), ensure_ascii=False),
-            _now(),
-        ),
-    )
-    for review in dossier.reviews:
-        # Текст страницы мог появиться позже сниппета: обновляем существующую
-        # строку, иначе прочитанный отзыв так и останется заголовком.
-        conn.execute(
-            """
-            INSERT INTO company_reviews
-                (company, site, url, title, snippet, body, rating, polarity, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(company, url) DO UPDATE SET
-                title = excluded.title,
-                snippet = excluded.snippet,
-                body = COALESCE(NULLIF(excluded.body, ''), company_reviews.body),
-                rating = excluded.rating,
-                polarity = excluded.polarity
-            """,
-            (
-                dossier.company,
-                review.site,
-                review.url,
-                review.title,
-                review.snippet,
-                review.body,
-                review.rating,
-                review.polarity,
-                _now(),
-            ),
-        )
-    conn.commit()
-
-
-def load(conn: sqlite3.Connection, company: str) -> sqlite3.Row | None:
-    ensure_schema(conn)
-    return conn.execute(
-        "SELECT * FROM company_dossier WHERE company = ?", (company,)
-    ).fetchone()
-
-
-def load_reviews(conn: sqlite3.Connection, company: str) -> list[sqlite3.Row]:
-    ensure_schema(conn)
-    return conn.execute(
-        "SELECT * FROM company_reviews WHERE company = ? ORDER BY polarity, id",
-        (company,),
-    ).fetchall()
-
-
-def is_fresh(row: sqlite3.Row | None, days: int = STALE_AFTER_DAYS) -> bool:
-    """Свежее досье не собирается заново: это главная экономия запросов к поиску."""
-    if row is None:
-        return False
-    try:
-        updated = datetime.fromisoformat(str(row["updated_at"]))
-    except ValueError:
-        return False
-    if updated.tzinfo is None:
-        updated = updated.replace(tzinfo=timezone.utc)
-    return datetime.now(timezone.utc) - updated < timedelta(days=days)
-
-
-def row_to_lines(row: sqlite3.Row) -> list[str]:
-    """Строки карточки из сохранённого досье — без повторного поиска."""
-    try:
-        red = json.loads(row["red_flags"] or "[]")
-        green = json.loads(row["green_flags"] or "[]")
-    except ValueError:
-        red, green = [], []
-    head = "Работодатель: {} · отзывов {}".format(
-        RISK_RU.get(row["risk"], row["risk"]), row["review_count"]
-    )
-    if row["avg_rating"] is not None:
-        head += " · оценка {:.1f}".format(float(row["avg_rating"]))
-    lines = [head]
-    lines += ["— {}".format(label) for label in red[:3]]
-    lines += ["+ {}".format(label) for label in green[:2]]
-    return lines
-
-
-def coverage(conn: sqlite3.Connection) -> tuple[int, int, int]:
-    """(досье всего, с красными флагами, без отзывов) — для страницы компаний."""
-    ensure_schema(conn)
-    row = conn.execute(
-        """
-        SELECT
-            COUNT(*) AS total,
-            SUM(CASE WHEN risk = 'red' THEN 1 ELSE 0 END) AS red,
-            SUM(CASE WHEN review_count = 0 THEN 1 ELSE 0 END) AS empty
-        FROM company_dossier
-        """
-    ).fetchone()
-    return int(row["total"] or 0), int(row["red"] or 0), int(row["empty"] or 0)
-
-
-def list_dossiers(conn: sqlite3.Connection, limit: int = 100) -> list[sqlite3.Row]:
-    ensure_schema(conn)
-    return conn.execute(
-        """
-        SELECT * FROM company_dossier
-        ORDER BY CASE risk
-                    WHEN 'red' THEN 0
-                    WHEN 'yellow' THEN 1
-                    WHEN 'green' THEN 2
-                    ELSE 3
-                 END,
-                 review_count DESC,
-                 company
-        LIMIT ?
-        """,
-        (limit,),
-    ).fetchall()
 
 
 def build(
