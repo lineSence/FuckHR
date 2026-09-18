@@ -6,6 +6,10 @@
 тестируем без браузера и без HTTP-сервера, поэтому здесь только чистые функции
 над dict и словарём полей формы (тот, что отдаёт urllib.parse.parse_qs).
 
+Справочники полей, шкала важности и пересчёт в веса вынесены в profile_fields.py
+по [CORE-024] и реэкспортируются ниже: вызывающий код продолжает брать
+`profile_form.WEIGHTS` и `profile_form.area_label`.
+
 Два правила, которые важнее удобства:
 
 1. Неизвестные ключи сохраняются. Если в profile.yaml руками добавили поле, о
@@ -15,19 +19,10 @@
    старое значение: молча заменить min_score на ноль значит вывалить в Telegram
    всю базу.
 
-Что поменялось в подаче. Раньше форма была пересказом YAML: запросы одной
-строкой «текст | 113 | 7 | 3», регионы числами, веса с требованием суммы 100.
-Всё это требовало знания формата файла. Теперь:
-
-- каждый запрос — свой слот из четырёх полей (q1_text, q1_area, q1_period, q1_pages);
-- регионы выбираются из списка городов, а ID вводятся только для редких случаев;
-- вместо весов — важность от 0 до 5 для каждого критерия, а веса в 100 баллов
-  пересчитываются сами (normalize_weights).
-
-Важность хранится в профиле рядом с весами, под ключом importance. score.py про
-неё не знает и продолжает читать weights — именно поэтому веса всё равно
-записываются в файл, а не вычисляются на лету. Если importance в файле нет
-(профиль старый или правлен руками), она восстанавливается из весов.
+Форма понимает два поколения полей. Новое: каждый запрос — свой слот из четырёх
+полей (q1_text, q1_area, q1_period, q1_pages), регионы выбираются из списка городов,
+вместо весов — важность 0–5. Старое поколение (одно поле queries со строками
+через «|», явные веса) понимается тоже: так профиль правят скриптом и руками.
 """
 
 from __future__ import annotations
@@ -37,108 +32,27 @@ from typing import Any, Iterable, Mapping, Sequence
 
 import yaml
 
-# Опыт в обозначениях hh.ru и по-человечески.
-EXPERIENCE: tuple[tuple[str, str], ...] = (
-    ("noExperience", "без опыта"),
-    ("between1And3", "1–3 года"),
-    ("between3And6", "3–6 лет"),
-    ("moreThan6", "более 6 лет"),
+from profile_fields import (  # noqa: F401 — реэкспорт для старых вызовов
+    AREA_CHOICES,
+    AREA_NAMES,
+    CURRENCY_CHOICES,
+    DEFAULT_PROFILE,
+    EXPERIENCE,
+    IMPORTANCE_LEVELS,
+    LIST_FIELDS,
+    MAX_IMPORTANCE,
+    MAX_SLOTS,
+    MIN_SLOTS,
+    PAGE_CHOICES,
+    PERIOD_CHOICES,
+    SPARE_SLOTS,
+    WEIGHT_HINTS,
+    WEIGHTS,
+    area_label,
+    importance_from_weights,
+    importance_of,
+    normalize_weights,
 )
-
-# Критерии скоринга: ключ в weights, подпись, пояснение для формы.
-WEIGHTS: tuple[tuple[str, str], ...] = (
-    ("skills", "навыки"),
-    ("salary", "зарплата"),
-    ("nice_to_have", "желательные"),
-    ("remote", "удалёнка"),
-    ("experience", "опыт"),
-)
-
-WEIGHT_HINTS: dict[str, str] = {
-    "skills": "Совпадение с обязательными навыками.",
-    "salary": "Насколько вилка выше твоего минимума.",
-    "nice_to_have": "Совпадение с желательными навыками.",
-    "remote": "Удалённый или гибридный формат.",
-    "experience": "Совпадение требуемого опыта с твоим.",
-}
-
-# Шкала важности. Слова вместо цифр: «вес 20» ни о чём не говорит, а «важно» — говорит.
-IMPORTANCE_LEVELS: tuple[tuple[int, str], ...] = (
-    (0, "не учитывать"),
-    (1, "едва важно"),
-    (2, "немного важно"),
-    (3, "важно"),
-    (4, "очень важно"),
-    (5, "решает всё"),
-)
-
-MAX_IMPORTANCE = 5
-
-# Списки, которые редактируются построчно или через запятую: ключ и подпись.
-LIST_FIELDS: tuple[tuple[str, str], ...] = (
-    ("skills", "Обязательные навыки"),
-    ("nice_to_have", "Желательные навыки"),
-    ("stop_words", "Стоп-слова"),
-)
-
-# Регионы hh.ru для выбора галочками. Список короткий сознательно: полный
-# справочник — сотни строк, и в форме он бесполезен. Редкие регионы вводятся
-# числом в отдельном поле; сверить ID можно в справочнике hh.ru (/areas).
-AREA_CHOICES: tuple[tuple[int, str], ...] = (
-    (113, "Вся Россия"),
-    (1, "Москва"),
-    (2, "Санкт-Петербург"),
-    (3, "Екатеринбург"),
-    (4, "Новосибирск"),
-    (66, "Нижний Новгород"),
-    (88, "Казань"),
-)
-
-AREA_NAMES: dict[int, str] = {code: name for code, name in AREA_CHOICES}
-
-# За какой срок смотреть вакансии.
-PERIOD_CHOICES: tuple[tuple[int, str], ...] = (
-    (1, "за сутки"),
-    (3, "за три дня"),
-    (7, "за неделю"),
-    (14, "за две недели"),
-    (30, "за месяц"),
-)
-
-# Сколько страниц выдачи брать. Одна страница — до 50 вакансий.
-PAGE_CHOICES: tuple[tuple[int, str], ...] = (
-    (1, "1 страница (до 50)"),
-    (2, "2 страницы (до 100)"),
-    (3, "3 страницы (до 150)"),
-    (5, "5 страниц (до 250)"),
-)
-
-CURRENCY_CHOICES: tuple[tuple[str, str], ...] = (
-    ("RUR", "рубли"),
-    ("USD", "доллары"),
-    ("EUR", "евро"),
-    ("KZT", "тенге"),
-)
-
-# Сколько слотов запросов показывать: все заполненные плюс два пустых, но не
-# меньше трёх и не больше десяти. Пустой слот — это кнопка «добавить» без JS.
-MIN_SLOTS = 3
-MAX_SLOTS = 10
-SPARE_SLOTS = 2
-
-DEFAULT_PROFILE: dict[str, Any] = {
-    "queries": [],
-    "salary": {"min_net": 0, "currency": "RUR", "allow_missing": True},
-    "skills": [],
-    "nice_to_have": [],
-    "stop_words": [],
-    "geo": {"areas": [113], "remote_ok": True},
-    "experience_ok": [],
-    "importance": {key: 3 for key, _ in WEIGHTS},
-    "weights": {key: 20 for key, _ in WEIGHTS},
-    "min_score": 45,
-    "facts": [],
-}
 
 
 def load(path: str | Path) -> dict[str, Any]:
@@ -218,85 +132,6 @@ def parse_int_list(text: str) -> tuple[list[int], list[str]]:
         except ValueError:
             problems.append("регион «{}» не число, пропустил".format(item))
     return values, problems
-
-
-def area_label(code: Any) -> str:
-    """Имя региона для показа; неизвестный ID показывается как есть."""
-    try:
-        return AREA_NAMES[int(code)]
-    except (TypeError, ValueError, KeyError):
-        return "регион {}".format(code)
-
-
-# --- важность и веса -----------------------------------------------------------
-
-
-def normalize_weights(importance: Mapping[str, Any]) -> dict[str, int]:
-    """Переводит важность 0–5 в веса с суммой ровно 100.
-
-    Остаток от округления отдаётся самому важному критерию, иначе сумма трёх
-    одинаковых важностей даст 99 и порог станет слегка недостижим.
-    Все нули — равные веса: скоринг без весов вообще не работает.
-    """
-    keys = [key for key, _ in WEIGHTS]
-    levels = {}
-    for key in keys:
-        try:
-            levels[key] = max(0, min(MAX_IMPORTANCE, int(importance.get(key, 0) or 0)))
-        except (TypeError, ValueError):
-            levels[key] = 0
-
-    total = sum(levels.values())
-    if total <= 0:
-        share = 100 // len(keys)
-        weights = {key: share for key in keys}
-        weights[keys[0]] += 100 - share * len(keys)
-        return weights
-
-    weights = {key: int(round(100.0 * levels[key] / total)) for key in keys}
-    drift = 100 - sum(weights.values())
-    if drift:
-        leader = max(keys, key=lambda key: (levels[key], -keys.index(key)))
-        weights[leader] += drift
-    return weights
-
-
-def importance_from_weights(weights: Mapping[str, Any]) -> dict[str, int]:
-    """Восстанавливает важность из весов старого профиля.
-
-    Самый тяжёлый критерий становится «решает всё», остальные шкалируются от
-    него. Точность здесь неважна: первое же сохранение запишет явные значения.
-    """
-    values: dict[str, float] = {}
-    for key, _ in WEIGHTS:
-        try:
-            values[key] = float(weights.get(key, 0) or 0)
-        except (TypeError, ValueError):
-            values[key] = 0.0
-    top = max(values.values()) if values else 0.0
-    if top <= 0:
-        return {key: 3 for key, _ in WEIGHTS}
-    out: dict[str, int] = {}
-    for key, value in values.items():
-        if value <= 0:
-            out[key] = 0
-            continue
-        out[key] = max(1, int(round(MAX_IMPORTANCE * value / top)))
-    return out
-
-
-def importance_of(data: Mapping[str, Any]) -> dict[str, int]:
-    """Важность из профиля: явная, иначе выведенная из весов."""
-    explicit = (data or {}).get("importance")
-    if isinstance(explicit, Mapping) and explicit:
-        out = {}
-        for key, _ in WEIGHTS:
-            try:
-                out[key] = max(0, min(MAX_IMPORTANCE, int(explicit.get(key, 0) or 0)))
-            except (TypeError, ValueError):
-                out[key] = 0
-        return out
-    return importance_from_weights((data or {}).get("weights") or {})
 
 
 # --- запросы -------------------------------------------------------------------
@@ -449,19 +284,9 @@ def _number(
     return int(value) if value.is_integer() else value
 
 
-def apply_form(
-    data: Mapping[str, Any], form: Mapping[str, Sequence[str]]
-) -> tuple[dict[str, Any], list[str]]:
-    """Накладывает данные формы на профиль и возвращает (профиль, замечания).
-
-    Исходный dict не меняется. Ключи, которых нет в форме, остаются как были.
-
-    Форма понимает два вида запросов: слоты q1_text… (новая страница) и одно поле
-    queries со строками через «|» (старые тесты и внешние скрипты).
-    """
-    result: dict[str, Any] = dict(data or {})
-    problems: list[str] = []
-
+def _apply_queries(
+    result: dict[str, Any], form: Mapping[str, Sequence[str]], problems: list[str]
+) -> None:
     if "queries" in form:
         queries, query_problems = parse_queries(_one(form, "queries"))
     else:
@@ -471,21 +296,10 @@ def apply_form(
     if not queries:
         problems.append("ни одного запроса: сбор ничего не найдёт")
 
-    salary = dict(result.get("salary") or {})
-    salary["min_net"] = _number(
-        form, "salary_min_net", "Зарплата на руки", problems, salary.get("min_net", 0)
-    )
-    currency = _one(form, "salary_currency").strip().upper()
-    salary["currency"] = currency or salary.get("currency") or "RUR"
-    salary["allow_missing"] = _checked(form, "salary_allow_missing")
-    result["salary"] = salary
 
-    for key, _label in LIST_FIELDS:
-        if key not in form:
-            continue
-        # Навыки и стоп-слова принимаются и строками, и через запятую.
-        result[key] = split_items(_one(form, key))
-
+def _apply_geo(
+    result: dict[str, Any], form: Mapping[str, Sequence[str]], problems: list[str]
+) -> None:
     geo = dict(result.get("geo") or {})
     chosen_areas: list[int] = []
     for raw in form.get("geo_area") or []:
@@ -514,19 +328,15 @@ def apply_form(
     geo["remote_ok"] = _checked(form, "geo_remote_ok")
     result["geo"] = geo
 
-    chosen = [value for value in (form.get("experience_ok") or []) if value]
-    known = {key for key, _ in EXPERIENCE}
-    result["experience_ok"] = [value for value in chosen if value in known]
-    if not result["experience_ok"]:
-        problems.append("не отмечен ни один уровень опыта: фильтр по опыту не работает")
 
-    uses_importance = any(
-        ("importance_" + key) in form for key, _ in WEIGHTS
-    )
-    if uses_importance:
+def _apply_weights(
+    result: dict[str, Any], form: Mapping[str, Sequence[str]], problems: list[str]
+) -> None:
+    """Важность из новой формы или явные веса из старой."""
+    if any(("importance_" + key) in form for key, _ in WEIGHTS):
         importance = importance_of(result)
         for key, label in WEIGHTS:
-            importance[key] = int(
+            value = int(
                 _number(
                     form,
                     "importance_" + key,
@@ -536,31 +346,71 @@ def apply_form(
                 )
                 or 0
             )
-            importance[key] = max(0, min(MAX_IMPORTANCE, importance[key]))
+            importance[key] = max(0, min(MAX_IMPORTANCE, value))
         result["importance"] = importance
         result["weights"] = normalize_weights(importance)
         if not any(importance.values()):
             problems.append(
                 "все критерии отмечены как неважные — разделил вес равно между ними"
             )
-    else:
-        # Старая форма с явными весами.
-        weights = dict(result.get("weights") or {})
-        touched = False
-        for key, label in WEIGHTS:
-            if ("weight_" + key) not in form:
-                continue
-            touched = True
-            weights[key] = _number(
-                form, "weight_" + key, "Вес «{}»".format(label), problems, weights.get(key, 0)
-            )
-        if touched:
-            result["weights"] = weights
-            total = sum(float(value or 0) for value in weights.values())
-            if abs(total - 100.0) > 0.001:
-                problems.append(
-                    "сумма весов {:g}, а не 100: скоры станет не с чем сравнивать".format(total)
-                )
+        return
+
+    # Старая форма с явными весами.
+    weights = dict(result.get("weights") or {})
+    touched = False
+    for key, label in WEIGHTS:
+        if ("weight_" + key) not in form:
+            continue
+        touched = True
+        weights[key] = _number(
+            form, "weight_" + key, "Вес «{}»".format(label), problems, weights.get(key, 0)
+        )
+    if not touched:
+        return
+    result["weights"] = weights
+    total = sum(float(value or 0) for value in weights.values())
+    if abs(total - 100.0) > 0.001:
+        problems.append(
+            "сумма весов {:g}, а не 100: скоры станет не с чем сравнивать".format(total)
+        )
+
+
+def apply_form(
+    data: Mapping[str, Any], form: Mapping[str, Sequence[str]]
+) -> tuple[dict[str, Any], list[str]]:
+    """Накладывает данные формы на профиль и возвращает (профиль, замечания).
+
+    Исходный dict не меняется. Ключи, которых нет в форме, остаются как были.
+    """
+    result: dict[str, Any] = dict(data or {})
+    problems: list[str] = []
+
+    _apply_queries(result, form, problems)
+
+    salary = dict(result.get("salary") or {})
+    salary["min_net"] = _number(
+        form, "salary_min_net", "Зарплата на руки", problems, salary.get("min_net", 0)
+    )
+    currency = _one(form, "salary_currency").strip().upper()
+    salary["currency"] = currency or salary.get("currency") or "RUR"
+    salary["allow_missing"] = _checked(form, "salary_allow_missing")
+    result["salary"] = salary
+
+    for key, _label in LIST_FIELDS:
+        if key not in form:
+            continue
+        # Навыки и стоп-слова принимаются и строками, и через запятую.
+        result[key] = split_items(_one(form, key))
+
+    _apply_geo(result, form, problems)
+
+    chosen = [value for value in (form.get("experience_ok") or []) if value]
+    known = {key for key, _ in EXPERIENCE}
+    result["experience_ok"] = [value for value in chosen if value in known]
+    if not result["experience_ok"]:
+        problems.append("не отмечен ни один уровень опыта: фильтр по опыту не работает")
+
+    _apply_weights(result, form, problems)
 
     result["min_score"] = _number(
         form, "min_score", "Порог скора", problems, result.get("min_score", 45)
