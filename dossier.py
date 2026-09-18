@@ -21,6 +21,12 @@
 внутри «не рекомендую», а «платят вовремя» — внутри «не платят вовремя». Перед
 зачётом позитивного совпадения проверяется префикс отрицания, иначе злой отзыв
 становится mixed и перестаёт красить работодателя.
+
+Тексты отзывов. Выдача поиска даёт заголовок и сниппет, а у отзовиков сниппет —
+рекламная подпись сайта. По ней ни закономерностей, ни тональности не видно,
+поэтому страницы найденных отзывов открываются целиком (reviewpage.py), и весь
+анализ идёт по их тексту. Если загрузка выключена или страница не открылась,
+остаётся прежнее поведение по сниппету — хуже, но не пусто [CORE-017].
 """
 
 from __future__ import annotations
@@ -34,6 +40,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Sequence
 
 import contacts
+import reviewpage
 
 log = logging.getLogger(__name__)
 
@@ -61,6 +68,7 @@ CREATE TABLE IF NOT EXISTS company_reviews (
     url        TEXT NOT NULL,
     title      TEXT,
     snippet    TEXT,
+    body       TEXT,
     rating     REAL,
     polarity   TEXT NOT NULL DEFAULT 'unknown',
     created_at TEXT NOT NULL,
@@ -233,15 +241,22 @@ RISK_RU = {
 STALE_AFTER_DAYS = 30  # досье старше месяца собирается заново
 MAX_QUOTE_CHARS = 240
 MAX_LLM_REVIEWS = 12
+MAX_LLM_CHARS = 1500  # сколько текста одного отзыва уходит в модель
 
 
 @dataclass(frozen=True)
 class Review:
-    """Один найденный отзыв или карточка компании на площадке отзывов."""
+    """Один найденный отзыв или карточка компании на площадке отзывов.
+
+    `snippet` — обрывок из выдачи поиска, `body` — текст самой страницы.
+    Разделены сознательно: по наличию body видно, читали отзыв или гадали по
+    рекламному заголовку.
+    """
 
     url: str
     title: str = ""
     snippet: str = ""
+    body: str = ""
     site: str = ""
     rating: float | None = None
     polarity: str = "unknown"  # negative | positive | mixed | unknown
@@ -252,7 +267,11 @@ class Review:
 
     @property
     def text(self) -> str:
-        return " ".join(part for part in (self.title, self.snippet) if part)
+        return " ".join(part for part in (self.title, self.snippet, self.body) if part)
+
+    @property
+    def has_body(self) -> bool:
+        return bool(self.body.strip())
 
 
 @dataclass(frozen=True)
@@ -299,9 +318,20 @@ class Dossier:
     def review_count(self) -> int:
         return len(self.reviews)
 
+    @property
+    def read_count(self) -> int:
+        """Сколько отзывов прочитано со страницы, а не по сниппету выдачи."""
+        return sum(1 for r in self.reviews if r.has_body)
+
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
+    # Миграция для баз, созданных до чтения страниц: колонки body там нет,
+    # а ронять прогон из-за этого нельзя.
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(company_reviews)")}
+    if "body" not in columns:
+        log.info("добавляю колонку body в company_reviews")
+        conn.execute("ALTER TABLE company_reviews ADD COLUMN body TEXT")
     conn.commit()
 
 
@@ -538,8 +568,15 @@ def analyze(company: str, reviews: Sequence[Review], site_url: str | None = None
     )
 
 
-def reviews_from_hits(hits: Sequence[object]) -> tuple[Review, ...]:
-    """Превращает выдачу поиска в отзывы, отбрасывая посторонние сайты."""
+def reviews_from_hits(
+    hits: Sequence[object], fetcher: object | None = None
+) -> tuple[Review, ...]:
+    """Превращает выдачу поиска в отзывы, отбрасывая посторонние сайты.
+
+    Если передан загрузчик страниц, каждая ссылка открывается и в анализ идёт
+    текст отзывов, а не рекламный сниппет выдачи. Без загрузчика поведение
+    прежнее — по заголовку и сниппету.
+    """
     out: list[Review] = []
     seen: set[str] = set()
     for hit in hits:
@@ -551,12 +588,16 @@ def reviews_from_hits(hits: Sequence[object]) -> tuple[Review, ...]:
         seen.add(url)
         title = str(getattr(hit, "title", "") or "")
         snippet = str(getattr(hit, "snippet", "") or "")
-        text = " ".join(part for part in (title, snippet) if part)
+        body = ""
+        if fetcher is not None and getattr(fetcher, "enabled", False):
+            body = str(fetcher.fetch(url) or "")  # type: ignore[attr-defined]
+        text = " ".join(part for part in (title, snippet, body) if part)
         out.append(
             Review(
                 url=url,
                 title=title,
                 snippet=snippet,
+                body=body,
                 site=site_of(url),
                 rating=extract_rating(text),
                 polarity=polarity_of(text),
@@ -571,16 +612,30 @@ def summarize(gateway: object | None, dossier: Dossier) -> tuple[str | None, str
     Модель видит только название компании и тексты публичных отзывов. Она не
     меняет ни флаги, ни риск: иначе один галлюцинированный абзац перекрашивал бы
     компанию из красной в зелёную.
+
+    В выдержки идут сначала прочитанные страницы и только потом сниппеты: если
+    отдать модели рекламные заголовки отзовиков, она справедливо ответит, что
+    данных недостаточно.
     """
     deterministic = format_summary(dossier)
     if gateway is None or not getattr(gateway, "enabled", False) or not dossier.reviews:
         return deterministic, "правила"
 
+    ordered = sorted(dossier.reviews, key=lambda r: (not r.has_body, -len(r.text)))
     excerpts = []
-    for review in dossier.reviews[:MAX_LLM_REVIEWS]:
-        excerpts.append("[{}] {}".format(review.site_name, review.text[:400]))
+    for review in ordered[:MAX_LLM_REVIEWS]:
+        text = (review.body or review.text).strip()
+        excerpts.append("[{}] {}".format(review.site_name, text[:MAX_LLM_CHARS]))
+
+    if dossier.read_count:
+        preface = "Ниже тексты отзывов сотрудников о работодателе «{company}»."
+    else:
+        preface = (
+            "Ниже только заголовки и сниппеты выдачи по работодателю «{company}»: "
+            "сами страницы отзывов открыть не удалось."
+        )
     prompt = (
-        "Ниже выдержки из публичных отзывов о работодателе «{company}».\n"
+        preface + "\n"
         "Назови 3–5 повторяющихся закономерностей одним списком, без введения.\n"
         "Правила: опирайся только на текст; если данных мало — скажи это прямо; "
         "не выдумывай цифры; не упоминай имён людей.\n\n{body}"
@@ -607,6 +662,14 @@ def format_summary(dossier: Dossier) -> str:
     parts = [
         "Отзывов: {}".format(dossier.review_count),
     ]
+    if dossier.read_count:
+        parts.append(
+            "прочитано страниц: {} из {}".format(
+                dossier.read_count, dossier.review_count
+            )
+        )
+    else:
+        parts.append("тексты страниц не прочитаны, только выдача поиска")
     if dossier.avg_rating is not None:
         parts.append("средняя оценка {:.1f} из 5".format(dossier.avg_rating))
     red = dossier.red_flags
@@ -694,11 +757,19 @@ def store(conn: sqlite3.Connection, dossier: Dossier) -> None:
         ),
     )
     for review in dossier.reviews:
+        # Текст страницы мог появиться позже сниппета: обновляем существующую
+        # строку, иначе прочитанный отзыв так и останется заголовком.
         conn.execute(
             """
-            INSERT OR IGNORE INTO company_reviews
-                (company, site, url, title, snippet, rating, polarity, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO company_reviews
+                (company, site, url, title, snippet, body, rating, polarity, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(company, url) DO UPDATE SET
+                title = excluded.title,
+                snippet = excluded.snippet,
+                body = COALESCE(NULLIF(excluded.body, ''), company_reviews.body),
+                rating = excluded.rating,
+                polarity = excluded.polarity
             """,
             (
                 dossier.company,
@@ -706,6 +777,7 @@ def store(conn: sqlite3.Connection, dossier: Dossier) -> None:
                 review.url,
                 review.title,
                 review.snippet,
+                review.body,
                 review.rating,
                 review.polarity,
                 _now(),
@@ -800,11 +872,12 @@ def build(
     gateway: object | None = None,
     site_url: str | None = None,
     limit: int = 5,
+    fetcher: object | None = None,
 ) -> Dossier:
-    """Полный сбор по одной компании: поиск → разбор → закономерности → сводка.
+    """Полный сбор по одной компании: поиск → страницы отзывов → разбор → сводка.
 
-    Сетевые ошибки не выбрасываются: провайдер возвращает пустой список, и досье
-    получается со статусом «нет данных» — это честный результат, а не ошибка.
+    Сетевые ошибки не выбрасываются: провайдер возвращает пустой список, а
+    недоступная страница — пустой текст. Досье получается беднее, но собирается.
     """
     company = (company or "").strip()
     if not company:
@@ -820,14 +893,19 @@ def build(
             getattr(provider, "disabled_reason", "поиск недоступен"),
         )
 
-    dossier = analyze(company, reviews_from_hits(hits), site_url=site_url)
+    if fetcher is None:
+        # Кэш страниц живёт в той же базе, что и кэш поиска.
+        fetcher = reviewpage.PageFetcher.from_env(conn=getattr(provider, "conn", None))
+
+    dossier = analyze(company, reviews_from_hits(hits, fetcher=fetcher), site_url=site_url)
     summary, by = summarize(gateway, dossier)
     dossier.summary = summary
     dossier.summary_by = by
     log.info(
-        "досье %s: отзывов %s, риск %s, красных флагов %s",
+        "досье %s: отзывов %s (прочитано страниц %s), риск %s, красных флагов %s",
         company,
         dossier.review_count,
+        dossier.read_count,
         dossier.risk,
         len(dossier.red_flags),
     )

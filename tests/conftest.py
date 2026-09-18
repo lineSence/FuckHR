@@ -16,6 +16,18 @@ import db as db_module  # noqa: E402
 from hh import Vacancy  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def без_загрузки_страниц(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Чтение страниц отзывов выключено во всех тестах.
+
+    dossier.build по умолчанию открывает найденные ссылки. В тестах это
+    означало бы поход в сеть за dreamjob.ru, поэтому загрузка гасится
+    переменной окружения, а сам загрузчик проверяется отдельно на подменённом
+    транспорте.
+    """
+    monkeypatch.setenv("REVIEW_FETCH_ENABLED", "0")
+
+
 @pytest.fixture
 def conn(tmp_path: Path):
     connection = db_module.connect(tmp_path / "test.sqlite3")
