@@ -5,6 +5,9 @@
 
 Досье принимается по утиному типу, а не импортом dossier.Dossier: иначе
 получится цикл импортов.
+
+Ключ — название компании, а пишут его везде по-разному, поэтому перед
+чтением и записью имя сводится к уже известному (company_key).
 """
 
 from __future__ import annotations
@@ -15,6 +18,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
+import company_key
 from dossier_rules import RISK_RU, STALE_AFTER_DAYS
 
 if TYPE_CHECKING:
@@ -73,9 +77,36 @@ def _now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
+def known_companies(conn: sqlite3.Connection) -> list[str]:
+    ensure_schema(conn)
+    return [str(row[0]) for row in conn.execute("SELECT company FROM company_dossier")]
+
+
+def resolve_company(conn: sqlite3.Connection, company: str) -> str:
+    """Каноническое название: «ООО «Ромашка»» и «Ромашка» — одна контора.
+
+    Если такой работодатель ещё не встречался, возвращается исходное имя:
+    первое написание и становится каноном.
+    """
+    company = (company or "").strip()
+    if not company:
+        return ""
+    row = conn.execute(
+        "SELECT company FROM company_dossier WHERE company = ?", (company,)
+    ).fetchone()
+    if row is not None:
+        return company
+    match = company_key.best_match(company, known_companies(conn))
+    if match:
+        log.info("%r считаю тем же работодателем, что и %r", company, match)
+        return match
+    return company
+
+
 def store(conn: sqlite3.Connection, dossier: "Dossier") -> None:
     """Перезаписывает досье и добавляет новые отзывы."""
     ensure_schema(conn)
+    company = resolve_company(conn, dossier.company)
     conn.execute(
         """
         INSERT INTO company_dossier (
@@ -97,7 +128,7 @@ def store(conn: sqlite3.Connection, dossier: "Dossier") -> None:
             updated_at = excluded.updated_at
         """,
         (
-            dossier.company,
+            company,
             dossier.domain,
             dossier.site_url,
             dossier.review_count,
@@ -140,7 +171,7 @@ def store(conn: sqlite3.Connection, dossier: "Dossier") -> None:
                 polarity = excluded.polarity
             """,
             (
-                dossier.company,
+                company,
                 review.site,
                 review.url,
                 review.title,
@@ -157,7 +188,8 @@ def store(conn: sqlite3.Connection, dossier: "Dossier") -> None:
 def load(conn: sqlite3.Connection, company: str) -> sqlite3.Row | None:
     ensure_schema(conn)
     return conn.execute(
-        "SELECT * FROM company_dossier WHERE company = ?", (company,)
+        "SELECT * FROM company_dossier WHERE company = ?",
+        (resolve_company(conn, company),),
     ).fetchone()
 
 
@@ -165,7 +197,7 @@ def load_reviews(conn: sqlite3.Connection, company: str) -> list[sqlite3.Row]:
     ensure_schema(conn)
     return conn.execute(
         "SELECT * FROM company_reviews WHERE company = ? ORDER BY polarity, id",
-        (company,),
+        (resolve_company(conn, company),),
     ).fetchall()
 
 
