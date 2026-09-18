@@ -15,6 +15,10 @@ hh.ru вырезает контакты из текста, потому что �
 вакансия без контакта не пропадает: то же письмо, но как сопроводительное к
 отклику, и в карточке прямо сказано, что прямого контакта нет.
 
+Факты о себе берутся из резюме (B-01) и только из подтверждённых блоков: то,
+что предложила модель и владелец ещё не видел, в письмо попасть не должно
+[OUT-005]. Если резюме пустое — берётся блок facts из profile.yaml, как раньше.
+
 Где здесь модель (ADR-017). Три необязательных шага, каждый умеет откатываться:
 
 - company  — справка о компании из выдачи поиска → повод написать;
@@ -50,6 +54,7 @@ import db
 import detector
 import llm
 import llm_tasks
+import resume
 import settings
 import websearch
 
@@ -83,7 +88,7 @@ class Draft:
 
 
 def load_facts(profile_path: str | Path = "profile.yaml") -> tuple[str, ...]:
-    """Факты о себе — единственный разрешённый источник самоописания [OUT-005].
+    """Факты о себе из profile.yaml — фолбэк, если резюме пустое [OUT-005].
 
     Пустой пункт списка YAML разбирает в None, а str(None) даёт непустую строку
     "None": если её не отбросить до приведения к строке, в письмо уезжает факт,
@@ -102,6 +107,27 @@ def load_facts(profile_path: str | Path = "profile.yaml") -> tuple[str, ...]:
         if text:
             facts.append(text)
     return tuple(facts)
+
+
+def collect_facts(
+    conn: sqlite3.Connection, profile_path: str | Path = "profile.yaml"
+) -> tuple[str, ...]:
+    """Факты для письма: сначала резюме, потом profile.yaml.
+
+    Резюме ведётся в интерфейсе и обновляется чаще, чем блок facts в YAML,
+    поэтому приоритет у него. Смешивать два источника нельзя: получится письмо,
+    где один факт свежий, а второй — из прошлого года, и они друг другу
+    противоречат. Ошибка базы не должна лишать этап фактов совсем.
+    """
+    try:
+        from_resume = resume.facts(conn)
+    except sqlite3.Error as exc:
+        log.warning("резюме не прочиталось (%s), беру факты из %s", exc, profile_path)
+        from_resume = ()
+    if from_resume:
+        log.info("факты из резюме: %s шт.", len(from_resume))
+        return tuple(from_resume)
+    return load_facts(profile_path)
 
 
 def apply_candidate(row: sqlite3.Row) -> contacts.Candidate:
@@ -140,7 +166,8 @@ def build_draft(
 ) -> Draft:
     """Собирает письмо по структуре из справочника: задача → факты → шаг → выход.
 
-    Никакой «увлечённости миссией» и никаких достижений, которых нет в profile.yaml.
+    Никакой «увлечённости миссией» и никаких достижений, которых нет в резюме
+    или profile.yaml.
     """
     title = (row["title"] or "ваша вакансия").strip()
     generic = candidate.channel_kind == APPLY_CHANNEL
@@ -394,15 +421,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         "да" if options.use_llm else "нет",
     )
 
-    facts = load_facts(options.profile)
-    if not facts:
-        log.warning("в %s пустой блок facts — в черновике будет заглушка", options.profile)
-
     conn = db.connect(settings.get("DB_PATH", "data/fuckhr.sqlite3"))
     db.init_schema(conn)
     contacts.ensure_schema(conn)
     detector.ensure_schema(conn)
     conditions.ensure_schema(conn)
+    resume.ensure_schema(conn)
+
+    # Факты читаются после открытия базы: главный их источник теперь резюме.
+    facts = collect_facts(conn, options.profile)
+    if not facts:
+        log.warning(
+            "ни подтверждённых блоков резюме, ни фактов в %s — в черновике будет "
+            "заглушка; заполните резюме на /resume",
+            options.profile,
+        )
 
     gateway = build_gateway(conn, not options.use_llm)
 
