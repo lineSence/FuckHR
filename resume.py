@@ -506,6 +506,24 @@ GRADE_WORDS = {
 }
 
 
+def grade_claim(haystack: str) -> tuple[int, str]:
+    """Самое требовательное слово грейда в тексте запросов.
+
+    Сравниваем по границам слова, а не подстрокой: «лид» сидит внутри «тимлид»
+    и «валидация», «head» — внутри «overhead». Из нескольких совпадений берём самое
+    требовательное, иначе «head of» рядом с «middle» даст мягкий порог.
+    """
+    hits = [
+        (need, len(word), word)
+        for word, need in GRADE_WORDS.items()
+        if re.search(r"(?<!\w)" + re.escape(word) + r"(?!\w)", haystack)
+    ]
+    if not hits:
+        return 0, ""
+    need, _, word = max(hits)
+    return need, word
+
+
 def contradictions(
     conn: sqlite3.Connection,
     resume_id: int,
@@ -515,7 +533,7 @@ def contradictions(
     """Расхождения между опытом и притязаниями профиля поиска.
 
     Возвращает предупреждения, а не запреты: решение за владельцем. Блокировка
-    сохранения здесь была бы вредной: переход в лиды «через голову» бывает
+    сохранения здесь была бы вредной: переход в лиды  «через голову» бывает
     осознанным решением, а не ошибкой ввода.
     """
     items = blocks(conn, resume_id, confirmed_only=True)
@@ -535,15 +553,14 @@ def contradictions(
     haystack = " ".join(texts).lower()
 
     if months:
-        for word, need in GRADE_WORDS.items():
-            if word in haystack and months + 6 < need:
-                notes.append(
-                    "В запросах есть «{}», а по резюме опыта около {:.1f} лет. "
-                    "Такие вакансии обычно ждут от {} лет.".format(
-                        word, years, need // 12
-                    )
+        need, word = grade_claim(haystack)
+        if need and months + 6 < need:
+            notes.append(
+                "В запросах есть «{}», а по резюме опыта около {:.1f} лет. "
+                "Такие вакансии обычно ждут от {} лет.".format(
+                    word, years, need // 12
                 )
-                break
+            )
     elif any(b.section == "experience" for b in items):
         notes.append(
             "В блоках опыта не заполнены сроки — стаж посчитать невозможно, "
@@ -693,6 +710,7 @@ __all__ = (
     "facts",
     "fingerprint",
     "get_or_create",
+    "grade_claim",
     "load_version",
     "reorder",
     "save_version",
