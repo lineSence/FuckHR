@@ -20,6 +20,7 @@ import contacts
 import db
 import detector
 import dossier
+import resume
 
 # Адрес зашит намеренно: интерфейс без авторизации не должен слушать сеть.
 HOST = "127.0.0.1"
@@ -80,6 +81,7 @@ NAV_ITEMS = (
     ("/contacts", "Контакты"),
     ("/search", "Поиск"),
     ("/llm", "Модель"),
+    ("/resume", "Резюме"),
     ("/profile", "Профиль"),
     ("/settings", "Настройки"),
     ("/cleanup", "Очистка"),
@@ -126,6 +128,7 @@ def open_db() -> sqlite3.Connection:
     detector.ensure_schema(conn)
     conditions.ensure_schema(conn)
     dossier.ensure_schema(conn)
+    resume.ensure_schema(conn)
     return conn
 
 
