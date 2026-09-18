@@ -4,6 +4,10 @@
 данными о работодателях как с накопленным активом: одна показывает, что
 накопилось, вторая — единственное место, где это можно уничтожить.
 
+Карточка компании показывает два рода данных рядом: отзывы — это чужие слова,
+а история публикаций (company_signals) — наши собственные наблюдения. Второе
+проверяемо и потому весит больше, хоть и накапливается медленнее.
+
 Шаблоны — только str.format с заранее вычисленными переменными, без вложенных
 ф-строк: однажды это уже стоило SyntaxError.
 """
@@ -13,6 +17,7 @@ from __future__ import annotations
 import json
 import sqlite3
 
+import company_signals
 import dossier
 import maintenance
 from ui_core import esc, table
@@ -100,6 +105,25 @@ def render_companies(conn: sqlite3.Connection) -> str:
     ) + hint
 
 
+def render_signals(conn: sqlite3.Connection, name: str) -> str:
+    """Блок фактов по истории публикаций — единственное место в UI, где данные наши.
+
+    При короткой истории блок не скрывается, а говорит, что данных мало:
+    иначе отсутствие фактов читалось бы как их благополучное отсутствие [CORE-019].
+    """
+    signals = company_signals.collect(conn, name)
+    items = "".join(
+        "<li>{}</li>".format(esc(line)) for line in company_signals.facts(signals)
+    )
+    note = (
+        "Считается по слепкам вакансий этого работодателя — это наши наблюдения, "
+        "а не чьи-то слова. Разные написания названия сводятся в одну компанию."
+    )
+    return "<ul>{items}</ul><p class=muted>{note}</p>".format(
+        items=items, note=esc(note)
+    )
+
+
 def render_company(conn: sqlite3.Connection, name: str) -> str:
     name = (name or "").strip()
     if not name:
@@ -171,6 +195,7 @@ def render_company(conn: sqlite3.Connection, name: str) -> str:
 
     return (
         "<h2>{company}</h2>{head}{summary}"
+        "<h2>История публикаций</h2>{signals}"
         "<h2>Закономерности</h2>{patterns}"
         "<h2>Источники</h2>{reviews}"
         '<p><a href="/companies">К списку компаний</a></p>'
@@ -178,6 +203,7 @@ def render_company(conn: sqlite3.Connection, name: str) -> str:
         company=esc(name),
         head=head,
         summary=summary,
+        signals=render_signals(conn, name),
         patterns=patterns_block,
         reviews=reviews_block,
     )
@@ -273,4 +299,5 @@ __all__ = (
     "render_cleanup",
     "render_companies",
     "render_company",
+    "render_signals",
 )
