@@ -15,9 +15,9 @@ python outreach.py без флагов, параметры они берут и�
 планировщик Windows, и настройки у них одни и те же.
 
 Файл сознательно тонкий: здесь только сервер и маршруты. Страницы живут в
-`ui_views.py`, `ui_forms.py`, `ui_profile.py` и `ui_companies.py`, общие детали — в
-`ui_core.py`. Имена страниц проброшены сюда же, чтобы webui.render_vacancies и
-подобные продолжали работать.
+`ui_views.py`, `ui_forms.py`, `ui_profile.py`, `ui_resume.py` и `ui_companies.py`,
+общие детали — в `ui_core.py`. Имена страниц проброшены сюда же, чтобы
+webui.render_vacancies и подобные продолжали работать.
 
 Границы, которые не нарушаются:
 
@@ -84,6 +84,7 @@ from ui_forms import (
     search_settings_form,
     search_updates,
 )
+from ui_resume import render_resume, save_resume
 from ui_views import (
     contact_rows,
     progress_block,
@@ -170,6 +171,10 @@ class Handler(BaseHTTPRequestHandler):
                     self._send(page("Очистка", render_cleanup(conn)))
                 elif parsed.path == "/contacts":
                     self._send(page("Контакты", render_contacts(conn)))
+                elif parsed.path == "/resume":
+                    self._send(
+                        page("Резюме", render_resume(conn, self.profile_path))
+                    )
                 elif parsed.path == "/search":
                     body = render_search(conn, one("q"), one("company"))
                     self._send(page("Проверка поиска", body))
@@ -221,6 +226,20 @@ class Handler(BaseHTTPRequestHandler):
                     removed, problems = apply_cleanup(conn, form)
                     body = render_cleanup(conn, removed=removed, problems=problems)
                     self._send(page("Очистка", body))
+                finally:
+                    conn.close()
+                return
+
+            if parsed.path == "/resume":
+                # Как и на очистке, ответ рисуется сразу: после сохранения нужно
+                # сказать, что именно модель предложила и что ждёт подтверждения;
+                # редирект это сообщение теряет.
+                flat = {key: values[0] for key, values in form.items() if values}
+                conn = open_db()
+                try:
+                    saved = save_resume(conn, flat, self.profile_path)
+                    body = render_resume(conn, self.profile_path, saved=saved)
+                    self._send(page("Резюме", body))
                 finally:
                     conn.close()
                 return
@@ -330,6 +349,7 @@ __all__ = (
     "render_contacts",
     "render_llm",
     "render_profile",
+    "render_resume",
     "render_run",
     "render_search",
     "render_settings",
@@ -337,6 +357,7 @@ __all__ = (
     "render_vacancy",
     "save_facts",
     "save_profile",
+    "save_resume",
     "search_settings_form",
     "search_updates",
     "table",
