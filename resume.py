@@ -20,6 +20,7 @@
 Про profile_id. Сейчас профиль один и везде равен 'default'. Колонка заведена
 заранее ради B-08: добавить строки с другим профилем дешевле, чем потом
 мигрировать таблицу с данными.
+Словарь грейдов живёт в `resume_grades.py` и реэкспортируется отсюда [CORE-024].
 """
 
 from __future__ import annotations
@@ -32,6 +33,8 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import date
 from typing import Any, Iterable, Mapping, Sequence
+
+from resume_grades import GRADE_WORDS, grade_claim  # noqa: F401
 
 log = logging.getLogger(__name__)
 
@@ -490,40 +493,6 @@ def _profile_data(profile_path: str | Any) -> Mapping[str, Any]:
     return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
 
 
-GRADE_WORDS = {
-    "lead": 60,
-    "лид": 60,
-    "тимлид": 60,
-    "teamlead": 60,
-    "руководитель": 60,
-    "head": 72,
-    "cto": 84,
-    "senior": 48,
-    "сеньор": 48,
-    "ведущий": 48,
-    "middle": 24,
-    "миддл": 24,
-}
-
-
-def grade_claim(haystack: str) -> tuple[int, str]:
-    """Самое требовательное слово грейда в тексте запросов.
-
-    Сравниваем по границам слова, а не подстрокой: «лид» сидит внутри «тимлид»
-    и «валидация», «head» — внутри «overhead». Из нескольких совпадений берём самое
-    требовательное, иначе «head of» рядом с «middle» даст мягкий порог.
-    """
-    hits = [
-        (need, len(word), word)
-        for word, need in GRADE_WORDS.items()
-        if re.search(r"(?<!\w)" + re.escape(word) + r"(?!\w)", haystack)
-    ]
-    if not hits:
-        return 0, ""
-    need, _, word = max(hits)
-    return need, word
-
-
 def contradictions(
     conn: sqlite3.Connection,
     resume_id: int,
@@ -533,7 +502,7 @@ def contradictions(
     """Расхождения между опытом и притязаниями профиля поиска.
 
     Возвращает предупреждения, а не запреты: решение за владельцем. Блокировка
-    сохранения здесь была бы вредной: переход в лиды  «через голову» бывает
+    сохранения здесь была бы вредной: переход в лиды «через голову» бывает
     осознанным решением, а не ошибкой ввода.
     """
     items = blocks(conn, resume_id, confirmed_only=True)
@@ -692,6 +661,7 @@ def version_markdown(
 __all__ = (
     "Block",
     "DEFAULT_PROFILE",
+    "GRADE_WORDS",
     "QUESTIONS",
     "SECTIONS",
     "SECTION_KEYS",
