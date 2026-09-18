@@ -21,6 +21,14 @@ X — читайте на …»). Досье собиралось из таки�
 Имён и контактов авторов мы не извлекаем: досье на контору, а не на людей
 [CORE-012].
 
+Зачем дамп (REVIEW_DUMP_PATH). Правила в dossier_rules.PATTERN_RULES писались по
+примерам из тестов, и это уже один раз вышло боком: «зарплату задерживают» не
+матчилось ни одной иглой. С выставленным REVIEW_DUMP_PATH каждая впервые
+прочитанная страница дописывается в текстовый файл, и правила можно
+сверять с живым языком. Повторные страницы из кэша в дамп не идут. В файле
+оказываются чужие тексты, поэтому путь по умолчанию не задан и держать его
+стоит в data/, которая вне git.
+
 Настройки:
 
     REVIEW_FETCH_ENABLED=1     # 0 — вернуться к анализу одних сниппетов
@@ -29,6 +37,7 @@ X — читайте на …»). Досье собиралось из таки�
     REVIEW_FETCH_CHARS=8000    # сколько символов текста брать с одной страницы
     REVIEW_FETCH_PAUSE=1.0     # пауза между загрузками, секунды
     REVIEW_FETCH_CACHE_DAYS=30
+    REVIEW_DUMP_PATH=          # пусто — не писать; например data/reviews.txt
 """
 
 from __future__ import annotations
@@ -41,6 +50,7 @@ import sqlite3
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Callable
 
 log = logging.getLogger(__name__)
@@ -174,6 +184,7 @@ class PageFetcher:
         cache_days: int = CACHE_DAYS,
         pause: float = 1.0,
         transport: Callable[[str], str] | None = None,
+        dump_path: str | None = None,
     ) -> None:
         self.enabled = bool(enabled)
         self.conn = conn
@@ -183,6 +194,7 @@ class PageFetcher:
         self.cache_days = max(0, int(cache_days))
         self.pause = max(0.0, float(pause))
         self.transport = transport
+        self.dump_path = (dump_path or "").strip() or None
         self.usage = FetchUsage()
         if conn is not None:
             ensure_cache(conn)
@@ -206,6 +218,7 @@ class PageFetcher:
             max_chars=int(number("REVIEW_FETCH_CHARS", str(MAX_PAGE_CHARS))),
             cache_days=int(number("REVIEW_FETCH_CACHE_DAYS", str(CACHE_DAYS))),
             pause=number("REVIEW_FETCH_PAUSE", "1.0"),
+            dump_path=os.getenv("REVIEW_DUMP_PATH"),
         )
 
     def _cache_get(self, url: str) -> str | None:
@@ -234,6 +247,21 @@ class PageFetcher:
             (url, text, datetime.now(timezone.utc).replace(microsecond=0).isoformat()),
         )
         self.conn.commit()
+
+    def _dump(self, url: str, text: str) -> None:
+        """Дописывает прочитанные отзывы в файл для ревизии правил.
+
+        Диагностика не имеет права ронять сбор [CORE-017].
+        """
+        if not self.dump_path or not text:
+            return
+        try:
+            path = Path(self.dump_path)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as fh:
+                fh.write(f"\n----- {url}\n{text}\n")
+        except OSError as exc:
+            log.warning("дамп отзывов не пишется (%s): %s", self.dump_path, exc)
 
     def _http_get(self, url: str) -> str:
         import httpx
@@ -279,6 +307,7 @@ class PageFetcher:
         text = extract_reviews(raw, self.max_chars)
         if not text:
             log.info("на странице не нашлось текста отзывов: %s", url)
+        self._dump(url, text)
         self._cache_put(url, text)
         if self.pause and self.transport is None:
             time.sleep(self.pause)
