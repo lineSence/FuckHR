@@ -138,9 +138,14 @@ def open_db() -> sqlite3.Connection:
     return conn
 
 
-def table(headers: Sequence[str], rows: Sequence[Sequence[str]]) -> str:
-    """Ячейки приходят уже готовым HTML: экранирует вызывающая сторона."""
-    head = "".join("<th>{}</th>".format(esc(h)) for h in headers)
+def table(
+    headers: Sequence[str], rows: Sequence[Sequence[str]], raw_head: bool = False
+) -> str:
+    """Ячейки приходят уже готовым HTML: экранирует вызывающая сторона.
+
+    raw_head нужен заголовкам со ссылками сортировки — их собирает sort_head.
+    """
+    head = "".join("<th>{}</th>".format(h if raw_head else esc(h)) for h in headers)
     body = "".join(
         "<tr>" + "".join("<td>{}</td>".format(cell) for cell in row) + "</tr>"
         for row in rows
@@ -157,6 +162,34 @@ def details(title: str, note: str, body: str, open_: bool = False) -> str:
     return (
         "<details{op}><summary>{title}{tail}</summary>{body}</details>"
     ).format(op=" open" if open_ else "", title=esc(title), tail=tail, body=body)
+
+
+def sort_pick(value: object, allowed: Sequence[str], default: str) -> str:
+    """Имя сортировки из запроса. Чужое значение молча заменяется умолчанием."""
+    name = str(value or "").strip()
+    return name if name in allowed else default
+
+
+def sort_head(
+    columns: Sequence[tuple[str, str]], base: str, param: str, current: str
+) -> list[str]:
+    """Заголовки-ссылки сортировки. У колонки без ключа — обычный текст.
+
+    Переключения «по возрастанию/по убыванию» нет намеренно: у скора и даты
+    осмысленно только убывание, у названий — только алфавит, вторая стрелка
+    добавляла бы клик, не давая ни одного нового ответа [CORE-025].
+    """
+    cells = []
+    for key, label in columns:
+        if not key:
+            cells.append(esc(label))
+            continue
+        sep = "&" if "?" in base else "?"
+        link = '<a href="{base}{sep}{param}={key}">{label}</a>'.format(
+            base=esc(base), sep=sep, param=esc(param), key=esc(key), label=esc(label)
+        )
+        cells.append(link + (" ↓" if key == current else ""))
+    return cells
 
 
 def hint_block(hint: str) -> str:
@@ -227,6 +260,8 @@ __all__ = (
     "number_field",
     "open_db",
     "page",
+    "sort_head",
+    "sort_pick",
     "table",
     "text_field",
 )

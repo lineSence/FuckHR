@@ -23,7 +23,7 @@ import contact_finds
 import contacts
 import dossier
 import maintenance
-from ui_core import details, esc, table
+from ui_core import details, esc, sort_head, sort_pick, table
 from ui_views import draft_button
 
 RISK_CLASS = {
@@ -59,9 +59,74 @@ def _patterns(raw: object) -> list[dict]:
     return [item for item in value if isinstance(item, dict)]
 
 
-def company_rows(conn: sqlite3.Connection, limit: int = 200) -> list[list[str]]:
+# Порядок «тяжёлое сверху»: смотрят обычно на худших работодателей.
+RISK_ORDER = {
+    dossier.RISK_RED: 3,
+    dossier.RISK_YELLOW: 2,
+    dossier.RISK_GREEN: 1,
+    dossier.RISK_UNKNOWN: 0,
+}
+CONFIDENCE_ORDER = {"high": 0, "medium": 1, "low": 2}
+
+COMPANY_SORTS: dict[str, object] = {
+    "name": lambda r: str(r["company"] or "").lower(),
+    "risk": lambda r: -RISK_ORDER.get(str(r["risk"]), 0),
+    "reviews": lambda r: -int(r["review_count"] or 0),
+    "rating": lambda r: -float(r["avg_rating"] or 0),
+    "updated": lambda r: str(r["updated_at"] or ""),
+}
+COMPANY_COLUMNS = (
+    ("name", "Компания"),
+    ("risk", "Работодатель"),
+    ("reviews", "Отзывов"),
+    ("rating", "Оценка"),
+    ("", "Закономерности"),
+    ("updated", "Обновлено"),
+)
+
+CONTACT_SORTS: dict[str, object] = {
+    "person": lambda r: str(r["person"] or "я").lower(),
+    "role": lambda r: int(r["role_rank"] or 99),
+    "channel": lambda r: (str(r["channel_kind"] or ""), str(r["channel_value"] or "")),
+    "confidence": lambda r: CONFIDENCE_ORDER.get(str(r["confidence"]), 9),
+}
+CONTACT_COLUMNS = (
+    ("", "Откуда"),
+    ("person", "Человек"),
+    ("role", "Роль"),
+    ("channel", "Канал"),
+    ("confidence", "Уверенность"),
+    ("", "Источник"),
+)
+
+VACANCY_SORTS: dict[str, object] = {
+    "score": lambda r: -float(r["score"] or 0),
+    "title": lambda r: str(r["title"] or "").lower(),
+    "published": lambda r: str(r["published_at"] or ""),
+}
+VACANCY_COLUMNS = (
+    ("score", "Скор"),
+    ("title", "Вакансия"),
+    ("published", "Опубликована"),
+    ("", "В TG"),
+    ("", "Письмо"),
+)
+
+
+def _sorted(rows: list, keys: dict, sort: str) -> list:
+    """Даты и числа читаются сверху вниз, поэтому у них порядок обратный."""
+    rows = sorted(rows, key=keys[sort])
+    if sort in ("updated", "published"):
+        rows.reverse()
+    return rows
+
+
+def company_rows(
+    conn: sqlite3.Connection, limit: int = 200, sort: str = "updated"
+) -> list[list[str]]:
+    sort = sort_pick(sort, tuple(COMPANY_SORTS), "updated")
     rows: list[list[str]] = []
-    for row in dossier.list_dossiers(conn, limit):
+    for row in _sorted(list(dossier.list_dossiers(conn, limit)), COMPANY_SORTS, sort):
         company = str(row["company"])
         red = _flags(row["red_flags"])
         rating = "—"
@@ -85,9 +150,10 @@ def company_rows(conn: sqlite3.Connection, limit: int = 200) -> list[list[str]]:
     return rows
 
 
-def render_companies(conn: sqlite3.Connection) -> str:
+def render_companies(conn: sqlite3.Connection, sort: str = "updated") -> str:
+    sort = sort_pick(sort, tuple(COMPANY_SORTS), "updated")
     total, red, empty = dossier.coverage(conn)
-    rows = company_rows(conn)
+    rows = company_rows(conn, sort=sort)
     if not rows:
         return (
             "<div class=warn>Досье пока нет. Они собираются автоматически при сканировании — "
@@ -104,8 +170,7 @@ def render_companies(conn: sqlite3.Connection) -> str:
         "закономерность.</p>"
     )
     return summary + table(
-        ("Компания", "Работодатель", "Отзывов", "Оценка", "Закономерности", "Обновлено"),
-        rows,
+        sort_head(COMPANY_COLUMNS, "/companies", "csort", sort), rows, raw_head=True
     ) + hint
 
 
@@ -128,8 +193,15 @@ def render_signals(conn: sqlite3.Connection, name: str) -> str:
     )
 
 
-def render_contacts_for(conn: sqlite3.Connection, name: str) -> str:
-    """Каналы, найденные по вакансиям этого работодателя."""
+def render_contacts_for(
+    conn: sqlite3.Connection, name: str, sort: str = "role"
+) -> str:
+    """Каналы, найденные по вакансиям этого работодателя.
+
+    По умолчанию сверху те, кто ближе к работе: сортировка по рангу роли, а не
+    по дате находки — писать всё равно одному человеку [OUT-007].
+    """
+    sort = sort_pick(sort, tuple(CONTACT_SORTS), "role")
     rows = contact_finds.for_company(conn, name)
     if not rows:
         return (
@@ -137,7 +209,7 @@ def render_contacts_for(conn: sqlite3.Connection, name: str) -> str:
             "Они ищутся при общем сборе, после досье.</p>"
         )
     body = []
-    for row in rows:
+    for row in _sorted(list(rows), CONTACT_SORTS, sort):
         source = "—"
         if row["source_url"]:
             source = '<a href="{url}" target=_blank rel=noreferrer>источник</a>'.format(
@@ -158,27 +230,28 @@ def render_contacts_for(conn: sqlite3.Connection, name: str) -> str:
                 source,
             ]
         )
-    return table(
-        ("Откуда", "Человек", "Роль", "Канал", "Уверенность", "Источник"), body
-    )
+    base = "/company?name={}".format(urllib.parse.quote(name))
+    return table(sort_head(CONTACT_COLUMNS, base, "ksort", sort), body, raw_head=True)
 
 
-def render_vacancies_for(conn: sqlite3.Connection, name: str) -> str:
+def render_vacancies_for(
+    conn: sqlite3.Connection, name: str, sort: str = "published"
+) -> str:
     """Вакансии этого работодателя, свежие сверху.
 
     Список тот же, что на странице вакансий, но без фильтра по скорингу: в
     карточке важно видеть всё, что компания публиковала, включая слабые
     позиции — они и есть материал для выводов о работодателе.
     """
+    sort = sort_pick(sort, tuple(VACANCY_SORTS), "published")
     rows = company_signals.vacancy_rows(conn, name)
     if not rows:
         return (
             "<p class=muted>Вакансий этого работодателя в базе нет. Они попадают сюда "
             'при сборе — смотри <a href="/">сбор</a>.</p>'
         )
-    rows = sorted(rows, key=lambda r: str(r["published_at"] or ""), reverse=True)
     body = []
-    for row in rows:
+    for row in _sorted(list(rows), VACANCY_SORTS, sort):
         link = '<a href="/vacancy?key={key}">{title}</a>'.format(
             key=urllib.parse.quote(str(row["key"] or "")), title=esc(row["title"])
         )
@@ -191,10 +264,16 @@ def render_vacancies_for(conn: sqlite3.Connection, name: str) -> str:
                 draft_button(str(row["key"] or ""), "Письмо"),
             ]
         )
-    return table(("Скор", "Вакансия", "Опубликована", "В TG", "Письмо"), body)
+    base = "/company?name={}".format(urllib.parse.quote(name))
+    return table(sort_head(VACANCY_COLUMNS, base, "jsort", sort), body, raw_head=True)
 
 
-def render_company(conn: sqlite3.Connection, name: str) -> str:
+def render_company(
+    conn: sqlite3.Connection,
+    name: str,
+    jobs_sort: str = "",
+    contacts_sort: str = "",
+) -> str:
     """Карточка работодателя: сначала компания, ниже её вакансии, в конце контакты.
 
     Блоки свёрнуты по умолчанию: порядок чтения здесь и есть смысл страницы —
@@ -295,12 +374,16 @@ def render_company(conn: sqlite3.Connection, name: str) -> str:
         jobs=details(
             "Вакансии компании",
             "в базе: {}".format(len(vacancies)),
-            render_vacancies_for(conn, name),
+            render_vacancies_for(conn, name, jobs_sort),
+            # Пришли по ссылке сортировки — блок открыт, иначе клик уводил бы
+            # на ту же свёрнутую страницу.
+            open_=bool(jobs_sort),
         ),
         contacts=details(
             "Контакты",
             "найдено: {}".format(len(found)),
-            render_contacts_for(conn, name),
+            render_contacts_for(conn, name, contacts_sort),
+            open_=bool(contacts_sort),
         ),
     )
 

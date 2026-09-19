@@ -86,3 +86,29 @@ def test_контакты_считаются_в_заголовке_блока(co
     html = ui_companies.render_company(conn, "ООО «Ромашка»")
     assert "найдено: 1" in html
     assert "lead@romashka.ru" in html
+
+
+def test_сортировка_вакансий_меняет_порядок_и_открывает_блок(
+    conn: sqlite3.Connection,
+) -> None:
+    _dossier(conn)
+    _vacancy(conn, "hh:1", "Ромашка", "Python разработчик")
+    conn.execute("UPDATE vacancies SET score = 10 WHERE key = 'hh:1'")
+    _vacancy(conn, "hh:2", "Ромашка", "Backend разработчик")
+    conn.execute("UPDATE vacancies SET score = 90, published_at = '2026-01-01' "
+                 "WHERE key = 'hh:2'")
+    conn.commit()
+
+    by_date = ui_companies.render_company(conn, "Ромашка", jobs_sort="published")
+    assert by_date.index("Python") < by_date.index("Backend")
+    by_score = ui_companies.render_company(conn, "Ромашка", jobs_sort="score")
+    assert by_score.index("Backend") < by_score.index("Python")
+    # По ссылке сортировки блок открыт, иначе клик уводил бы в свёрнутое.
+    assert "<details open>" in by_score
+
+
+def test_чужая_сортировка_не_роняет_страницу(conn: sqlite3.Connection) -> None:
+    _dossier(conn)
+    _vacancy(conn, "hh:1", "Ромашка", "Python разработчик")
+    html = ui_companies.render_company(conn, "Ромашка", jobs_sort="'; DROP TABLE--")
+    assert "Python разработчик" in html

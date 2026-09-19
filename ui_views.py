@@ -24,7 +24,7 @@ import llm
 import outreach
 import settings
 import websearch
-from ui_core import esc, table
+from ui_core import esc, sort_head, sort_pick, table
 
 
 # ———— запуск ————
@@ -338,8 +338,52 @@ def contacts_block(conn: sqlite3.Connection, key: str, company: str | None) -> s
     )
 
 
-def render_vacancies(conn: sqlite3.Connection, min_score: float, limit: int) -> str:
-    rows = vacancy_rows(conn, min_score, limit)
+VACANCY_SORTS: dict[str, object] = {
+    "score": lambda r: -float(r["score"] or 0),
+    "title": lambda r: str(r["title"] or "").lower(),
+    "company": lambda r: str(r["company"] or "").lower(),
+    "published": lambda r: str(r["published_at"] or ""),
+}
+VACANCY_COLUMNS = (
+    ("score", "Скор"),
+    ("title", "Вакансия"),
+    ("company", "Компания"),
+    ("published", "Опубликована"),
+    ("", "В TG"),
+    ("", "Письмо"),
+)
+
+LOG_SORTS: dict[str, object] = {
+    "company": lambda r: str(r["company"] or "").lower(),
+    "person": lambda r: str(r["person"] or "я").lower(),
+    "role": lambda r: int(r["role_rank"] or 99),
+    "status": lambda r: str(r["status"] or ""),
+    "created": lambda r: str(r["created_at"] or ""),
+}
+LOG_COLUMNS = (
+    ("company", "Компания"),
+    ("person", "Человек"),
+    ("role", "Роль"),
+    ("", "Канал"),
+    ("", "Уверенность"),
+    ("status", "Статус"),
+    ("created", "Записан"),
+)
+
+
+def sort_rows(rows: list, keys: dict, sort: str) -> list:
+    """Даты и числа читаются сверху вниз, поэтому у них порядок обратный."""
+    rows = sorted(rows, key=keys[sort])
+    if sort in ("published", "created"):
+        rows.reverse()
+    return rows
+
+
+def render_vacancies(
+    conn: sqlite3.Connection, min_score: float, limit: int, sort: str = "score"
+) -> str:
+    sort = sort_pick(sort, tuple(VACANCY_SORTS), "score")
+    rows = sort_rows(list(vacancy_rows(conn, min_score, limit)), VACANCY_SORTS, sort)
     stats = db.stats(conn)
     direct, total = contacts.coverage(conn)
     with_conditions, scanned = conditions.coverage(conn)
@@ -389,12 +433,11 @@ def render_vacancies(conn: sqlite3.Connection, min_score: float, limit: int) -> 
                 draft_button(row["key"] or "", "Письмо"),
             ]
         )
+    base = "/vacancies?min_score={}&limit={}".format(int(min_score), int(limit))
     return (
         form
         + summary
-        + table(
-            ["Скор", "Вакансия", "Компания", "Опубликована", "В TG", "Письмо"], body
-        )
+        + table(sort_head(VACANCY_COLUMNS, base, "sort", sort), body, raw_head=True)
     )
 
 
@@ -490,10 +533,11 @@ def render_vacancy(conn: sqlite3.Connection, key: str, with_draft: bool) -> str:
     return "".join(parts)
 
 
-def render_contacts(conn: sqlite3.Connection) -> str:
+def render_contacts(conn: sqlite3.Connection, sort: str = "created") -> str:
     """Лог аутрича: что уже ушло в работу. Находки сборщика — в карточке вакансии."""
+    sort = sort_pick(sort, tuple(LOG_SORTS), "created")
     contacts.ensure_schema(conn)
-    rows = contact_rows(conn)
+    rows = sort_rows(list(contact_rows(conn)), LOG_SORTS, sort)
     direct, total = contacts.coverage(conn)
     found_direct, found_total = contact_finds.coverage(conn)
     header = (
@@ -528,8 +572,7 @@ def render_contacts(conn: sqlite3.Connection) -> str:
             ]
         )
     return header + table(
-        ["Компания", "Человек", "Роль", "Канал", "Уверенность", "Статус", "Записан"],
-        body,
+        sort_head(LOG_COLUMNS, "/companies", "ksort", sort), body, raw_head=True
     )
 
 
@@ -537,6 +580,7 @@ __all__ = (
     "contact_rows",
     "progress_block",
     "render_contacts",
+    "sort_rows",
     "render_run",
     "render_settings",
     "render_vacancies",

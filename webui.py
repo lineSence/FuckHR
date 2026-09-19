@@ -156,7 +156,10 @@ class Handler(BaseHTTPRequestHandler):
                     min_score = settings.as_float(one("min_score", "0"), 0.0)
                     limit = min(settings.as_int(one("limit", "50"), 50), 500)
                     self._send(
-                        page("Вакансии", render_vacancies(conn, min_score, limit))
+                        page(
+                            "Вакансии",
+                            render_vacancies(conn, min_score, limit, one("sort")),
+                        )
                     )
                 elif parsed.path == "/vacancy":
                     # GET ничего не запускает: сбор черновика дёргает внешний
@@ -170,11 +173,15 @@ class Handler(BaseHTTPRequestHandler):
                     self._send(
                         page(
                             "Компании и контакты",
-                            render_companies(conn) + render_contacts(conn),
+                            render_companies(conn, one("csort"))
+                            + render_contacts(conn, one("ksort")),
                         )
                     )
                 elif parsed.path == "/company":
-                    self._send(page("Досье", render_company(conn, one("name"))))
+                    body = render_company(
+                        conn, one("name"), one("jsort"), one("ksort")
+                    )
+                    self._send(page("Досье", body))
                 elif parsed.path == "/cleanup":
                     self._send(page("Очистка", render_cleanup(conn)))
                 elif parsed.path == "/contacts":

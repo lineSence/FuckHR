@@ -171,3 +171,28 @@ def test_выдача_поиска_показывается_с_доменом(co
 
     assert "example.com" in html
     assert "&lt;b&gt;" in html  # сниппет экранирован, а не вставлен разметкой
+
+
+def test_сортировка_списка_вакансий(conn, make_vacancy) -> None:
+    conditions.ensure_schema(conn)
+    contacts.ensure_schema(conn)
+    db.upsert_vacancy(
+        conn,
+        make_vacancy(external_id="1", title="Аналитик", company="ООО Ромашка"),
+        90.0,
+        [],
+    )
+    db.upsert_vacancy(
+        conn,
+        make_vacancy(external_id="2", title="Backend Python", company="ООО Ландыш"),
+        10.0,
+        [],
+    )
+
+    by_score = webui.render_vacancies(conn, 0.0, 10, sort="score")
+    assert by_score.index("Аналитик") < by_score.index("Backend Python")
+    # По алфавиту латиница идёт раньше кириллицы — порядок меняется на обратный.
+    by_title = webui.render_vacancies(conn, 0.0, 10, sort="title")
+    assert by_title.index("Backend Python") < by_title.index("Аналитик")
+    # Неизвестное имя сортировки не роняет страницу и не уходит в SQL.
+    assert "Аналитик" in webui.render_vacancies(conn, 0.0, 10, sort="1=1")
