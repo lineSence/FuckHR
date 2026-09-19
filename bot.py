@@ -20,6 +20,7 @@ import json
 import logging
 import os
 import sqlite3
+from datetime import datetime
 from typing import Sequence
 
 from aiogram import Bot, Dispatcher, F
@@ -31,6 +32,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 import contacts
 import db
+import settings
 
 log = logging.getLogger(__name__)
 
@@ -125,6 +127,21 @@ def contact_keyboard(contact_id: int) -> InlineKeyboardMarkup:
     )
 
 
+def hold_reason(options: "settings.TelegramOptions | None" = None) -> str:
+    """Почему сейчас не отправляем. Пустая строка — отправлять можно.
+
+    Оба запрета мягкие: карточка не помечается отправленной и уйдёт следующим
+    прогоном, работа прогона не теряется [CORE-017].
+    """
+    opts = options or settings.telegram_options()
+    if not opts.enabled:
+        return "отправка в Telegram выключена в настройках"
+    now = datetime.now()
+    if opts.quiet_at(now.hour * 60 + now.minute):
+        return "тихие часы: карточки уйдут следующим прогоном"
+    return ""
+
+
 def _bot(token: str) -> Bot:
     proxy = proxy_url()
     if proxy:
@@ -151,6 +168,11 @@ async def send_cards(
     поэтому каждая карточка получает три попытки с паузой 2 → 4 с. Недошедшая
     карточка не помечается отправленной и уйдёт в следующий прогон.
     """
+    hold = hold_reason()
+    if hold:
+        log.info("%s: %s карточек ждут в интерфейсе", hold, len(rows))
+        return []
+    delay = settings.telegram_options().delay
     republished = republished or {}
     signals = signals or {}
     delivered: list[str] = []
@@ -171,7 +193,8 @@ async def send_cards(
                         disable_web_page_preview=True,
                     )
                     delivered.append(row["key"])
-                    await asyncio.sleep(0.6)  # лимит Telegram на сообщения в один чат
+                    # Задержка из настроек: лимит Telegram на сообщения в один чат.
+                    await asyncio.sleep(delay)
                     break
                 except TelegramNetworkError as exc:
                     log.warning(
@@ -201,7 +224,13 @@ async def send_alert(token: str, chat_id: str | int, text: str) -> bool:
 
     Текст приходит из canary.py и содержит пути файлов, поэтому parse_mode снят:
     одинокие < и & в путях иначе сломают отправку именно тогда, когда она нужна.
+
+    Тихие часы на тревоги не распространяются: сломанный сбор тем и важен, что
+    о нём узнают сразу. Полный выключатель отправки их всё же глушит.
     """
+    if not settings.telegram_options().enabled:
+        log.info("отправка в Telegram выключена: тревога только в логе")
+        return False
     bot = _bot(token)
     try:
         await bot.send_message(
@@ -226,6 +255,10 @@ async def send_contact_card(
     Без contact_id (dry-run или follow-up) уходит как обычное сообщение:
     менять статус нечему. parse_mode снят — в тексте письма живут < и &.
     """
+    hold = hold_reason()
+    if hold:
+        log.info("%s: карточка контакта осталась в интерфейсе", hold)
+        return False
     bot = _bot(token)
     try:
         await bot.send_message(
