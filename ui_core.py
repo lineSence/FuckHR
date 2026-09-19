@@ -27,62 +27,94 @@ HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 
 STYLE = """
-body { font: 15px/1.5 -apple-system, Segoe UI, Roboto, sans-serif; margin: 0 auto;
-       max-width: 1000px; padding: 24px; color: #1d1d1f; }
-a { color: #0b62d6; }
-nav { display: flex; gap: 16px; margin-bottom: 24px; padding-bottom: 12px;
-      border-bottom: 1px solid #e3e3e6; flex-wrap: wrap; }
-h1 { font-size: 22px; margin: 0 0 16px; }
-h2 { font-size: 17px; margin: 24px 0 8px; }
-h3 { font-size: 15px; margin: 18px 0 6px; }
-table { border-collapse: collapse; width: 100%; }
-th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid #ececef;
-         vertical-align: top; }
-th { font-weight: 600; font-size: 13px; color: #6b6b70; }
-.score { font-variant-numeric: tabular-nums; font-weight: 600; }
-.muted { color: #6b6b70; }
-details { border: 1px solid #e3e3e6; border-radius: 6px; padding: 8px 12px;
-          margin: 10px 0; }
-details[open] { padding-bottom: 14px; }
-summary { cursor: pointer; font-weight: 600; font-size: 15px; }
-summary .muted { font-weight: 400; }
-form.inline { display: inline; }
-form.inline button { padding: 4px 10px; font-size: 13px; }
-.warn { background: #fff6e5; border: 1px solid #f0d9a8; padding: 10px 12px;
-        border-radius: 6px; margin: 12px 0; }
-.danger { background: #fdecec; border: 1px solid #f0b9b9; padding: 10px 12px;
-        border-radius: 6px; margin: 12px 0; }
-.ok { background: #eaf7ee; border: 1px solid #b6e0c2; padding: 10px 12px;
-      border-radius: 6px; margin: 12px 0; }
-pre { background: #f6f6f8; padding: 12px; border-radius: 6px; white-space: pre-wrap;
-      word-break: break-word; }
-.console { background: #1d1f23; color: #e6e6e6; max-height: 460px; overflow: auto;
-           font: 13px/1.45 ui-monospace, Consolas, monospace; }
-textarea { width: 100%; min-height: 120px; font: 14px/1.5 ui-monospace, Consolas, monospace;
-           padding: 10px; border: 1px solid #d2d2d7; border-radius: 6px; }
-input[type=text], input[type=number], input[type=password] { padding: 7px 9px;
-           border: 1px solid #d2d2d7; border-radius: 6px; font-size: 14px; width: 100%;
-           box-sizing: border-box; }
-button { padding: 8px 14px; border: 0; border-radius: 6px; background: #0b62d6;
-         color: #fff; font-size: 14px; cursor: pointer; }
-button.secondary { background: #e9ebef; color: #1d1d1f; }
-.tasks { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
-.tasks form { margin: 0; }
-.field { margin: 12px 0; }
-.field label { display: block; font-weight: 600; font-size: 14px; margin-bottom: 3px; }
-.field .hint { font-size: 13px; color: #6b6b70; margin-top: 3px; }
+*, *::before, *::after { box-sizing: border-box }
+:root { --bg:#f2f3f5; --card:#fff; --line:#dfe1e6; --text:#172b4d; --muted:#6b778c;
+        --brand:#0b5cd5; --ok:#006644; --okbg:#e3fcef; --warn:#974f0c; --warnbg:#fffae6;
+        --danger:#bf2600; --dangerbg:#ffebe6 }
+body { margin: 0; background: var(--bg); color: var(--text);
+       font: 14px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif; }
+a { color: var(--brand); text-decoration: none }
+a:hover { text-decoration: underline }
+/* Шапка липкая: на длинных списках вакансий переход в другой раздел не должен
+   требовать прокрутки наверх. */
+.topbar { background: #172b4d; color: #fff; padding: 0 20px; height: 52px;
+          display: flex; align-items: center; gap: 24px; position: sticky; top: 0; z-index: 5 }
+.brand { display: flex; align-items: center; gap: 9px; font-size: 15px; font-weight: 600 }
+.brand .logo { display: grid; place-items: center; width: 26px; height: 26px;
+               border-radius: 6px; background: #2684ff; font-size: 12px }
+.topbar nav { display: flex; gap: 2px; overflow: auto }
+.topbar nav a { color: #c1c7d0; padding: 6px 11px; border-radius: 5px; font-size: 13.5px;
+                white-space: nowrap }
+.topbar nav a:hover { background: #243858; color: #fff; text-decoration: none }
+.topbar nav a.active { background: #2684ff; color: #fff; font-weight: 600 }
+main { max-width: 1240px; margin: 0 auto; padding: 20px }
+.panel { background: var(--card); border: 1px solid var(--line); border-radius: 4px;
+         padding: 16px 18px }
+h1 { font-size: 20px; margin: 0 0 14px }
+h2 { font-size: 13px; margin: 22px 0 10px; color: var(--muted);
+     text-transform: uppercase; letter-spacing: .04em }
+h3 { font-size: 14px; margin: 16px 0 6px }
+.muted { color: var(--muted); font-size: 13px }
+table { border-collapse: collapse; width: 100% }
+th { font-size: 11.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted);
+     text-align: left; padding: 8px 10px; border-bottom: 2px solid var(--line) }
+td { padding: 8px 10px; border-bottom: 1px solid #f4f5f7; vertical-align: top }
+table tr:nth-child(even) td { background: #fafbfc }
+.score { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 15px }
+details { background: var(--card); border: 1px solid var(--line); border-radius: 4px;
+          padding: 10px 14px; margin: 10px 0 }
+details[open] { padding-bottom: 14px }
+summary { cursor: pointer; font-weight: 600; font-size: 13.5px }
+summary .muted { font-weight: 400 }
+form.inline { display: inline }
+form.inline button { padding: 4px 10px; font-size: 12.5px }
+.warn, .ok, .danger { border-radius: 4px; padding: 10px 12px; margin: 12px 0;
+        font-size: 13.5px; border-left: 4px solid; color: #42526e }
+.warn { background: var(--warnbg); border-color: #ffab00 }
+.ok { background: var(--okbg); border-color: #36b37e }
+.danger { background: var(--dangerbg); border-color: #ff5630 }
 /* В таблице те же классы означают метку, а не блок-предупреждение:
    без этого padding и margin блока разносили строки и налезали друг на друга. */
 td .warn, td .danger, td .ok { display: inline-block; padding: 1px 8px; margin: 0;
-        border-radius: 99px; font-size: 13px; white-space: nowrap; }
-.pill { display: inline-block; padding: 1px 7px; border-radius: 99px; font-size: 12px;
-        background: #eef1f5; margin-right: 6px; }
-.bar { display: flex; align-items: center; gap: 12px; margin: 10px 0; }
-.bar progress { width: 380px; height: 14px; }
-.cols { display: flex; gap: 18px; flex-wrap: wrap; }
-.cols .field { flex: 1 1 220px; margin: 8px 0; }
-.checks { display: flex; gap: 18px; flex-wrap: wrap; margin: 6px 0 2px; }
-.checks label { font-weight: 400; }
+        border: 0; border-radius: 3px; font-size: 12px; font-weight: 700;
+        text-transform: uppercase; letter-spacing: .03em; white-space: nowrap }
+.pill { display: inline-block; padding: 2px 8px; margin-right: 6px; border-radius: 3px;
+        background: #deebff; color: var(--brand); font-size: 12px; font-weight: 700;
+        text-transform: uppercase }
+pre { background: #f4f5f7; border-radius: 4px; padding: 12px; white-space: pre-wrap;
+      word-break: break-word }
+.console { background: #091e42; color: #b3d4ff; max-height: 460px; overflow: auto;
+           font: 12.5px/1.55 ui-monospace, Consolas, monospace }
+button { padding: 6px 12px; border: 0; border-radius: 4px; background: var(--brand);
+         color: #fff; font-size: 13.5px; font-weight: 600; cursor: pointer }
+button.secondary { background: #ebecf0; color: var(--text) }
+.tasks { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px }
+.tasks form { margin: 0 }
+.bar { display: flex; align-items: center; gap: 12px; margin: 10px 0 }
+.bar progress { width: 360px; height: 6px }
+.field { margin: 10px 0 }
+.field label { display: block; font-weight: 600; font-size: 13px; margin-bottom: 4px }
+.field .hint { font-size: 12px; color: var(--muted); margin-top: 4px }
+textarea { width: 100%; min-height: 110px; padding: 8px 10px; background: #fafbfc;
+           border: 2px solid var(--line); border-radius: 4px;
+           font: 13px/1.5 ui-monospace, Consolas, monospace }
+input[type=text], input[type=number], input[type=password] { width: 100%; max-width: 560px;
+           padding: 6px 10px;
+           background: #fafbfc; border: 2px solid var(--line); border-radius: 4px;
+           font-size: 13.5px; font-family: inherit }
+select { padding: 5px 8px; background: #fafbfc; border: 2px solid var(--line);
+         border-radius: 4px; font-size: 13.5px; font-family: inherit; color: var(--text) }
+input:focus, textarea:focus, select:focus { outline: 0; background: #fff; border-color: var(--brand) }
+.cols { display: flex; gap: 16px; flex-wrap: wrap }
+.cols .field { flex: 1 1 220px; margin: 8px 0 }
+.checks { display: flex; gap: 16px; flex-wrap: wrap; margin: 8px 0 2px }
+.checks label, .field label:has(input) { font-weight: 400 }
+@media (max-width: 720px) {
+  .topbar { height: auto; flex-wrap: wrap; gap: 8px; padding: 10px 14px }
+  main { padding: 12px 10px }
+  .panel { padding: 12px }
+  .bar progress { width: 100% }
+}
 """
 
 NAV_ITEMS = (
@@ -91,15 +123,29 @@ NAV_ITEMS = (
     ("/companies", "Компании и контакты"),
     ("/search", "Поиск"),
     ("/llm", "Модель"),
-    ("/resume", "Резюме"),
-    ("/profile", "Профиль"),
+    ("/profile", "Профиль и резюме"),
     ("/settings", "Настройки"),
     ("/cleanup", "Очистка"),
 )
 
-NAV = "<nav>{}</nav>".format(
-    "".join('<a href="{}">{}</a>'.format(href, name) for href, name in NAV_ITEMS)
+# Заголовок страницы служит и признаком активного пункта: отдельный параметр
+# пришлось бы протаскивать через все три десятка вызовов page() [CORE-025].
+NAV_BY_TITLE = {name: href for href, name in NAV_ITEMS}
+NAV_BY_TITLE.update(
+    {"Вакансия": "/vacancies", "Досье": "/companies", "Проверка поиска": "/search"}
 )
+
+
+def nav(title: str = "") -> str:
+    active = NAV_BY_TITLE.get(title, "")
+    items = []
+    for href, name in NAV_ITEMS:
+        cls = " class=active" if href == active else ""
+        items.append('<a href="{}"{}>{}</a>'.format(href, cls, name))
+    return "<nav>{}</nav>".format("".join(items))
+
+
+NAV = nav()
 
 
 def esc(value: object) -> str:
@@ -118,8 +164,13 @@ def page(title: str, body: str, refresh: int = 0) -> str:
         "<!doctype html><html lang=ru><head><meta charset=utf-8>"
         '<meta name=viewport content="width=device-width, initial-scale=1">'
         "{meta}<title>{title} — FuckHR</title><style>{style}</style></head><body>"
-        "{nav}<h1>{title}</h1>{body}</body></html>"
-    ).format(meta=meta, title=esc(title), style=STYLE, nav=NAV, body=body)
+        '<header class=topbar><span class=brand><span class=logo>FH</span>FuckHR</span>'
+        "{nav}</header>"
+        "<main><h1>{title}</h1><div class=panel>{body}</div></main>"
+        "</body></html>"
+    ).format(
+        meta=meta, title=esc(title), style=STYLE, nav=nav(title), body=body
+    )
 
 
 def db_path() -> str:
@@ -254,6 +305,7 @@ __all__ = (
     "HOST",
     "NAV",
     "NAV_ITEMS",
+    "nav",
     "STYLE",
     "area_field",
     "checkbox_field",

@@ -14,12 +14,15 @@ hh.ru, сайты отзывов, свой SearXNG, Telegram и адреса м�
 
 ```
 hh.ru (HTML поиска, ADR-015)
-  → предфильтр и скоринг (score.py, без модели)
+  → зарплатные наблюдения до предфильтра (market.py → market_observations)
+  → предфильтр и скоринг (score.py, без модели; метка рынка даёт вес market)
   → страница вакансии (hh_html.py) при включённых деталях
   → слепок в историю (db.vacancy_snapshots, ADR-010)
   → условия из описания (llm_tasks.extract_conditions, этап extract)
   → детектор утверждений (detector.py + detector_llm.py, ADR-009)
+  → пересчёт срезов рынка и метки вакансий (market_store.py)
   → досье на компании, прошедшие порог (dossier.py, в несколько потоков)
+  → метки работодателей по деньгам (market_company.py)
   → карточки в Telegram (bot.py)
   → канарейка, если прогон сам сломался (canary.py)
 ```
@@ -33,14 +36,23 @@ hh.ru (HTML поиска, ADR-015)
 dossier.build(company)
   → websearch.SearchProvider   поиск по сайтам отзывов (SearXNG / Tavily / Brave), кэш search_cache
   → reviewpage.PageFetcher     чтение самих страниц отзывов, кэш page_cache на 30 дней
-  → dossier.find_patterns      словарь маркеров + учёт отрицаний, без модели
-  → dossier.summarize          сводка словами (этап company), необязательная
-  → company_dossier / company_reviews
+  → reviewitems.split_page     страница → отдельные отзывы: дата, оценка, плюсы, минусы
+  → reviewlegit.filter_items   отсев не-отзывов: меню, реклама, отзывы клиентов
+  → aitext.assess              признак сгенерированного текста (docs/ai-text.md)
+  → fake_reviews.score_items   fake_score по сигналам накрутки, без модели
+  → fake_company.evaluate      метка компании и средняя без заказных отзывов
+  → dossier_text.find_patterns словарь маркеров + учёт отрицаний, без модели
+  → dossier_summary.summarize  сводка словами (этап dossier), необязательная
+  → company_dossier / company_reviews / review_items / review_hashes
 ```
 
 Ключевое свойство: флаги и уровень риска считает Python по словарю `PATTERN_RULES`, модель только
 пересказывает (`[CORE-015]`). Поэтому досье воспроизводимо и объяснимо: в интерфейсе видно, какая
 фраза в каком отзыве дала флаг.
+
+Отзывы, похожие на заказные, не участвуют в средней оценке и в доле негатива, сомнительные идут с
+половинным весом; сама накрутка — отдельная метка компании и красный флаг веса 4. Сигналы, пороги и
+границы формулировок — `docs/fake-reviews.md`.
 
 ## Резюме владельца (B-01)
 
@@ -86,25 +98,38 @@ dossier.build(company)
 | `conditions.py` | условия работы, извлечённые из описания |
 | `websearch.py` | внешний поиск с кэшем и потолком запросов |
 | `reviewpage.py` | загрузка и очистка страниц отзывов, кэш страниц |
-| `dossier.py` | досье: отзывы, маркеры, риск, сводка |
+| `dossier.py` | досье: сборка, риск, реэкспорт имён |
+| `dossier_text.py`, `dossier_summary.py` | разбор текста отзывов и сводка/строки карточки |
+| `reviewlegit.py`, `reviewlegit_rules.py`, `reviewlegit_store.py` | легитимность отзыва, шаблоны площадок, здоровье сбора (`docs/review-quality.md`) |
+| `reviewitems.py` | страница → отдельные отзывы: дата, оценка, плюсы, минусы |
+| `fake_reviews.py`, `fake_rules.py`, `fake_company.py`, `fake_store.py`, `fake_llm.py` | детекция накрученных отзывов: сигналы, пороги, метка компании, хранение, сигнал модели |
+| `market.py`, `market_rules.py`, `market_store.py`, `market_company.py` | рынок зарплат: разбор вилки и среза, пороги, хранение и срезы, метка работодателя (`docs/market-salary.md`) |
+| `aitext.py`, `aitext_rules.py`, `aitext_llm.py` | признаки сгенерированного текста в вакансиях и отзывах (`docs/ai-text.md`) |
 | `resume.py` | резюме: блоки, подтверждение, экспорт, стаж, противоречия (без модели) |
 | `resume_llm.py` | черновик секции и отбор блоков под вакансию |
 | `contacts.py`, `contacts_rules.py` | поиск рабочих контактов, лог и дедуп, словари этапа |
 | `contact_finds.py` | находки этапа discovery по вакансии: кэш каналов для карточки и письма |
 | `outreach.py`, `outreach_draft.py` | прогон этапа писем и сборка текста черновика |
-| `llm.py`, `llm_tasks.py`, `check_llm.py` | шлюз к моделям, задачи этапов, диагностика |
-| `bench.py`, `bench_cases.py` | сравнение моделей на задачах пайплайна (`docs/model-bench.md`) |
+| `llm.py`, `llm_profiles.py`, `llm_tasks.py`, `check_llm.py` | шлюз к моделям, карта этапов и профилей, задачи этапов, диагностика |
+| `bench.py`, `bench_cases.py`, `ui_bench.py` | сравнение моделей на задачах пайплайна и его страница (`docs/model-bench.md`) |
 | `bot.py` | карточки и тревоги в Telegram: выключатель отправки, темп, тихие часы |
 | `canary.py` | тревога, когда прогон сломался, с суточным cooldown |
 | `maintenance.py` | очистка кэшей и данных по целям, с отметкой необратимых |
+| `ui_cleanup.py` | страница очистки: цели, подтверждение необратимого |
+| `run_setup.py` | обвязка прогона: логи, шлюз модели, отправка тревог |
 | `webui.py`, `jobs.py`, `ui_*.py` | локальный интерфейс и запуск задач подпроцессами |
+| `intake.py`, `ui_intake.py` | разговор о поиске: свободный текст владельца → критерии поиска и блоки резюме |
 | `settings.py`, `settings_fields.py` | чтение и запись `.env`, каталог полей настроек |
 
 ## Хранилище
 
-Один файл SQLite (`data/fuckhr.sqlite3`). Таблицы: `vacancies`, `vacancy_snapshots`, `vacancy_conditions`,
+Один файл SQLite (`data/fuckhr.sqlite3`). Таблицы: `intake_log`, `vacancies`, `vacancy_snapshots`, `vacancy_conditions`,
 `hr_signals`, `company_dossier`, `company_reviews`, `contacts`, `resumes`, `resume_blocks`,
-`resume_versions`, `search_cache`, `page_cache`, `llm_cache`.
+`resume_versions`, `review_items`, `review_hashes`, `site_lines`, `site_health`, `market_observations`, `market_stats`, `company_market`,
+`search_cache`, `page_cache`, `llm_cache`.
+
+`review_hashes` — общая таблица хэшей на всю базу: она ловит фабрики отзывов, работающие сразу на
+несколько компаний, и живёт ровно столько, сколько живут сами отзывы.
 
 Векторов нет: `sqlite-vec` из ADR-008 не подключён, семантический дедуп не нужен на текущих объёмах.
 Невосстановимы две вещи: `vacancy_snapshots` — hh.ru не расскажет задним числом, что вакансия висела
@@ -115,7 +140,7 @@ dossier.build(company)
 
 Шлюз `llm.py` знает два адреса: локальный (`LLM_BASE_URL`) и необязательный внешний прокси
 (`LLM_PROXY_BASE_URL`). Этап выбирает профиль (`STAGE_PROFILES`), профиль выбирает маршрут.
-Этапы `contacts`, `dossier`, `draft` работают с данными о живых людях и остаются на локальном адресе,
+Этапы `contacts`, `dossier`, `draft`, `review_fake` работают с данными о живых людях и остаются на локальном адресе,
 пока владелец не выставит `LLM_PERSONAL_VIA_PROXY=1` (`[CORE-012]`).
 
 Этапы резюме (`resume_section`, `resume_tailor`) в этот список не входят: это данные самого
@@ -146,3 +171,26 @@ dossier.build(company)
 
 Пять вакансий с полным досье за прогон (`[CORE-018]`). Досье считается полным, когда у флагов есть
 цитаты из прочитанных отзывов, а не только из заголовков выдачи.
+
+## Где прогон тратит время
+
+Всё дорогое — это ожидание чужих серверов, поэтому лечится оно двумя способами:
+не ходить туда вовсе и ходить параллельно.
+
+- Описания вакансий берутся из базы, если они там уже есть и дата публикации не
+  менялась (`db.cached_details`). Раньше карточка каждой вакансии качалась на
+  каждом прогоне — при тысяче вакансий это почти всё время сбора.
+- Пауза между запросами к hh.ru адаптивная: `HH_PAUSE` — верхняя граница и точка
+  возврата после капчи, `HH_PAUSE_MIN` — нижняя, до которой пауза сползает на
+  чистых ответах.
+- Этапы модели (`extract`, `hr_filter`) вынесены из цикла обхода в пул
+  (`llm_batch`, `LLM_WORKERS`): внутри цикла каждый вызов на секунды
+  останавливал сбор и сбивал ритм пауз.
+- Внешний поиск (`websearch.search_many`, `SEARCH_WORKERS`) и страницы отзывов
+  (`reviewpage.fetch_many`, `REVIEW_FETCH_WORKERS`) ходят в сеть параллельно.
+  Кэш, счётчики и потолки (`SEARCH_MAX_CALLS`, `REVIEW_FETCH_PAGES`) остаются в
+  вызывающем потоке: соединение sqlite между потоками не делится, а лимит должен
+  считаться один раз.
+- Контакты ищутся один раз на компанию, а не на вакансию: страницы «Команда» и
+  «Контакты» у всех вакансий работодателя одни и те же, роль берётся по самой
+  высокоскоринговой из них.

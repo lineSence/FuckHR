@@ -139,8 +139,18 @@ def _matches(term: str, haystack: str, fuzzy: int = FUZZY_THRESHOLD) -> bool:
     return fuzz.partial_ratio(term, haystack) >= fuzzy
 
 
-def evaluate(vacancy: Any, profile: Profile, fuzzy: int = FUZZY_THRESHOLD) -> Verdict:
-    """Скор вакансии. fuzzy — порог нечёткого совпадения навыка из настроек."""
+def evaluate(
+    vacancy: Any,
+    profile: Profile,
+    fuzzy: int = FUZZY_THRESHOLD,
+    market_marker: Any = None,
+) -> Verdict:
+    """Скор вакансии. fuzzy — порог нечёткого совпадения навыка из настроек.
+
+    `market_marker` — метка рынка (market.Marker) или None. На предфильтре её
+    нет и быть не может: рынок пересчитывается после обхода выдачи, поэтому без
+    неё вес `market` просто не начисляется, а скор остаётся сравнимым с прежним.
+    """
     haystack = _haystack(vacancy)
     reasons: list[str] = []
 
@@ -213,5 +223,17 @@ def evaluate(vacancy: Any, profile: Profile, fuzzy: int = FUZZY_THRESHOLD) -> Ve
     else:
         exp_points = float(exp_weight) * 0.5
 
-    total = salary_points + skills_points + bonus_points + remote_points + exp_points
+    # 6. Рынок. Метка считается детерминированно по нашим же наблюдениям
+    #    (market.py). Неизвестный рынок не штрафует: доля та же, что у «в рынке».
+    market_weight = profile.weight("market", 0)
+    market_points = 0.0
+    if market_weight and market_marker is not None:
+        market_points = market_weight * float(getattr(market_marker, "points_share", 0.7))
+        line = getattr(market_marker, "line", None)
+        reasons.append(line() if callable(line) else str(market_marker))
+
+    total = (
+        salary_points + skills_points + bonus_points + remote_points + exp_points
+        + market_points
+    )
     return Verdict(round(min(total, 100.0), 1), reasons)

@@ -62,6 +62,27 @@ triggers:
       - wiki/architecture/pipeline.md
       - wiki/rules/hr-signal-detection.md
 
+  - id: fake-reviews
+    keywords: [накрутка, заказные отзывы, фейковые отзывы, fake_score, шингл, дубли отзывов, всплеск отзывов, метка компании]
+    load:
+      - docs/fake-reviews.md
+      - wiki/rules/hr-signal-detection.md
+
+  - id: market-salary
+    keywords: [рынок, средняя зарплата, медиана, перцентиль, вилка, ниже рынка, выше рынка, срез, market_stats]
+    load:
+      - docs/market-salary.md
+
+  - id: ai-text
+    keywords: [сгенерированный текст, ии-текст, нейросеть написала, шаблонный текст, ai_text, канцелярит]
+    load:
+      - docs/ai-text.md
+
+  - id: review-quality
+    keywords: [легитимность отзыва, мусор на странице, скрейпинг отзовиков, разбор страницы, шаблон площадки, фикстуры вёрстки]
+    load:
+      - docs/review-quality.md
+
   - id: legal
     keywords: [152-фз, gdpr, tos, персональные данные, телефон, linkedin, юридика, osint, спам, отказ от рассылки]
     load:

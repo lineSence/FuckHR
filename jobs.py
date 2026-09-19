@@ -34,7 +34,6 @@ import sys
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Sequence
 from pathlib import Path
 from typing import Sequence
 

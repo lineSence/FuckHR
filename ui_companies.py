@@ -1,8 +1,4 @@
-"""Страницы «Компании» и «Очистка».
-
-Две разные задачи в одном файле по одной причине: и та, и другая работают с
-данными о работодателях как с накопленным активом: одна показывает, что
-накопилось, вторая — единственное место, где это можно уничтожить.
+"""Страница «Компании»: карточка работодателя и список.
 
 Карточка компании показывает два рода данных рядом: отзывы — это чужие слова,
 а история публикаций (company_signals) — наши собственные наблюдения. Второе
@@ -22,7 +18,12 @@ import company_signals
 import contact_finds
 import contacts
 import dossier
-import maintenance
+import fake_rules
+import fake_store
+import market_rules
+import market_store
+import reviewlegit_store
+from ui_cleanup import CONFIRM_WORD, apply_cleanup, render_cleanup
 from ui_core import details, esc, sort_head, sort_pick, table
 from ui_views import draft_button
 
@@ -31,6 +32,7 @@ RISK_CLASS = {
     dossier.RISK_YELLOW: "warn",
     dossier.RISK_GREEN: "ok",
     dossier.RISK_UNKNOWN: "muted",
+    dossier.RISK_THIN: "warn",
 }
 
 POLARITY_RU = {
@@ -39,9 +41,6 @@ POLARITY_RU = {
     "mixed": "смешанный",
     "unknown": "не определён",
 }
-
-CONFIRM_WORD = "УДАЛИТЬ"
-
 
 def _flags(raw: object) -> list[str]:
     try:
@@ -164,6 +163,14 @@ def render_companies(conn: sqlite3.Connection, sort: str = "updated") -> str:
         "<p class=muted>Досье: {total} · с красными флагами: {red} · без единого отзыва: "
         "{empty}</p>"
     ).format(total=total, red=red, empty=empty)
+    health = reviewlegit_store.health_line(reviewlegit_store.health(conn))
+    if health:
+        # Отброшенное показывается числом: поломку разбора иначе видно только
+        # по внезапно опустевшим досье.
+        summary += (
+            "<p class=muted>Сбор отзывов — {}. Выброшенное не отзывы: меню, "
+            "реклама, ответы работодателя и отзывы клиентов о товаре.</p>"
+        ).format(esc(health))
     hint = (
         "<p class=muted>Красный статус ставится только по повторяющимся жалобам или "
         "тяжёлым признакам вроде задержки зарплаты. Один злой отзыв — ещё не "
@@ -268,6 +275,95 @@ def render_vacancies_for(
     return table(sort_head(VACANCY_COLUMNS, base, "jsort", sort), body, raw_head=True)
 
 
+def render_market(conn: sqlite3.Connection, name: str) -> str:
+    """Метка работодателя по деньгам с раскрытием признаков и чисел.
+
+    Метка без чисел непроверяема, поэтому рядом всегда стоит, по скольким
+    вакансиям она посчитана и какова медиана отклонения [CORE-019].
+    """
+    row = market_store.load_company(conn, name)
+    if row is None or str(row["level"]) == market_rules.MARK_NONE:
+        return ""
+    try:
+        signs = json.loads(row["signs"] or "[]")
+    except ValueError:
+        signs = []
+    if not signs:
+        return ""
+    level = str(row["level"])
+    deviation = ""
+    if row["deviation"] is not None:
+        deviation = " · медиана отклонения {:+.0%}".format(float(row["deviation"]))
+    head = '<div class="{cls}">{label} · вакансий с известным рынком: {count}{dev}</div>'.format(
+        cls="danger" if level == market_rules.MARK_SET else "warn",
+        label=esc(market_rules.MARK_RU.get(level, level)),
+        count=esc(row["vacancies"]),
+        dev=esc(deviation),
+    )
+    items = "".join(
+        "<li>{}</li>".format(esc(str(sign.get("text") or ""))) for sign in signs
+    )
+    return "<h3>Деньги против рынка</h3>{}<ul>{}</ul>".format(head, items)
+
+
+def render_fake(conn: sqlite3.Connection, name: str, row: sqlite3.Row) -> str:
+    """Метка накрутки и подозрительные отзывы.
+
+    Метка всегда раскрывается: какие признаки сработали и сколько отзывов
+    затронуто. Сами отзывы показываются, а не прячутся: скрытые данные нельзя
+    перепроверить. Вердиктов «фейк» здесь нет — доказать заказной отзыв нельзя,
+    поэтому формулировка «похоже на заказной» и ссылка на источник.
+    """
+    level = str(row["fake_level"] or fake_rules.MARK_NONE)
+    try:
+        signs = json.loads(row["fake_signs"] or "[]")
+    except ValueError:
+        signs = []
+    подозрительные = [
+        item
+        for item in fake_store.load_items(conn, name)
+        if str(item["label"]) != fake_rules.LABEL_CLEAN
+    ]
+    if level == fake_rules.MARK_NONE and not подозрительные:
+        return ""
+
+    head = '<div class="{cls}">{label}</div>'.format(
+        cls="danger" if level == fake_rules.MARK_FAKE else "warn",
+        label=esc(fake_rules.MARK_RU.get(level, level)),
+    )
+    if signs:
+        head += "<ul>{}</ul>".format(
+            "".join("<li>{}</li>".format(esc(sign.get("text") or "")) for sign in signs)
+        )
+
+    rows = []
+    for item in подозрительные:
+        try:
+            signals = json.loads(item["signals"] or "[]")
+        except ValueError:
+            signals = []
+        rows.append(
+            [
+                '<a href="{url}" target=_blank rel=noreferrer>{site}</a>'.format(
+                    url=esc(item["url"]),
+                    site=esc(dossier.SITE_NAMES.get(str(item["site"]), item["site"] or "источник")),
+                ),
+                esc(str(item["dated_at"] or "—")),
+                esc("—" if item["rating"] is None else "{:.1f}".format(float(item["rating"]))),
+                esc(fake_rules.LABEL_RU.get(str(item["label"]), item["label"])),
+                esc("{:.2f}".format(float(item["fake_score"] or 0))),
+                esc("; ".join(fake_rules.SIGNALS[c][1] for c in signals if c in fake_rules.SIGNALS)),
+                esc(item["excerpt"] or ""),
+            ]
+        )
+    table_html = "<p class=muted>Подозрительных отзывов нет.</p>"
+    if rows:
+        table_html = table(
+            ("Площадка", "Дата", "Оценка", "Метка", "Счёт", "Сигналы", "Фрагмент"), rows
+        )
+    return "<h3>Похоже на накрутку отзывов</h3>{}{}".format(head, table_html)
+
+
 def render_company(
     conn: sqlite3.Connection,
     name: str,
@@ -293,6 +389,11 @@ def render_company(
     rating = "—"
     if row["avg_rating"] is not None:
         rating = "{:.1f} из 5".format(float(row["avg_rating"]))
+        if row["avg_rating_all"] is not None and float(row["avg_rating_all"]) != float(
+            row["avg_rating"]
+        ):
+            # Обе средние рядом: разница между ними и есть цена накрутки.
+            rating += " (по всем отзывам {:.1f})".format(float(row["avg_rating_all"]))
     head = (
         '<div class="{cls}">Работодатель: {risk} · отзывов: {count} · средняя оценка: '
         "{rating}</div>"
@@ -302,6 +403,9 @@ def render_company(
         count=esc(row["review_count"]),
         rating=esc(rating),
     )
+
+    fake_block = render_fake(conn, name, row)
+    money_block = render_market(conn, name)
 
     summary = ""
     if row["summary"]:
@@ -349,11 +453,13 @@ def render_company(
         )
 
     about = (
-        "{summary}"
+        "{money}{fake}{summary}"
         "<h3>История публикаций</h3>{signals}"
         "<h3>Закономерности</h3>{patterns}"
         "<h3>Источники</h3>{reviews}"
     ).format(
+        money=money_block,
+        fake=fake_block,
         summary=summary,
         signals=render_signals(conn, name),
         patterns=patterns_block,
@@ -386,89 +492,6 @@ def render_company(
             open_=bool(contacts_sort),
         ),
     )
-
-
-def render_cleanup(
-    conn: sqlite3.Connection,
-    removed: dict[str, int] | None = None,
-    problems: tuple[str, ...] = (),
-) -> str:
-    """Форма очистки. Каждая цель подписана последствиями и числом строк."""
-    counts = maintenance.counts(conn)
-    blocks = []
-    for code, label, warning, danger in maintenance.describe():
-        blocks.append(
-            (
-                '<div class="field {cls}"><label>'
-                '<input type=checkbox name=target value="{code}"> {label} '
-                "<span class=pill>{count}</span></label>"
-                '<div class=hint>{warning}</div></div>'
-            ).format(
-                cls="danger" if danger else "",
-                code=esc(code),
-                label=esc(label),
-                count=esc(counts.get(code, 0)),
-                warning=esc(warning),
-            )
-        )
-
-    notice = ""
-    if problems:
-        notice += "".join(
-            "<div class=warn>{}</div>".format(esc(text)) for text in problems
-        )
-    if removed:
-        lines = "; ".join(
-            "{}: {}".format(maintenance.target_label(code), count)
-            for code, count in removed.items()
-        )
-        notice += "<div class=ok>Удалено — {}</div>".format(esc(lines))
-
-    return (
-        "{notice}"
-        "<p>Отметь, что удалить. Стираются строки, сама база и настройки остаются на "
-        "месте. Профиль и .env не трогаются никогда.</p>"
-        '<form method=post action="/cleanup">{blocks}'
-        '<div class=field><label>Подтверждение</label>'
-        '<input type=text name=confirm placeholder="{word}">'
-        "<div class=hint>Для контактов и истории публикаций нужно ввести {word}: "
-        "эти данные повторным сбором не восстанавливаются.</div></div>"
-        '<div class=field><label><input type=checkbox name=vacuum value="1"> '
-        "Сжать файл базы после очистки</label>"
-        "<div class=hint>Медленно на большой базе, но освобождает место на диске.</div></div>"
-        "<button>Удалить выбранное</button></form>"
-    ).format(notice=notice, blocks="".join(blocks), word=CONFIRM_WORD)
-
-
-def apply_cleanup(
-    conn: sqlite3.Connection, form: dict[str, list[str]]
-) -> tuple[dict[str, int], tuple[str, ...]]:
-    """Разбирает форму и удаляет. Возвращает (что удалено, жалобы).
-
-    Подтверждение требуется только там, где потеря необратима. Спрашивать его на
-    каждый кэш — верный способ научить владельца подтверждать не глядя.
-    """
-    targets = [value for value in (form.get("target") or []) if value]
-    if not targets:
-        return {}, ("Ничего не выбрано — удалять нечего.",)
-
-    unknown = [code for code in targets if code not in maintenance.TARGET_CODES]
-    if unknown:
-        return {}, ("Неизвестная цель: {}".format(", ".join(unknown)),)
-
-    risky = [code for code in targets if code in maintenance.DANGEROUS]
-    confirm = (form.get("confirm") or [""])[0].strip().upper()
-    if risky and confirm != CONFIRM_WORD:
-        labels = ", ".join(maintenance.target_label(code) for code in risky)
-        return {}, (
-            "Не удалено: {labels} — слишком ценные данные. Введи {word} в поле "
-            "подтверждения.".format(labels=labels, word=CONFIRM_WORD),
-        )
-
-    removed = maintenance.wipe(conn, tuple(targets))
-    if (form.get("vacuum") or [""])[0] == "1":
-        maintenance.vacuum(conn)
-    return removed, ()
 
 
 __all__ = (

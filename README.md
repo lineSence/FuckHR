@@ -15,6 +15,13 @@
 > «Дружная команда» → 23 упоминания переработок в отзывах → вакансия публиковалась 5 раз за 8 месяцев →
 > вывод: «утверждение о стабильной команде не подтверждается найденными данными».
 
+Отзывы, похожие на заказные, в оценку не идут, а сама накрутка — отдельный сигнал о компании
+(`docs/fake-reviews.md`).
+
+Зарплата вакансии сравнивается с медианой похожих вакансий из собственных наблюдений за полгода:
+«ниже рынка» и «вилки нет почти нигде» — такие же факты о работодателе, как переработки
+(`docs/market-salary.md`).
+
 Метрика успеха — не «500 откликов в день», а **«5 вакансий с полным досье»**.
 
 ## Статус
@@ -38,6 +45,7 @@ run.py — один прогон, последовательный, без ор�
 hh.ru (HTML поиска, ADR-015) → score.py → db.py (SQLite)
         ↓                                      ↓
   detector.py (история публикаций)      dossier.py + websearch.py + reviewpage.py
+                                       + fake_reviews.py (накрученные отзывы)
         ↓                                      ↓
                      bot.py → Telegram
 ```
@@ -83,6 +91,9 @@ hh.ru (HTML поиска, ADR-015) → score.py → db.py (SQLite)
 - [`docs/roadmap.md`](./docs/roadmap.md) — что сделано и что дальше
 - [`docs/testing.md`](./docs/testing.md) — тесты
 - [`docs/detector.md`](./docs/detector.md) — детектор HR-брехни
+- [`docs/market-salary.md`](./docs/market-salary.md) — рынок зарплат и метки отклонений
+- [`docs/review-quality.md`](./docs/review-quality.md) — легитимность отзывов и проверка разбора
+- [`docs/ai-text.md`](./docs/ai-text.md) — признаки сгенерированного текста
 - [`docs/contacts.md`](./docs/contacts.md) — поиск контактов и письма
 - [`docs/knowledge-lifecycle.md`](./docs/knowledge-lifecycle.md) — как растут знания агента
 - [`docs/contributing.md`](./docs/contributing.md) — как вести код и документацию

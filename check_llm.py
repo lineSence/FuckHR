@@ -76,10 +76,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     print()
     print("Маршруты этапов")
-    print(f"  {'этап':<12}{'профиль':<14}{'куда':<10}модель")
-    for stage, profile, route, model in gateway.describe_routes():
+    print(f"  {'этап':<12}{'профиль':<14}{'куда':<10}{'модель':<28}имя из")
+    for stage, profile, route, model, source in gateway.describe_routes():
         mark = " ← ПД" if stage in llm.PERSONAL_STAGES else ""
-        print(f"  {stage:<12}{profile:<14}{route:<10}{model}{mark}")
+        print(f"  {stage:<12}{profile:<14}{route:<10}{model:<28}{source}{mark}")
 
     if gateway.proxy_base_url:
         print()

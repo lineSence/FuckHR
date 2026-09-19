@@ -42,8 +42,18 @@ TARGETS: tuple[tuple[str, str, tuple[str, ...], str, bool], ...] = (
     (
         "dossier",
         "Досье и отзывы о компаниях",
-        ("company_reviews", "company_dossier"),
-        "Собирается заново при следующем сканировании, но потратит запросы поиска.",
+        (
+            "review_items",
+            "review_hashes",
+            "company_reviews",
+            "company_dossier",
+            "site_lines",
+            "site_health",
+        ),
+        "Собирается заново при следующем сканировании, но потратит запросы поиска. "
+        "Вместе с досье уходят хэши отзывов и шаблонные строки площадок: пока они "
+        "не накопятся заново, ни совпадения текстов между компаниями, ни мусор "
+        "со страниц не отсекаются.",
         False,
     ),
     (
@@ -62,6 +72,15 @@ TARGETS: tuple[tuple[str, str, tuple[str, ...], str, bool], ...] = (
         False,
     ),
     (
+        "market",
+        "Наблюдения по зарплатам",
+        ("market_observations", "market_stats", "company_market"),
+        "Необратимо. Вилки копятся полгода: после очистки срезы рынка станут "
+        "пустыми, метки «ниже/выше рынка» пропадут из карточек и из скоринга, "
+        "пока не наберётся минимум наблюдений заново.",
+        True,
+    ),
+    (
         "history",
         "История публикаций",
         ("vacancy_snapshots",),
@@ -75,7 +94,15 @@ TARGET_CODES = tuple(code for code, _l, _t, _w, _d in TARGETS)
 DANGEROUS = tuple(code for code, _l, _t, _w, danger in TARGETS if danger)
 
 # Порядок важен: сначала зависимое, потом основное.
-EVERYTHING = ("search_cache", "llm_cache", "dossier", "contacts", "vacancies", "history")
+EVERYTHING = (
+    "search_cache",
+    "llm_cache",
+    "dossier",
+    "contacts",
+    "vacancies",
+    "market",
+    "history",
+)
 
 
 def target_label(code: str) -> str:

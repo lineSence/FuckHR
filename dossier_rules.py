@@ -148,6 +148,10 @@ PATTERN_RULES: tuple[tuple[str, str, str, int, tuple[str, ...]], ...] = (
 
 RATING_RE = re.compile(r"(\d[.,]\d|\d)\s*(?:из|/)\s*(?:5|10)\b")
 STARS_RE = re.compile(r"рейтинг[^\d]{0,12}(\d[.,]\d|\d)", re.IGNORECASE)
+# Оценка отдельной строкой: так её рисует dreamjob («5,0» под заголовком
+# отзыва). Только строка целиком и только пятибалльная шкала — иначе в оценку
+# полезут суммы и проценты из текста.
+LONE_RATING_RE = re.compile(r"^[ \t]*([0-5][.,]\d)[ \t]*$", re.MULTILINE)
 
 NEGATIVE_MARKERS = (
     "не рекомендую", "не советую", "бегите", "ужас", "кошмар", "обходите стороной",
@@ -165,12 +169,16 @@ NEGATION_PREFIXES = (
 NEGATION_WINDOW = 20  # сколько символов слева смотрим на отрицание
 
 RISK_UNKNOWN = "unknown"
+# «Данных мало» — это не «нет отзывов». Отзывы были, но после чистки заказных
+# их осталось меньше MIN_CLEAN_REVIEWS, и пересчитывать риск по остаткам нечестно.
+RISK_THIN = "thin"
 RISK_GREEN = "green"
 RISK_YELLOW = "yellow"
 RISK_RED = "red"
 
 RISK_RU = {
     RISK_UNKNOWN: "нет данных",
+    RISK_THIN: "данных мало",
     RISK_GREEN: "претензий не видно",
     RISK_YELLOW: "есть к чему придраться",
     RISK_RED: "красные флаги",

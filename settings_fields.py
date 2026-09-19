@@ -7,6 +7,8 @@ settings, чтобы вызывающие не переучивались.
 
 from __future__ import annotations
 
+import llm
+
 from dataclasses import dataclass
 
 TEXT = "text"
@@ -40,6 +42,7 @@ GROUP_DETECTOR = "Детектор брехни"
 GROUP_SOURCE = "Источник вакансий"
 GROUP_TELEGRAM = "Telegram"
 GROUP_LLM = "Модель"
+GROUP_LLM_STAGES = "Модель по этапам"
 GROUP_SEARCH = "Внешний поиск"
 GROUP_PATHS = "Файлы и логи"
 
@@ -195,7 +198,16 @@ FIELDS: tuple[Field, ...] = (
         GROUP_SOURCE,
         FLOAT,
         "2.0",
-        "Меньше двух секунд — быстрый путь к бану.",
+        "Верхняя граница и точка возврата: сюда пауза прыгает после капчи.",
+    ),
+    Field(
+        "HH_PAUSE_MIN",
+        "Минимальная пауза, сек",
+        GROUP_SOURCE,
+        FLOAT,
+        "0.8",
+        "На чистых ответах пауза плавно снижается до этого значения. "
+        "Ниже 0.5 — быстрый путь к бану.",
     ),
     Field("TELEGRAM_BOT_TOKEN", "Токен бота", GROUP_TELEGRAM, SECRET, "", "Без него карточки только в интерфейсе."),
     Field("TELEGRAM_CHAT_ID", "Чат для карточек", GROUP_TELEGRAM, TEXT, "", "Свой id можно узнать у @userinfobot."),
@@ -254,6 +266,17 @@ FIELDS: tuple[Field, ...] = (
     Field("LLM_PROXY_MODEL_SMART", "Модель для разбора", GROUP_LLM, TEXT, "", "HR-фильтр и скоринг."),
     Field("LLM_PROXY_MODEL_LONG", "Модель для длинных текстов", GROUP_LLM, TEXT, "", "Справка о компании."),
     Field("LLM_PROXY_MODEL_EMBEDDINGS", "Модель векторов", GROUP_LLM, TEXT, "", "Например bge-m3."),
+    *(
+        Field(
+            env_key,
+            "Этап {}".format(stage),
+            GROUP_LLM_STAGES,
+            TEXT,
+            "",
+            "Пусто — берётся модель профиля {}.".format(llm.STAGE_PROFILES[stage]),
+        )
+        for stage, env_key in llm.STAGE_MODEL_ENV.items()
+    ),
     Field(
         "LLM_PERSONAL_VIA_PROXY",
         "Пускать персональные этапы на прокси",
@@ -284,6 +307,30 @@ FIELDS: tuple[Field, ...] = (
     Field("SEARCH_BASIC_AUTH", "Логин:пароль для SearXNG", GROUP_SEARCH, SECRET, "", "Если инстанс закрыт basic-авторизацией."),
     Field("SEARCH_TIMEOUT", "Таймаут поиска, сек", GROUP_SEARCH, FLOAT, "20", ""),
     Field("SEARCH_MAX_CALLS", "Лимит запросов на прогон", GROUP_SEARCH, INT, "60", ""),
+    Field(
+        "SEARCH_WORKERS",
+        "Запросов к поиску одновременно",
+        GROUP_SEARCH,
+        INT,
+        "4",
+        "Досье на компанию — это десяток запросов подряд. Максимум 8.",
+    ),
+    Field(
+        "REVIEW_FETCH_WORKERS",
+        "Страниц отзывов одновременно",
+        GROUP_SEARCH,
+        INT,
+        "4",
+        "Площадки разные, ждать их по очереди незачем. Максимум 8.",
+    ),
+    Field(
+        "LLM_WORKERS",
+        "Вызовов модели одновременно",
+        GROUP_LLM,
+        INT,
+        "4",
+        "Этапы extract и hr_filter идут пулом после сбора. Максимум 8.",
+    ),
     Field("DB_PATH", "Файл базы", GROUP_PATHS, TEXT, "data/fuckhr.sqlite3", ""),
     Field("LOG_PATH", "Файл лога", GROUP_PATHS, TEXT, "data/fuckhr.log", ""),
     Field("FAILURE_DIR", "Куда класть сырой HTML при сбоях", GROUP_PATHS, TEXT, "data/failures", ""),

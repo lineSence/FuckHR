@@ -111,7 +111,7 @@ def _query_row(number: int, slot: Mapping[str, Any]) -> str:
         "q{}_pages".format(number),
         slot.get("max_pages"),
         profile_form.PAGE_CHOICES,
-        "по умолчанию",
+        "все страницы",
     )
     return "<tr><td>{text}</td><td>{area}</td><td>{period}</td><td>{pages}</td></tr>".format(
         text=text, area=area, period=period, pages=pages
@@ -124,7 +124,8 @@ def queries_block(slots: Sequence[Mapping[str, Any]]) -> str:
         "<table><tr><th>Что искать на hh.ru</th><th>Где</th>"
         "<th>За какой срок</th><th>Сколько смотреть</th></tr>{rows}</table>"
         "<div class=hint>Пустые строки игнорируются. Чтобы удалить запрос, "
-        "очисти его текст и сохрани. Больше страниц — больше времени сбора: "
+        "очисти его текст и сохрани. По умолчанию берутся все страницы выдачи, пока "
+        "вакансии не кончатся; ограничение ставь, если сбор идёт слишком долго: "
         "между запросами есть паузы, чтобы hh.ru не считал нас ботом.</div>"
     ).format(rows=rows)
 

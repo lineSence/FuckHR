@@ -63,7 +63,7 @@ def test_выдуманная_вилка_обнуляет_ловушку() -> No
     result = bench.run_case(_gateway({llm.FAST: answer}), case)
     score, note = bench_cases.check(case, result)
     assert score == 0.0
-    assert "выдумала" in note
+    assert "дорисовала" in note
 
 
 def test_кадровик_вместо_тимлида_это_ноль() -> None:
@@ -134,3 +134,152 @@ def test_форма_сравнения_показывает_все_этапы() 
     html = ui_forms.render_bench_form()
     assert all(stage in html for stage in bench.STAGES)
     assert 'action="/bench"' in html
+
+
+def test_отчёт_показывает_таблицу_а_не_лог(tmp_path) -> None:
+    """Результат сравнения читается глазами: баллы в таблице, а не в логе."""
+    import ui_bench
+
+    rows = [
+        bench.Row("быстрая", "extract", "к1", 1.0, "", 0.5),
+        bench.Row("медленная", "extract", "к1", 0.2, "выдумала вилку", 4.0),
+    ]
+    path = tmp_path / "last.json"
+    bench.save_report(str(path), rows, ["быстрая", "медленная"], bench_cases.CASES, 1, "proxy")
+
+    report = ui_bench.load_report(path)
+    assert report is not None
+    html = ui_bench.render_report(report)
+    assert "<table>" in html and "Лучший балл" in html
+    assert "быстрая" in html and "выдумала вилку" in html
+    assert 'class="danger">0.20' in html
+
+
+def test_битый_отчёт_не_роняет_страницу(tmp_path) -> None:
+    import ui_bench
+
+    path = tmp_path / "last.json"
+    path.write_text("{не json", encoding="utf-8")
+    assert ui_bench.load_report(path) is None
+    assert ui_bench.load_report(tmp_path / "нет-такого.json") is None
+
+
+def test_прогресс_печатается_счётчиком() -> None:
+    """Полоску загрузки интерфейс берёт из строк вида «[3/30]»."""
+    import jobs
+
+    assert jobs.parse_progress("[3/30] быстрая · к1 · 1.00 за 0.4 с") == (3, 30)
+
+
+def test_рекомендация_учитывает_скорость_при_равном_балле() -> None:
+    """Разница в две сотых балла ничего не значит, секунды на вызов — значат."""
+    rows = [
+        bench.Row("медленная", "extract", "к1", 1.0, "", 8.0),
+        bench.Row("быстрая", "extract", "к1", 0.98, "", 0.7),
+        bench.Row("быстрая", "company", "к2", 0.3, "выдумала цифру", 0.5),
+        bench.Row("медленная", "company", "к2", 1.0, "", 6.0),
+    ]
+    picks = bench.recommend(rows)
+    assert picks["extract"][0] == "быстрая"
+    # На company разрыв большой: скорость не спасает.
+    assert picks["company"][0] == "медленная"
+
+
+def test_модель_ставится_на_этап_а_не_на_профиль() -> None:
+    """Имя этапа сильнее имени профиля: у extract и resume_section один профиль."""
+    gateway = llm.Gateway(
+        proxy_base_url="http://proxy/v1",
+        proxy_models={llm.FAST: "общая"},
+        stage_models={"extract": "своя-на-extract"},
+    )
+    assert gateway.model_for("extract") == ("своя-на-extract", "этап")
+    assert gateway.model_for("resume_section") == ("общая", "профиль")
+    routes = {row[0]: (row[3], row[4]) for row in gateway.describe_routes()}
+    assert routes["extract"] == ("своя-на-extract", "этап")
+
+
+def test_форма_подстановки_предлагает_ключи_env() -> None:
+    import ui_bench
+
+    rows = [bench.Row("быстрая", "extract", "к1", 1.0, "", 0.7)]
+    html = ui_bench.render_apply_form(rows)
+    assert "LLM_STAGE_MODEL_EXTRACT" in html
+    assert 'action="/llm/apply"' in html
+    assert "LLM_STAGE_MODEL_EXTRACT" in ui_bench.ENV_KEYS
+
+
+def test_ловушка_про_вилку_ловит_число_а_не_поле() -> None:
+    """Про зарплату в тексте сказано: условие с дословной цитатой — не ошибка.
+
+    Ловушка существует ради выдуманной суммы. Раньше она снимала балл за само
+    поле salary, и пройти её честным разбором было нельзя.
+    """
+    case = _case("extract: вилки нет")
+    honest = json.dumps(
+        {
+            "conditions": [
+                {
+                    "field": "salary",
+                    "value": "обсуждается на собеседовании",
+                    "quote": "Обсуждаем зарплату на собеседовании",
+                }
+            ]
+        },
+        ensure_ascii=False,
+    )
+    invented = json.dumps(
+        {
+            "conditions": [
+                {
+                    "field": "salary",
+                    "value": "от 200 000 на руки",
+                    "quote": "Обсуждаем зарплату на собеседовании",
+                }
+            ]
+        },
+        ensure_ascii=False,
+    )
+    good = bench.run_case(_gateway({llm.FAST: honest}), case)
+    assert bench_cases.check(case, good) == (1.0, "чисто: 1")
+
+    bad = bench.run_case(_gateway({llm.FAST: invented}), case)
+    score, note = bench_cases.check(case, bad)
+    assert score == 0.0 and "200000" in note
+
+
+def test_кейсы_покрывают_все_этапы_с_вызовом_модели() -> None:
+    """Этап, который ходит в модель, должен быть в наборе: иначе его не сравнить.
+
+    score и embeddings вызова не делают: скоринг детерминированный [CORE-015],
+    а векторы — не текстовая задача, правилами их не оценить.
+    """
+    import llm
+
+    covered = {case.stage for case in bench_cases.CASES}
+    assert covered == set(bench.STAGES)
+    assert set(llm.STAGE_PROFILES) - covered == {"score", "embeddings"}
+
+
+def test_ловушка_разговора_ловит_догадки() -> None:
+    """Из «хочу что-то на Python» критерии не выводятся — их спрашивают."""
+    case = _case("intake: ничего не сказано (ловушка)")
+    guessed = json.dumps(
+        {"questions": [], "profile": {"salary_min_net": 300000}}, ensure_ascii=False
+    )
+    result = bench.run_case(_gateway({llm.SMART: guessed}), case)
+    score, note = bench_cases.check(case, result)
+    assert score == 0.0 and "наугад" in note
+
+    asked = json.dumps(
+        {"questions": ["Какая роль?"], "profile": {}}, ensure_ascii=False
+    )
+    good = bench.run_case(_gateway({llm.SMART: asked}), case)
+    assert bench_cases.check(case, good)[0] == 1.0
+
+
+def test_сводка_по_отзывам_не_дорисовывает_цифры() -> None:
+    case = _case("dossier: сводка по отзывам")
+    invented = "Задержки до 7 месяцев и текучка 80%."
+    result = bench.run_case(_gateway({llm.LOCAL: invented}), case)
+    score, note = bench_cases.check(case, result)
+    assert score == 0.0 and "дорисовала числа" in note
