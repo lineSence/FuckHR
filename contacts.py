@@ -557,7 +557,12 @@ def load(conn: sqlite3.Connection, key: str) -> list[sqlite3.Row]:
 
 
 def coverage(conn: sqlite3.Connection) -> tuple[int, int]:
-    """(вакансий с прямым контактом, вакансий с любым контактом)."""
+    """(вакансий с прямым контактом, вакансий с любым контактом).
+
+    Схема создаётся здесь же: страницы интерфейса открываются и до первого
+    прогона писем, и пустая таблица — нормальное состояние, а не ошибка.
+    """
+    ensure_schema(conn)
     direct = conn.execute(
         "SELECT COUNT(DISTINCT key) FROM contacts WHERE role_rank <= 4"
     ).fetchone()[0]

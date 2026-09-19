@@ -2,7 +2,7 @@
 
     hh.ru (HTML поиска) -> предфильтр -> страница вакансии -> скоринг
     -> условия работы -> детектор утверждений -> SQLite
-    -> досье на компании (параллельно) -> Telegram
+    -> досье на компании (параллельно) -> рабочие контакты -> Telegram
 
 Источник данных — HTML страниц hh.ru: публичный API закрыт с апреля 2026
 (ADR-015). Запускается из Task Scheduler через pythonw.exe (ADR-014).
@@ -16,20 +16,22 @@
 набралось N вакансий, прошедших предфильтр, остальные страницы и запросы не
 запрашиваются.
 
-У прогона пять обязанностей:
+У прогона шесть обязанностей:
 1. собрать и отправить карточки;
 2. зафиксировать историю — и появление, и исчезновение вакансии (ADR-010);
 3. сопоставить утверждения вакансии с этой историей (detector.py, ADR-009);
 4. собрать досье на компании, чьи вакансии прошли порог (research.py);
-5. пожаловаться, если сам сломался (canary.py), а не тихо вернуть ноль.
+5. найти рабочие контакты по этим же вакансиям (outreach.collect_contacts);
+6. пожаловаться, если сам сломался (canary.py), а не тихо вернуть ноль.
 
 Почему досье собирается параллельно и после порога — см. research.py. Порог
 здесь главный фильтр цены: досье собирается только по тем конторам, чей оффер
 вообще интересен.
 
-Писем здесь нет и не будет. Контакты и черновики готовит outreach.py по
-явному запросу владельца: письмо — решение человека, а не побочный эффект
-ночного сканирования ([OUT-006], ADR-012).
+Контакты ищутся здесь, письма — нет. Наличие рабочего канала — такой же факт
+о вакансии, как скор и HR-флаги, и он нужен в карточке сразу. А черновик письма
+готовится кнопкой рядом с вакансией или запуском outreach.py: письмо — решение
+человека, а не побочный эффект ночного сканирования ([OUT-006], ADR-012).
 
 Где здесь модель (ADR-005, ADR-017). Три этапа и все необязательные: extract
 (условия из описания), hr_filter (указать на проверяемые утверждения), company
@@ -53,13 +55,17 @@ from dotenv import load_dotenv
 import bot as tg
 import canary
 import conditions
+import contact_finds
+import contacts
 import db
 import detector
 import detector_llm
 import dossier
 import llm
 import llm_tasks
+import outreach
 import settings
+import websearch
 from hh import Vacancy, enrich
 from hh_html import BlockedError, HHHtmlClient
 from research import (  # noqa: F401 — реэкспорт для старых вызовов
@@ -240,6 +246,8 @@ def main() -> int:
     drafts: dict[str, Vacancy] = {}
     # Компании вакансий, прошедших скоринг: именно их изучаем после сбора.
     to_research: dict[str, str | None] = {}
+    # Ключи тех же вакансий: по ним после досье ищутся рабочие контакты.
+    to_contact: list[str] = []
 
     client = HHHtmlClient(
         pause=settings.as_float(os.getenv("HH_PAUSE"), 2.0),
@@ -284,6 +292,7 @@ def main() -> int:
             # и приблизить капчу.
             if verdict.score >= profile.min_score and vacancy.company:
                 to_research.setdefault(vacancy.company, getattr(vacancy, "site_url", None))
+                to_contact.append(vacancy.key)
 
             # Этап extract. Только для вакансий, прошедших скоринг: гонять модель
             # по отклонённым — жечь бюджет вызовов ради данных, которые никто не прочтёт.
@@ -328,6 +337,35 @@ def main() -> int:
             conn, db_path, to_research, use_llm=options.use_llm
         )
 
+    # Контакты ищутся здесь же, сразу после досье: наличие рабочего канала —
+    # такой же факт о вакансии, как скор и HR-флаги, и он нужен в карточке до
+    # всякого письма. Письма отсюда не готовятся ([OUT-006], ADR-012).
+    if to_contact:
+        provider = websearch.SearchProvider.from_env(conn)
+        if not provider.enabled:
+            log.info(
+                "контакты ищем только в тексте вакансий: %s", provider.disabled_reason
+            )
+        placeholders = ",".join("?" for _ in to_contact)
+        contact_targets = conn.execute(
+            f"SELECT * FROM vacancies WHERE key IN ({placeholders})", to_contact
+        ).fetchall()
+        with_channel = outreach.collect_contacts(
+            conn,
+            contact_targets,
+            provider,
+            check_mx=settings.outreach_options().check_mx,
+        )
+        direct, scanned = contact_finds.coverage(conn)
+        log.info(
+            "контакты: канал нашёлся у %s из %s вакансий этого прогона "
+            "(в базе с прямым каналом %s из %s)",
+            with_channel,
+            len(contact_targets),
+            direct,
+            scanned,
+        )
+
     notify_if_broken(
         canary.RunStats(
             collected=len(seen),
@@ -353,6 +391,11 @@ def main() -> int:
         if saved is not None:
             lines += dossier.row_to_lines(saved)
         lines += detector.load_lines(conn, row["key"])
+        # Контакт в карточке: без него владелец не видит, есть ли вообще вход
+        # мимо HR-воронки.
+        find = contact_finds.load(conn, row["key"], row["company"])
+        if find is not None:
+            lines += contacts.format_contact_lines(find, limit=1)
         signals[row["key"]] = lines
 
     if args.dry_run:

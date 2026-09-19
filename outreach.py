@@ -48,6 +48,7 @@ from typing import Any, Sequence
 import yaml
 
 import conditions
+import contact_finds
 import contacts
 import db
 import detector
@@ -176,6 +177,69 @@ def pages_from_hits(hits: Sequence[websearch.Hit]) -> list[tuple[str, str]]:
     return [(hit.url, f"{hit.title}\n{hit.snippet}") for hit in hits]
 
 
+def find_contacts(
+    conn: sqlite3.Connection,
+    row: sqlite3.Row,
+    provider: websearch.SearchProvider,
+    check_mx: bool = False,
+) -> tuple[contacts.Discovery, list[websearch.Hit]]:
+    """Ищет рабочие каналы по одной вакансии. Внешний поиск — один раз.
+
+    Хиты возвращаются наружу: справка о компании собирается из них же, чтобы
+    не платить за второй поиск.
+    """
+    company = row["company"]
+    text = "\n".join(str(row[field] or "") for field in ("title", "description"))
+    hits = company_hits(provider, company)
+    pages = pages_from_hits(hits)
+    site_url = next((contacts.domain_of(url) for url, _ in pages if contacts.domain_of(url)), None)
+    discovery = contacts.discover(
+        key=row["key"],
+        company=company,
+        vacancy_text=text,
+        company_pages=pages,
+        site_url=site_url,
+        check_mx=check_mx,
+        vacancy_url=row["url"],
+    )
+    return discovery, hits
+
+
+def collect_contacts(
+    conn: sqlite3.Connection,
+    rows: Sequence[sqlite3.Row],
+    provider: websearch.SearchProvider,
+    check_mx: bool = False,
+) -> int:
+    """Этап discovery в общем прогоне: найти каналы и сложить их в базу.
+
+    Письма здесь не готовятся: письмо — решение владельца ([OUT-006]), а
+    наличие контакта — такой же факт о вакансии, как скор или HR-флаги, и
+    собирать его отдельным запуском незачем.
+    """
+    if not rows:
+        return 0
+    found = 0
+    for position, row in enumerate(rows, start=1):
+        reason = precondition(conn, row)
+        if reason:
+            log.debug("%s: контакты не ищем — %s", row["key"], reason)
+            continue
+        discovery, _ = find_contacts(conn, row, provider, check_mx=check_mx)
+        contact_finds.save(conn, discovery)
+        if discovery.candidates:
+            found += 1
+        # Счётчик в квадратных скобках — по нему интерфейс рисует полоску.
+        log.info(
+            "[%s/%s] контакты: %s — %s",
+            position,
+            len(rows),
+            row["company"] or "компания не указана",
+            f"каналов {len(discovery.candidates)}" if discovery.candidates else "ничего",
+        )
+    return found
+
+
 def _brief_reason(brief: Any | None) -> str | None:
     """Первая строка справки как повод писать.
 
@@ -210,23 +274,19 @@ def process_row(
     if contacts.recently_contacted(conn, None, company):
         return contacts.Discovery(key=row["key"], company=company), None, "писали меньше трёх месяцев назад"
 
-    text = "\n".join(str(row[field] or "") for field in ("title", "description"))
-    hits = company_hits(provider, company)
-    pages = pages_from_hits(hits)
-    site_url = next((contacts.domain_of(url) for url, _ in pages if contacts.domain_of(url)), None)
-    discovery = contacts.discover(
-        key=row["key"],
-        company=company,
-        vacancy_text=text,
-        company_pages=pages,
-        site_url=site_url,
-        check_mx=check_mx,
-        vacancy_url=row["url"],
-    )
+    # Контакты ищет общий сбор; здесь берём готовое и не платим за поиск
+    # второй раз. Пусто — значит этап по вакансии ещё не отрабатывал.
+    hits: list[websearch.Hit] = []
+    discovery = contact_finds.load(conn, row["key"], company)
+    if discovery is None:
+        discovery, hits = find_contacts(conn, row, provider, check_mx=check_mx)
+        contact_finds.save(conn, discovery)
 
     # Этап company. Справка собирается только из уже полученных сниппетов:
     # модель в сеть не ходит и свои знания о компании не вспоминает.
     brief = None
+    if gateway is not None and not hits:
+        hits = company_hits(provider, company)
     if gateway is not None and hits:
         brief = llm_tasks.company_brief(gateway, company or "", hits)
 
