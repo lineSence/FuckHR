@@ -74,8 +74,11 @@ from ui_core import (
     table,
     text_field,
 )
+import bench
 from ui_forms import (
+    bench_models,
     profile_summary,
+    render_bench_form,
     render_llm,
     render_profile,
     render_search,
@@ -212,6 +215,38 @@ class Handler(BaseHTTPRequestHandler):
                 task = (form.get("task") or [""])[0]
                 try:
                     job = jobs.runner.start(task)
+                except (KeyError, RuntimeError) as exc:
+                    body, refresh = render_run(
+                        None, "<div class=warn>{}</div>".format(esc(exc))
+                    )
+                    self._send(page("Запуск", body, refresh))
+                    return
+                self._redirect("/?job={}".format(job.id))
+                return
+
+            if parsed.path == "/bench":
+                # Единственная задача с аргументами из формы: имена моделей
+                # проходят через bench_models, дальше argv собирает jobs.TASKS.
+                models = bench_models((form.get("models") or [""])[0])
+                stages = [s for s in (form.get("stage") or []) if s in bench.STAGES]
+                repeat = max(1, min(5, settings.as_int((form.get("repeat") or ["1"])[0], 1)))
+                if not models:
+                    conn = open_db()
+                    try:
+                        note = (
+                            "<div class=warn>Не разобрал ни одного имени модели. "
+                            "Пиши их через запятую, как в config.yaml прокси.</div>"
+                        )
+                        body = render_llm(conn) + render_bench_form(note)
+                        self._send(page("Модель", body))
+                    finally:
+                        conn.close()
+                    return
+                extra = ["--models", ",".join(models), "--repeat", str(repeat)]
+                if stages:
+                    extra += ["--stages", ",".join(stages)]
+                try:
+                    job = jobs.runner.start("bench", extra)
                 except (KeyError, RuntimeError) as exc:
                     body, refresh = render_run(
                         None, "<div class=warn>{}</div>".format(esc(exc))

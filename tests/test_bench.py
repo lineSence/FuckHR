@@ -105,3 +105,32 @@ def test_отчёт_выбирает_победителя_по_этапам() ->
     }
     report = bench.render(rows)
     assert "extract" in report and "быстрая" in report
+
+
+def test_имена_моделей_из_формы_фильтруются() -> None:
+    """Единственное место, где строка из браузера идёт в командную строку."""
+    import ui_forms
+
+    assert ui_forms.bench_models("qwen2.5:7b, openai/gpt-4o-mini") == [
+        "qwen2.5:7b",
+        "openai/gpt-4o-mini",
+    ]
+    assert ui_forms.bench_models("rm -rf /; cat .env") == []
+    assert ui_forms.bench_models("a, a, a") == ["a"]
+    assert len(ui_forms.bench_models(",".join("m{}".format(i) for i in range(20)))) == 6
+
+
+def test_задача_сравнения_не_висит_кнопкой_на_запуске() -> None:
+    """У bench своя форма: без имён моделей кнопка была бы обманом."""
+    import jobs
+
+    assert "bench" in jobs.TASKS
+    assert "bench" not in [key for key, _, _ in jobs.task_list()]
+
+
+def test_форма_сравнения_показывает_все_этапы() -> None:
+    import ui_forms
+
+    html = ui_forms.render_bench_form()
+    assert all(stage in html for stage in bench.STAGES)
+    assert 'action="/bench"' in html

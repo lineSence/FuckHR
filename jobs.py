@@ -34,6 +34,7 @@ import sys
 import threading
 import time
 from dataclasses import dataclass, field
+from typing import Sequence
 from pathlib import Path
 from typing import Sequence
 
@@ -76,6 +77,13 @@ TASKS: dict[str, tuple[str, tuple[str, ...], str]] = {
         "Проверка модели",
         ("check_llm.py", "--live"),
         "Проверяет адреса, ключи и маршруты, делает один живой вызов на выдуманном тексте.",
+    ),
+    # Модели задаёт форма на странице «Модель»: без них команда не имеет смысла,
+    # поэтому кнопки на странице запуска у задачи нет.
+    "bench": (
+        "Сравнение моделей",
+        ("bench.py",),
+        "Гоняет одинаковые задачи пайплайна на нескольких моделях и считает баллы.",
     ),
     "tests": (
         "Тесты",
@@ -201,8 +209,13 @@ class Runner:
 
     # —— управление ——
 
-    def start(self, task: str) -> Job:
-        """Запускает задачу из TASKS. Готовая строка из браузера не принимается."""
+    def start(self, task: str, extra: Sequence[str] = ()) -> Job:
+        """Запускает задачу из TASKS. Готовая строка из браузера не принимается.
+
+        extra — уже проверенные вызывающим аргументы (сейчас это только имена
+        моделей для bench.py). Сама команда всё равно берётся из TASKS: из
+        браузера не должно приходить ничего, что попадёт в argv[0].
+        """
         if task not in TASKS:
             raise KeyError("неизвестная задача: {}".format(task))
         busy = self.active()
@@ -212,6 +225,7 @@ class Runner:
             )
 
         title, args, _ = TASKS[task]
+        args = tuple(args) + tuple(extra)
         job = Job(
             id=next(_counter),
             task=task,
@@ -314,9 +328,17 @@ class Runner:
             self._echo(job, summary)
 
 
+# Задачи, у которых своя форма: на странице запуска кнопки им не нужны.
+FORM_TASKS = frozenset({"bench"})
+
+
 def task_list() -> list[tuple[str, str, str]]:
     """Задачи для кнопок: ключ, название, пояснение."""
-    return [(key, title, help_text) for key, (title, _, help_text) in TASKS.items()]
+    return [
+        (key, title, help_text)
+        for key, (title, _, help_text) in TASKS.items()
+        if key not in FORM_TASKS
+    ]
 
 
 # Единый экземпляр на процесс интерфейса.
@@ -331,5 +353,6 @@ __all__ = (
     "TASKS",
     "parse_progress",
     "runner",
+    "FORM_TASKS",
     "task_list",
 )

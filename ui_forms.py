@@ -14,13 +14,16 @@
 from __future__ import annotations
 
 import os
+import re
 import sqlite3
 from pathlib import Path
 from typing import Sequence
 
 import yaml
 
+import bench
 import contacts
+import jobs
 import llm
 import profile_form
 import settings
@@ -151,6 +154,10 @@ def render_search(
     return "".join(parts) + form + current
 
 
+# Имена моделей у LiteLLM выглядят как openai/gpt-4o-mini, qwen2.5:7b, auto:fast.
+BENCH_NAME_RE = re.compile(r"[A-Za-z0-9._:/@-]{1,80}")
+
+
 # ———— модель ————
 
 
@@ -225,7 +232,72 @@ def render_llm(conn: sqlite3.Connection, probe: bool = False) -> str:
         "<p class=muted>Живой вызов на выдуманном тексте — задача «Проверка модели» "
         'на <a href="/">странице запуска</a>.</p>'
     )
+    parts.append(render_bench_form())
     return "".join(parts)
+
+
+def render_bench_form(note: str = "") -> str:
+    """Форма сравнения моделей.
+
+    Имена моделей приходят из браузера, поэтому в команду они попадают только
+    после проверки bench_models(): argv собирается из закрытого списка задач,
+    а не из строки формы.
+    """
+    stages = "".join(
+        '<label><input type=checkbox name=stage value="{s}" checked> {s}</label>'.format(
+            s=esc(stage)
+        )
+        for stage in bench.STAGES
+    )
+    last = jobs.runner.last("bench")
+    report = ""
+    if last is not None:
+        # Отчёт печатается в stdout задачи, поэтому показываем хвост её лога:
+        # держать вторую копию результата в базе незачем [CORE-025].
+        tail = "\n".join(last.tail(120)).strip()
+        report = (
+            "<h3>Последний прогон</h3>"
+            "<p class=muted>{status} · {models} · "
+            '<a href="/?job={id}">полный лог</a></p>{body}'
+        ).format(
+            status=esc(last.status),
+            models=esc(" ".join(last.argv[1:]) or "без аргументов"),
+            id=last.id,
+            body="<pre>{}</pre>".format(esc(tail)) if tail else "",
+        )
+    return (
+        "<h2>Сравнение моделей</h2>"
+        "<p class=muted>Одни и те же задачи пайплайна на нескольких моделях. "
+        "Оценка считается правилами: дословная цитата, никаких новых чисел, "
+        "адресат из списка. Половина кейсов — ловушки.</p>"
+        "{note}"
+        '<form method=post action="/bench">'
+        '<div class=field><label>Модели через запятую</label>'
+        '<input type=text name=models placeholder="qwen2.5-7b, gpt-4o-mini">'
+        "<div class=hint>Имена как в config.yaml прокси. Список живых имён — "
+        "по ссылке «Спросить список моделей» выше.</div></div>"
+        '<div class=field><label>Этапы</label><div class=checks>{stages}</div></div>'
+        '<div class=field><label>Прогонов на кейс</label>'
+        '<input type=number name=repeat value="1" min="1" max="5">'
+        "<div class=hint>Больше одного нужно, когда модели отвечают нестабильно: "
+        "каждый прогон — это реальные вызовы и время.</div></div>"
+        "<button>Сравнить</button></form>{report}"
+    ).format(note=note, stages=stages, report=report)
+
+
+def bench_models(raw: str) -> list[str]:
+    """Имена моделей из формы. Всё подозрительное молча выбрасывается.
+
+    Это единственное место, где строка из браузера идёт в командную строку,
+    поэтому список символов закрытый: буквы, цифры и то, что встречается в
+    именах моделей LiteLLM.
+    """
+    out = []
+    for chunk in (raw or "").replace(";", ",").split(","):
+        name = chunk.strip()
+        if name and BENCH_NAME_RE.fullmatch(name) and name not in out:
+            out.append(name)
+    return out[:6]
 
 
 # ———— профиль: точечные операции ————
@@ -281,6 +353,8 @@ def profile_summary(profile_path: str | Path) -> list[tuple[str, str]]:
 __all__ = (
     "LIST_HINTS",
     "profile_summary",
+    "bench_models",
+    "render_bench_form",
     "render_llm",
     "render_profile",
     "render_search",
