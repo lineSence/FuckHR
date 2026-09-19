@@ -34,9 +34,8 @@ import sys
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Sequence
 from pathlib import Path
-from typing import Sequence
+from typing import Mapping, Sequence
 
 log = logging.getLogger("jobs")
 
@@ -113,6 +112,7 @@ class Job:
     stopped: bool = False
     done: int | None = None
     total: int | None = None
+    env: dict[str, str] = field(default_factory=dict)
 
     @property
     def running(self) -> bool:
@@ -209,12 +209,21 @@ class Runner:
 
     # —— управление ——
 
-    def start(self, task: str, extra: Sequence[str] = ()) -> Job:
+    def start(
+        self,
+        task: str,
+        extra: Sequence[str] = (),
+        env: Mapping[str, str] | None = None,
+    ) -> Job:
         """Запускает задачу из TASKS. Готовая строка из браузера не принимается.
 
         extra — уже проверенные вызывающим аргументы (сейчас это только имена
         моделей для bench.py). Сама команда всё равно берётся из TASKS: из
         браузера не должно приходить ничего, что попадёт в argv[0].
+
+        env — переменные окружения только на этот запуск, тоже проверенные
+        вызывающим. Нужны для разовых режимов вроде сбора образцов страниц:
+        .env при этом не меняется, и следующий прогон пойдёт как обычно.
         """
         if task not in TASKS:
             raise KeyError("неизвестная задача: {}".format(task))
@@ -232,6 +241,7 @@ class Runner:
             title=title,
             argv=tuple(args),
             started_at=time.time(),
+            env=dict(env or {}),
         )
         self.log_dir.mkdir(parents=True, exist_ok=True)
         job.log_path = self.log_dir / "{}-{}.log".format(job.id, task)
@@ -291,6 +301,7 @@ class Runner:
         # логи приезжают в браузер кракозябрами.
         env["PYTHONIOENCODING"] = "utf-8"
         env["PYTHONUTF8"] = "1"
+        env.update(job.env)
 
         handle = None
         try:

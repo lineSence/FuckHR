@@ -138,3 +138,23 @@ def test_страница_не_про_нас_не_попадает_в_досье
     )
     # Живой отзыв остался, меню выброшено.
     assert len(своё.items) == 1
+
+
+def test_галочка_на_главной_включает_сбор_образцов(monkeypatch):
+    """ВРЕМЕННО: проверка разового режима дампа страниц (docs/review-quality.md)."""
+    import jobs
+    import ui_views
+
+    body, _refresh = ui_views.render_run()
+    assert "dump_pages" in body and "образцы страниц" in body
+
+    captured: dict = {}
+
+    def fake_run(self, job):  # noqa: ANN001
+        captured.update(job.env)
+
+    monkeypatch.setattr(jobs.Runner, "_run", fake_run)
+    job = jobs.runner.start(
+        "collect-dry", env={"REVIEW_PAGE_DUMP_DIR": "data/pages"}
+    )
+    assert job.env["REVIEW_PAGE_DUMP_DIR"] == "data/pages"
