@@ -38,6 +38,10 @@ STAGE_PROFILES: dict[str, str] = {
     "dossier": LOCAL,
     # review_fake — тексты чужих отзывов, где встречаются имена сотрудников.
     "review_fake": LOCAL,
+    # ai_text — «текст похож на сгенерированный». Решением владельца этап не
+    # local-only и не в PERSONAL_STAGES: описания вакансий публичны, а для
+    # отзывов это осознанное отступление (docs/ai-text.md).
+    "ai_text": FAST,
     "draft": LOCAL,
     "resume_section": FAST,
     "resume_tailor": FAST,

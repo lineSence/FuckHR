@@ -62,6 +62,8 @@ import detector_llm
 import dossier
 import llm
 import llm_batch
+import aitext
+import aitext_rules
 import market
 import market_company
 import market_store
@@ -191,6 +193,11 @@ def main() -> int:
                 except Exception:  # noqa: BLE001 — вакансия могла быть уже закрыта
                     log.warning("нет деталей по %s, берём черновик", draft.external_id)
             marker = market_store.marker_for(conn, vacancy)
+            # Оценка описания: только детерминированная часть. Судью здесь не
+            # зовём — вызов на каждую вакансию выдачи не окупается [CORE-016].
+            ai_verdict = aitext.assess(
+                vacancy.description, aitext_rules.VACANCY, vacancy.published_at
+            )
             verdict = evaluate(vacancy, profile, prefilter.fuzzy, market_marker=marker)
             # Слепок пишется для всего, даже для отклоныённого: история публикаций
             # нужна детектору независимо от нашего интереса (ADR-009, ADR-010).
@@ -199,7 +206,12 @@ def main() -> int:
                 log.info("    отклонена: %s", verdict.reject_reason)
                 continue
             if db.upsert_vacancy(
-                conn, vacancy, verdict.score, verdict.reasons, market_marker=marker
+                conn,
+                vacancy,
+                verdict.score,
+                verdict.reasons,
+                market_marker=marker,
+                ai_verdict=ai_verdict,
             ):
                 new_count += 1
             log.info("    скор %.1f", verdict.score)
@@ -330,6 +342,9 @@ def main() -> int:
         lines: list[str] = []
         if row["market_label"]:
             lines.append(market.row_line(row))
+        ai_line = aitext.row_line(row)
+        if ai_line:
+            lines.append(ai_line)
         saved = dossier.load(conn, row["company"]) if row["company"] else None
         if saved is not None:
             lines += dossier.row_to_lines(saved)

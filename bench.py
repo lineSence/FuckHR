@@ -48,6 +48,7 @@ STAGES = (
     "contacts",
     "dossier",
     "review_fake",
+    "ai_text",
     "draft",
     "resume_section",
     "resume_tailor",
@@ -149,6 +150,11 @@ def run_case(gateway: Any, case: Case) -> Any:
             for i, body in enumerate(case.payload["reviews"])
         )
         return fake_llm.ad_indexes(gateway, items, force=True)
+    if case.stage == "ai_text":
+        import aitext_llm
+
+        texts = dict(enumerate(case.payload["texts"]))
+        return aitext_llm.generated_indexes(gateway, texts, force=True)
     raise ValueError("неизвестный этап: {}".format(case.stage))
 
 

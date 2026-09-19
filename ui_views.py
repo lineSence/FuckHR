@@ -21,6 +21,7 @@ import db
 import detector
 import jobs
 import llm
+import aitext
 import market
 import market_rules
 import outreach
@@ -478,6 +479,15 @@ def render_vacancy(conn: sqlite3.Connection, key: str, with_draft: bool) -> str:
                 cls=MARKET_CLASS.get(str(row["market_label"] or ""), "muted"),
                 line=esc(market_line),
             )
+        )
+
+    ai_line = aitext.row_line(row)
+    if ai_line:
+        parts.append(
+            '<h2>Текст описания</h2><div class="warn">{line}</div>'
+            "<p class=muted>Это свойство текста, а не вывод о происхождении: "
+            "детекторы сгенерированного текста ненадёжны. Смысл сигнала в том, "
+            "что проверять в описании нечего.</p>".format(line=esc(ai_line))
         )
 
     if row["score_reasons"]:

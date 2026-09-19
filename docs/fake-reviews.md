@@ -24,6 +24,7 @@
 | Агрегаты и метка компании | `fake_company.evaluate` |
 | Хранение отзывов и хэшей | `fake_store` |
 | Необязательный сигнал модели (этап `review_fake`) | `fake_llm.ad_indexes` |
+| Сигнал «текст похож на сгенерированный» (вес 2.0) | `aitext.assess`, `docs/ai-text.md` |
 | Пороги, веса и словари | `fake_rules` |
 
 Разделители отзывов ищутся по классу блока (`review`, `otzyv`, `comment`,

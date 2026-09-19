@@ -37,6 +37,7 @@ dossier.build(company)
   → websearch.SearchProvider   поиск по сайтам отзывов (SearXNG / Tavily / Brave), кэш search_cache
   → reviewpage.PageFetcher     чтение самих страниц отзывов, кэш page_cache на 30 дней
   → reviewitems.split_page     страница → отдельные отзывы: дата, оценка, плюсы, минусы
+  → aitext.assess              признак сгенерированного текста (docs/ai-text.md)
   → fake_reviews.score_items   fake_score по сигналам накрутки, без модели
   → fake_company.evaluate      метка компании и средняя без заказных отзывов
   → dossier_text.find_patterns словарь маркеров + учёт отрицаний, без модели
@@ -101,6 +102,7 @@ dossier.build(company)
 | `reviewitems.py` | страница → отдельные отзывы: дата, оценка, плюсы, минусы |
 | `fake_reviews.py`, `fake_rules.py`, `fake_company.py`, `fake_store.py`, `fake_llm.py` | детекция накрученных отзывов: сигналы, пороги, метка компании, хранение, сигнал модели |
 | `market.py`, `market_rules.py`, `market_store.py`, `market_company.py` | рынок зарплат: разбор вилки и среза, пороги, хранение и срезы, метка работодателя (`docs/market-salary.md`) |
+| `aitext.py`, `aitext_rules.py`, `aitext_llm.py` | признаки сгенерированного текста в вакансиях и отзывах (`docs/ai-text.md`) |
 | `resume.py` | резюме: блоки, подтверждение, экспорт, стаж, противоречия (без модели) |
 | `resume_llm.py` | черновик секции и отбор блоков под вакансию |
 | `contacts.py`, `contacts_rules.py` | поиск рабочих контактов, лог и дедуп, словари этапа |

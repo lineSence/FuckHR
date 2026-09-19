@@ -23,6 +23,8 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Iterable, Mapping, Sequence
 
+import aitext
+import aitext_rules as AI
 import fake_rules as R
 from dossier_rules import PATTERN_RULES, POSITIVE_MARKERS, SITE_TRUST
 from reviewitems import ReviewItem
@@ -149,6 +151,7 @@ def _item_signals(
     *,
     single_site: bool,
     trust: Mapping[str, float],
+    ai_llm: bool = False,
 ) -> list[str]:
     signals: list[str] = []
     text = item.text
@@ -173,6 +176,10 @@ def _item_signals(
         signals.append("impersonal")
     if single_site and trust.get(item.site, 1.0) < R.LOW_TRUST:
         signals.append("low_trust_site")
+    # Генерация — отдельное явление от копипасты: шинглы её не ловят. Короткие
+    # и старые отзывы aitext не оценивает и сигнала не даёт.
+    if aitext.assess(text, AI.REVIEW, item.dated_at, llm=ai_llm).flagged:
+        signals.append("ai_text")
     return signals
 
 
@@ -181,6 +188,7 @@ def score_items(
     *,
     known_hashes: Mapping[str, str] | None = None,
     llm_ads: Iterable[int] = (),
+    ai_texts: Iterable[int] = (),
     trust: Mapping[str, float] | None = None,
 ) -> tuple[Verdict, ...]:
     """Считает fake_score каждому отзыву компании.
@@ -194,6 +202,7 @@ def score_items(
     trust = trust or SITE_TRUST
     known_hashes = known_hashes or {}
     ads = set(llm_ads)
+    generated = set(ai_texts)
     single_site = len({item.site for item in items if item.site}) <= 1
     hot = _bursts(items)
     flat = _uniform(items)
@@ -202,7 +211,13 @@ def score_items(
     verdicts: list[Verdict] = []
     for position, item in enumerate(items):
         low = item.text.lower()
-        signals = _item_signals(item, low, single_site=single_site, trust=trust)
+        signals = _item_signals(
+            item,
+            low,
+            single_site=single_site,
+            trust=trust,
+            ai_llm=item.index in generated,
+        )
         digest = text_hash(item.text)
         if digest in known_hashes:
             signals.append("dup_other_company")

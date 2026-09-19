@@ -95,6 +95,9 @@ LATE_COLUMNS = (
     ("market_median", "REAL"),
     ("market_delta", "REAL"),
     ("market_level", "INTEGER"),
+    ("ai_label", "TEXT"),
+    ("ai_score", "REAL"),
+    ("ai_signals", "TEXT"),
 )
 
 
@@ -114,6 +117,7 @@ def upsert_vacancy(
     score: float,
     reasons: Sequence[str],
     market_marker: Any = None,
+    ai_verdict: Any = None,
 ) -> bool:
     """Возвращает True, если вакансия видится впервые.
 
@@ -148,6 +152,9 @@ def upsert_vacancy(
         "market_median": getattr(getattr(market_marker, "stats", None), "median", None),
         "market_delta": getattr(market_marker, "deviation", None),
         "market_level": getattr(getattr(market_marker, "stats", None), "level", None),
+        "ai_label": getattr(ai_verdict, "label", None),
+        "ai_score": getattr(ai_verdict, "score", None),
+        "ai_signals": "; ".join(getattr(ai_verdict, "reasons", ()) or ()) or None,
         "now": now,
     }
     if is_new:
@@ -158,12 +165,14 @@ def upsert_vacancy(
                 salary_from, salary_to, currency, gross, schedule, experience,
                 employment, skills, description, published_at, score, score_reasons,
                 market_label, market_median, market_delta, market_level,
+                ai_label, ai_score, ai_signals,
                 first_seen_at, last_seen_at
             ) VALUES (
                 :key, :source, :external_id, :url, :title, :company, :company_id, :area,
                 :salary_from, :salary_to, :currency, :gross, :schedule, :experience,
                 :employment, :skills, :description, :published_at, :score, :score_reasons,
                 :market_label, :market_median, :market_delta, :market_level,
+                :ai_label, :ai_score, :ai_signals,
                 :now, :now
             )
             """,
@@ -181,6 +190,7 @@ def upsert_vacancy(
                 score = :score, score_reasons = :score_reasons,
                 market_label = :market_label, market_median = :market_median,
                 market_delta = :market_delta, market_level = :market_level,
+                ai_label = :ai_label, ai_score = :ai_score, ai_signals = :ai_signals,
                 last_seen_at = :now
             WHERE key = :key
             """,

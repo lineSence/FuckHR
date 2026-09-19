@@ -54,6 +54,7 @@ from typing import Sequence
 
 import contacts
 import fake_company
+import aitext_llm
 import fake_llm
 import fake_reviews
 import fake_rules
@@ -369,7 +370,12 @@ def score_reviews(
         except Exception as exc:  # noqa: BLE001 — детекция важнее одного сигнала
             log.warning("хэши отзывов не прочитаны: %s", exc)
     return fake_reviews.score_items(
-        items, known_hashes=known, llm_ads=fake_llm.ad_indexes(gateway, items)
+        items,
+        known_hashes=known,
+        llm_ads=fake_llm.ad_indexes(gateway, items),
+        ai_texts=aitext_llm.generated_indexes(
+            gateway, {item.index: item.text for item in items}
+        ),
     )
 
 
