@@ -98,11 +98,12 @@ dossier.build(company)
 | `canary.py` | тревога, когда прогон сломался, с суточным cooldown |
 | `maintenance.py` | очистка кэшей и данных по целям, с отметкой необратимых |
 | `webui.py`, `jobs.py`, `ui_*.py` | локальный интерфейс и запуск задач подпроцессами |
+| `intake.py`, `ui_intake.py` | разговор о поиске: свободный текст владельца → критерии поиска и блоки резюме |
 | `settings.py`, `settings_fields.py` | чтение и запись `.env`, каталог полей настроек |
 
 ## Хранилище
 
-Один файл SQLite (`data/fuckhr.sqlite3`). Таблицы: `vacancies`, `vacancy_snapshots`, `vacancy_conditions`,
+Один файл SQLite (`data/fuckhr.sqlite3`). Таблицы: `intake_log`, `vacancies`, `vacancy_snapshots`, `vacancy_conditions`,
 `hr_signals`, `company_dossier`, `company_reviews`, `contacts`, `resumes`, `resume_blocks`,
 `resume_versions`, `search_cache`, `page_cache`, `llm_cache`.
 
