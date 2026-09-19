@@ -159,9 +159,10 @@ class Handler(BaseHTTPRequestHandler):
                         page("Вакансии", render_vacancies(conn, min_score, limit))
                     )
                 elif parsed.path == "/vacancy":
-                    body = render_vacancy(
-                        conn, one("key"), with_draft=one("draft") == "1"
-                    )
+                    # GET ничего не запускает: сбор черновика дёргает внешний
+                    # поиск и модель, и обновление страницы жгло бы бюджет
+                    # SEARCH_MAX_CALLS/LLM_MAX_CALLS [CORE-016].
+                    body = render_vacancy(conn, one("key"), with_draft=False)
                     self._send(page("Вакансия", body))
                 elif parsed.path == "/companies":
                     self._send(page("Компании", render_companies(conn)))
@@ -270,6 +271,18 @@ class Handler(BaseHTTPRequestHandler):
                         render_profile(self.profile_path, saved=count, problems=problems),
                     )
                 )
+                return
+
+            if parsed.path == "/vacancy":
+                # Черновик собирается только по явному действию, а не по открытию
+                # страницы: у шага есть внешние вызовы и бюджет [CORE-016].
+                key = (form.get("key") or [""])[0]
+                conn = open_db()
+                try:
+                    body = render_vacancy(conn, key, with_draft=True)
+                    self._send(page("Вакансия", body))
+                finally:
+                    conn.close()
                 return
 
             self._send(page("Не найдено", "<p>Такой страницы нет.</p>"), 404)

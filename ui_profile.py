@@ -24,12 +24,15 @@
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import profile_form
 from ui_core import area_field, checkbox_field, esc, hint_block, open_db
+
+log = logging.getLogger(__name__)
 
 # Заготовки текстов запросов: пустая страница не должна выглядеть задачей.
 PLACEHOLDERS = (
@@ -257,10 +260,13 @@ def score_preview(threshold: Any, conn: sqlite3.Connection | None = None) -> str
         row = conn.execute(
             "SELECT count(*) AS total, "
             "sum(CASE WHEN score >= ? THEN 1 ELSE 0 END) AS passed "
-            "FROM vacancies WHERE active = 1",
+            "FROM vacancies",
             (value,),
         ).fetchone()
-    except sqlite3.Error:
+    except sqlite3.Error as exc:
+        # Молчаливый except уже прятал запрос к несуществующей колонке active:
+        # блок всегда был пуст, и понять это по интерфейсу было нельзя.
+        log.warning("предпросмотр порога не собрался: %s", exc)
         return ""
     finally:
         if owned and conn is not None:

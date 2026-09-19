@@ -370,9 +370,18 @@ def render_vacancy(conn: sqlite3.Connection, key: str, with_draft: bool) -> str:
         )
 
     if with_draft:
+        skip_precondition = outreach.precondition(conn, row)
+    if with_draft and skip_precondition:
+        parts.append(
+            "<h2>Черновик</h2><div class=warn>Пропуск: {}</div>".format(
+                esc(skip_precondition)
+            )
+        )
+    elif with_draft:
         provider = websearch.SearchProvider.from_env(conn)
         gateway = llm.Gateway.from_env(conn) if settings.flag("LLM_ENABLED") else None
-        facts = outreach.load_facts(settings.get("RUN_PROFILE", "profile.yaml"))
+        # Те же факты, что у CLI: сначала подтверждённые блоки резюме (B-01).
+        facts = outreach.collect_facts(conn, settings.get("RUN_PROFILE", "profile.yaml"))
         options = settings.outreach_options()
         discovery, draft, skip_reason = outreach.process_row(
             conn,
@@ -402,10 +411,12 @@ def render_vacancy(conn: sqlite3.Connection, key: str, with_draft: bool) -> str:
     else:
         parts.append(
             (
-                '<p><a href="/vacancy?key={}&draft=1">Собрать черновик и найти контакт</a> '
-                '<span class=muted>(может дёрнуть внешний поиск и модель, '
-                'ничего не отправляет)</span></p>'
-            ).format(urllib.parse.quote(key))
+                '<form method=post action="/vacancy">'
+                '<input type=hidden name=key value="{}">'
+                '<button type=submit>Собрать черновик и найти контакт</button> '
+                '<span class=muted>(дёргает внешний поиск и модель, '
+                'ничего не отправляет)</span></form>'
+            ).format(esc(key))
         )
 
     parts.append("<h2>Описание</h2><pre>{}</pre>".format(esc(row["description"])))
