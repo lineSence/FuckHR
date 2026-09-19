@@ -396,15 +396,19 @@ class Handler(BaseHTTPRequestHandler):
                         )
                         self._send(page("Профиль и резюме", body))
                         return
-                    text = (form.get("text") or [""])[0].strip()
-                    if not text:
+                    said, dialogue = ui_intake.compose(
+                        form.get("question") or [],
+                        form.get("answer") or [],
+                        (form.get("text") or [""])[0],
+                    )
+                    if not said:
                         body = self._profile_page(
                             conn,
                             note="<div class=warn>Пустое сообщение.</div>",
                         )
                         self._send(page("Профиль и резюме", body))
                         return
-                    intake.log_message(conn, "owner", text)
+                    intake.log_message(conn, "owner", said)
                     gateway = (
                         llm.Gateway.from_env(conn)
                         if settings.flag("LLM_ENABLED")
@@ -414,11 +418,13 @@ class Handler(BaseHTTPRequestHandler):
                         gateway,
                         intake.owner_words(conn),
                         profile_form.load(self.profile_path),
+                        context=dialogue,
                     )
                     reply = plan.summary or (
                         "\n".join(plan.questions) if plan.questions else "Ответа нет."
                     )
                     intake.log_message(conn, "ai", reply)
+                    intake.save_plan(conn, plan)
                     self._send(
                         page("Профиль и резюме", self._profile_page(conn, plan))
                     )

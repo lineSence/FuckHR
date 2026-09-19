@@ -35,18 +35,9 @@ def _bubble(role: str, text: str) -> str:
 
 
 def render_plan(plan: intake.Plan) -> str:
-    """Предложение: вопросы, критерии, блоки резюме — с галочками."""
-    if plan.questions:
-        items = "".join("<li>{}</li>".format(esc(q)) for q in plan.questions)
-        questions = (
-            "<div class=warn><b>Уточню, чтобы не выдумывать:</b>"
-            "<ul>{}</ul></div>".format(items)
-        )
-    else:
-        questions = ""
-
+    """Предложение: критерии и блоки резюме с галочками. Вопросы — отдельно."""
     if plan.empty:
-        return questions
+        return ""
 
     rows = []
     if plan.profile:
@@ -89,12 +80,11 @@ def render_plan(plan: intake.Plan) -> str:
         "<p class=muted>{}</p>".format(esc(plan.summary)) if plan.summary else ""
     )
     return (
-        "{questions}{summary}{dropped}"
+        "{summary}{dropped}"
         '<form method=post action="/intake/apply">'
         '<input type=hidden name="plan" value="{blob}">'
         "{table}<button>Применить отмеченное</button></form>"
     ).format(
-        questions=questions,
         summary=summary,
         dropped=dropped,
         blob=esc(json.dumps(_plan_payload(plan), ensure_ascii=False)),
@@ -147,17 +137,57 @@ def render_intake(
     if lines:
         parts.append("".join(_bubble(role, text) for role, text in lines[-6:]))
 
+    if plan is None:
+        plan = intake.last_plan(conn)
+
+    parts.append('<form method=post action="/intake">')
+    if plan is not None and plan.questions:
+        parts.append(
+            "<p class=muted><b>Уточню, чтобы не выдумывать.</b> Отвечай прямо в "
+            "полях, пустые вопросы просто пропускаются.</p>"
+        )
+        for number, question in enumerate(plan.questions):
+            parts.append(
+                '<div class=field><label>{q}</label>'
+                '<input type=hidden name="question" value="{q_raw}">'
+                '<input type=text name="answer" placeholder="Ответ"></div>'.format(
+                    q=esc(question), q_raw=esc(question)
+                )
+            )
     parts.append(
-        '<form method=post action="/intake">'
-        '<div class=field><textarea name="text" placeholder="{}"></textarea></div>'
+        '<div class=field><label>{label}</label>'
+        '<textarea name="text" placeholder="{ph}"></textarea></div>'
         "<button>Отправить</button> "
         '<button class=secondary name="action" value="clear">Начать заново</button>'
-        "</form>".format(esc(PLACEHOLDER))
+        "</form>".format(
+            label="Что добавить своими словами" if plan and plan.questions else "Твои слова",
+            ph=esc(PLACEHOLDER),
+        )
     )
 
     if plan is not None:
         parts.append(render_plan(plan))
     return "".join(parts)
+
+
+def compose(questions: Sequence[str], answers: Sequence[str], text: str) -> tuple[str, str]:
+    """Форма → (слова владельца, тот же разговор с вопросами для модели).
+
+    Двумя строками намеренно: числа проверяются по словам владельца, а вопросы
+    писала модель — её собственные числа не должны становиться фактами о нём.
+    """
+    said, dialogue = [], []
+    for question, answer in zip(questions, answers):
+        answer = (answer or "").strip()
+        if not answer:
+            continue
+        said.append(answer)
+        dialogue.append("{}\n{}".format((question or "").strip(), answer))
+    text = (text or "").strip()
+    if text:
+        said.append(text)
+        dialogue.append(text)
+    return "\n".join(said), "\n\n".join(dialogue)
 
 
 def apply_plan(
@@ -199,4 +229,4 @@ def apply_plan(
     return "Применено — " + "; ".join(done)
 
 
-__all__ = ("apply_plan", "render_intake", "render_plan")
+__all__ = ("apply_plan", "compose", "render_intake", "render_plan")

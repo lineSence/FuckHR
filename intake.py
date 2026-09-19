@@ -107,12 +107,55 @@ def log_message(conn: sqlite3.Connection, role: str, text: str) -> None:
 
 
 def history(conn: sqlite3.Connection, limit: int = 20) -> list[tuple[str, str]]:
-    """Диалог от старых к новым: (роль, текст)."""
+    """Диалог от старых к новым: (роль, текст). Служебные записи не попадают."""
     ensure_schema(conn)
     rows = conn.execute(
-        "SELECT role, text FROM intake_log ORDER BY id DESC LIMIT ?", (limit,)
+        "SELECT role, text FROM intake_log WHERE role IN ('owner', 'ai') "
+        "ORDER BY id DESC LIMIT ?",
+        (limit,),
     ).fetchall()
     return [(str(r[0]), str(r[1])) for r in reversed(rows)]
+
+
+def save_plan(conn: sqlite3.Connection, plan: "Plan") -> None:
+    """Последнее предложение живёт в том же журнале под ролью plan.
+
+    Иначе вопросы модели исчезали при обновлении страницы, и отвечать было
+    некуда: поля ответа должны быть на месте и после F5.
+    """
+    log_message(conn, "plan", json.dumps(_plan_dict(plan), ensure_ascii=False))
+
+
+def last_plan(conn: sqlite3.Connection) -> "Plan | None":
+    ensure_schema(conn)
+    row = conn.execute(
+        "SELECT text FROM intake_log WHERE role = 'plan' ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    if row is None:
+        return None
+    try:
+        data = json.loads(str(row[0]))
+    except ValueError:
+        return None
+    return Plan(
+        questions=tuple(data.get("questions") or ()),
+        summary=str(data.get("summary") or ""),
+        profile=dict(data.get("profile") or {}),
+        facts=tuple(data.get("facts") or ()),
+        blocks=tuple(data.get("resume") or ()),
+        dropped=tuple(data.get("dropped") or ()),
+    )
+
+
+def _plan_dict(plan: "Plan") -> dict[str, Any]:
+    return {
+        "questions": list(plan.questions),
+        "summary": plan.summary,
+        "profile": plan.profile,
+        "facts": list(plan.facts),
+        "resume": list(plan.blocks),
+        "dropped": list(plan.dropped),
+    }
 
 
 def owner_words(conn: sqlite3.Connection) -> str:
@@ -236,8 +279,19 @@ def _json_blob(raw: str) -> str:
     return text[start : end + 1] if start >= 0 and end > start else text
 
 
-def ask(gateway: Any, said: str, current: Mapping[str, Any]) -> Plan:
-    """Один вызов модели: слова владельца плюс текущие настройки."""
+def ask(
+    gateway: Any,
+    said: str,
+    current: Mapping[str, Any],
+    context: str = "",
+) -> Plan:
+    """Один вызов модели: слова владельца плюс текущие настройки.
+
+    context — то же самое, но с вопросами модели рядом с ответами: так понятнее
+    ей. Числа при этом сверяются только с said, то есть со словами владельца:
+    иначе модель могла бы назвать число в своём же вопросе и потом сослаться на
+    него как на факт о человеке.
+    """
     if gateway is None:
         return Plan()
     state = json.dumps(
@@ -259,7 +313,7 @@ def ask(gateway: Any, said: str, current: Mapping[str, Any]) -> Plan:
         [
             {"role": "system", "content": PROMPT},
             {"role": "system", "content": "Сейчас в настройках: " + state},
-            {"role": "user", "content": said[:MAX_TEXT]},
+            {"role": "user", "content": (context or said)[:MAX_TEXT]},
         ],
     )
     return parse(raw or "", said)
@@ -355,7 +409,9 @@ __all__ = (
     "clear",
     "ensure_schema",
     "history",
+    "last_plan",
     "log_message",
     "owner_words",
     "parse",
+    "save_plan",
 )

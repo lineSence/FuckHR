@@ -100,3 +100,38 @@ def test_этап_разговора_объявлен_и_не_персональ
 
     assert llm.profile_for(intake.STAGE) == llm.SMART
     assert intake.STAGE not in llm.PERSONAL_STAGES
+
+
+def test_ответы_из_полей_складываются_в_реплику() -> None:
+    """В слова владельца идут только его ответы, вопросы — отдельно для модели."""
+    import ui_intake
+
+    said, dialogue = ui_intake.compose(
+        ["Готов ли к гибриду?", "Минимум на руки?"],
+        ["Только удалёнка", ""],
+        "И без 1С.",
+    )
+    assert said == "Только удалёнка\nИ без 1С."
+    assert "Готов ли к гибриду?" in dialogue and "Минимум на руки?" not in dialogue
+
+
+def test_числа_из_вопроса_модели_не_становятся_фактом() -> None:
+    """Иначе модель спросит «у тебя ведь 15 лет?» и сама же это подтвердит."""
+    import ui_intake
+
+    said, dialogue = ui_intake.compose(["У тебя ведь 15 лет опыта?"], ["Да"], "")
+    plan = intake.parse(
+        _answer(facts=["15 лет опыта в backend"]), said
+    )
+    assert plan.facts == ()
+    assert plan.dropped
+
+
+def test_вопросы_переживают_обновление_страницы() -> None:
+    conn = sqlite3.connect(":memory:")
+    intake.ensure_schema(conn)
+    plan = intake.Plan(questions=("Готов ли к гибриду?",), summary="Понял.")
+    intake.save_plan(conn, plan)
+    assert intake.last_plan(conn).questions == ("Готов ли к гибриду?",)
+    # Служебная запись не попадает в диалог на странице.
+    assert intake.history(conn) == []
