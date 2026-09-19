@@ -63,7 +63,7 @@ def test_выдуманная_вилка_обнуляет_ловушку() -> No
     result = bench.run_case(_gateway({llm.FAST: answer}), case)
     score, note = bench_cases.check(case, result)
     assert score == 0.0
-    assert "выдумала" in note
+    assert "дорисовала" in note
 
 
 def test_кадровик_вместо_тимлида_это_ноль() -> None:
@@ -193,3 +193,42 @@ def test_форма_подстановки_предлагает_ключи_env()
     assert "LLM_PROXY_MODEL_FAST" in html
     assert 'action="/llm/apply"' in html
     assert "LLM_PROXY_MODEL_FAST" in ui_bench.ENV_KEYS
+
+
+def test_ловушка_про_вилку_ловит_число_а_не_поле() -> None:
+    """Про зарплату в тексте сказано: условие с дословной цитатой — не ошибка.
+
+    Ловушка существует ради выдуманной суммы. Раньше она снимала балл за само
+    поле salary, и пройти её честным разбором было нельзя.
+    """
+    case = _case("extract: вилки нет")
+    honest = json.dumps(
+        {
+            "conditions": [
+                {
+                    "field": "salary",
+                    "value": "обсуждается на собеседовании",
+                    "quote": "Обсуждаем зарплату на собеседовании",
+                }
+            ]
+        },
+        ensure_ascii=False,
+    )
+    invented = json.dumps(
+        {
+            "conditions": [
+                {
+                    "field": "salary",
+                    "value": "от 200 000 на руки",
+                    "quote": "Обсуждаем зарплату на собеседовании",
+                }
+            ]
+        },
+        ensure_ascii=False,
+    )
+    good = bench.run_case(_gateway({llm.FAST: honest}), case)
+    assert bench_cases.check(case, good) == (1.0, "чисто: 1")
+
+    bad = bench.run_case(_gateway({llm.FAST: invented}), case)
+    score, note = bench_cases.check(case, bad)
+    assert score == 0.0 and "200000" in note

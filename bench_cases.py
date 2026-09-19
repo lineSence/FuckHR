@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -113,7 +114,7 @@ CASES: tuple[Case, ...] = (
         "extract: вилки нет",
         "extract",
         {"description": NO_SALARY},
-        {"forbidden_fields": ("salary",)},
+        {"no_new_numbers": True},
         trap=True,
     ),
     Case(
@@ -157,16 +158,42 @@ def check(case: Case, result: Any) -> tuple[float, str]:
     return 0.0, "неизвестный этап"
 
 
+NUMBER_RE = re.compile(r"\d+")
+
+
+def _numbers(text: str) -> set[str]:
+    """Числа из текста. Пробелы внутри числа снимаются: «250 000» — одно число."""
+    glued = re.sub(r"(?<=\d)[\s\u00a0](?=\d)", "", text or "")
+    return set(NUMBER_RE.findall(glued))
+
+
 def _check_extract(case: Case, result: Any) -> tuple[float, str]:
     items = tuple(result or ())
     got = {item.field for item in items}
-    forbidden = set(case.expect.get("forbidden_fields", ())) & got
-    if forbidden:
-        return 0.0, "выдумала поле: {}".format(", ".join(sorted(forbidden)))
+
+    if case.expect.get("no_new_numbers"):
+        # Ловушка про вилку. Ловится не поле salary, а выдуманная сумма: про
+        # зарплату в тексте сказано, и условие «обсуждается на собеседовании» с
+        # дословной цитатой — правильный разбор, а не ошибка. Цитаты пайплайн
+        # уже сверил с текстом, поэтому смотрим на value, и только у salary:
+        # «команда 7 человек» из «команда из семи человек» — не выдумка.
+        known = _numbers(case.payload.get("description", ""))
+        invented = sorted(
+            {
+                n
+                for item in items
+                if item.field == "salary"
+                for n in _numbers(item.value)
+            }
+            - known
+        )
+        if invented:
+            return 0.0, "дорисовала числа: {}".format(", ".join(invented))
+        # Молчание тоже провал, иначе «ничего не ответила» выглядело бы победой.
+        return (1.0, "чисто: {}".format(len(items))) if items else (0.0, "пусто")
+
     wanted = tuple(case.expect.get("fields", ()))
     if not wanted:
-        # Ловушка: успех — разобрать описание и при этом не дорисовать вилку.
-        # Молчание тоже провал, иначе «ничего не ответила» выглядело бы победой.
         return (1.0, "чисто: {}".format(len(items))) if items else (0.0, "пусто")
     if len(items) < int(case.expect.get("min_count", 1)):
         return 0.0, "условий мало: {}".format(len(items))
