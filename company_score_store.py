@@ -86,6 +86,16 @@ def level_of(conn: sqlite3.Connection, company: str) -> str:
     return str(row["level"]) if row is not None else R.LEVEL_UNKNOWN
 
 
+def levels(conn: sqlite3.Connection) -> dict[str, str]:
+    """Уровень по каждому работодателю разом: список компаний иначе делал бы
+    отдельный запрос со сведением названия на каждую строку."""
+    ensure_schema(conn)
+    return {
+        str(row["company"]): str(row["level"])
+        for row in conn.execute("SELECT company, level FROM company_score")
+    }
+
+
 def row_lines(row: sqlite3.Row | None, limit: int = 3) -> list[str]:
     """Строки карточки из сохранённой оценки — без пересчёта."""
     if row is None:
@@ -138,6 +148,7 @@ __all__ = (
     "coverage",
     "ensure_schema",
     "level_of",
+    "levels",
     "load",
     "refresh",
     "row_lines",

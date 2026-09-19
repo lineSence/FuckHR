@@ -17,6 +17,8 @@ import company_score_rules as R
 import company_score_store
 import db
 import dossier_store
+import maintenance
+import ui_companies
 
 
 def _conn() -> sqlite3.Connection:
@@ -196,3 +198,39 @@ def test_свежесть_гасит_старую_улику():
     старая = company_score.evaluate(старый, "Ромашка").axes[R.CONDITIONS]
 
     assert старая < новая
+
+
+def test_карточка_компании_показывает_уровень_и_улики():
+    conn = _conn()
+    _dossier(conn, "Ромашка", [("salary_delay", 3), ("overtime", 2)])
+    _history(conn, "hh:1", "Ромашка", republished=3)
+    _history(conn, "hh:2", "Ромашка", republished=3)
+    company_score_store.refresh(conn, ["Ромашка"])
+
+    html = ui_companies.render_score(conn, "Ромашка")
+
+    assert "Оценка работодателя" in html
+    assert R.LEVEL_RU[R.LEVEL_RED] in html
+    assert "Доверие" in html and "вето" in html
+
+
+def test_список_компаний_показывает_оценку_отдельной_колонкой():
+    conn = _conn()
+    _dossier(conn, "Ромашка", [("toxic", 2)])
+    company_score_store.refresh(conn, ["Ромашка"])
+
+    rows = ui_companies.company_rows(conn)
+
+    assert rows and R.LEVEL_RU[R.LEVEL_UNKNOWN] in rows[0][1]
+    assert len(rows[0]) == len(ui_companies.COMPANY_COLUMNS)
+
+
+def test_очистка_убирает_только_оценку():
+    conn = _conn()
+    _dossier(conn, "Ромашка", [("toxic", 2)])
+    company_score_store.refresh(conn, ["Ромашка"])
+
+    maintenance.wipe(conn, ["score"])
+
+    assert company_score_store.load(conn, "Ромашка") is None
+    assert dossier_store.load(conn, "Ромашка") is not None

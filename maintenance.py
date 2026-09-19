@@ -72,6 +72,14 @@ TARGETS: tuple[tuple[str, str, tuple[str, ...], str, bool], ...] = (
         False,
     ),
     (
+        "score",
+        "Оценка работодателей",
+        ("company_score",),
+        "Пересчитывается целиком за один прогон из досье, меток по деньгам и "
+        "слепков: своих данных у таблицы нет.",
+        False,
+    ),
+    (
         "market",
         "Наблюдения по зарплатам",
         ("market_observations", "market_stats", "company_market"),
@@ -100,6 +108,7 @@ EVERYTHING = (
     "dossier",
     "contacts",
     "vacancies",
+    "score",
     "market",
     "history",
 )

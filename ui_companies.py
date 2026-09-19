@@ -14,6 +14,8 @@ import json
 import sqlite3
 import urllib.parse
 
+import company_score_rules
+import company_score_store
 import company_signals
 import contact_finds
 import contacts
@@ -33,6 +35,13 @@ RISK_CLASS = {
     dossier.RISK_GREEN: "ok",
     dossier.RISK_UNKNOWN: "muted",
     dossier.RISK_THIN: "warn",
+}
+
+SCORE_CLASS = {
+    company_score_rules.LEVEL_RED: "danger",
+    company_score_rules.LEVEL_YELLOW: "warn",
+    company_score_rules.LEVEL_GREEN: "ok",
+    company_score_rules.LEVEL_UNKNOWN: "muted",
 }
 
 POLARITY_RU = {
@@ -76,7 +85,8 @@ COMPANY_SORTS: dict[str, object] = {
 }
 COMPANY_COLUMNS = (
     ("name", "Компания"),
-    ("risk", "Работодатель"),
+    ("", "Оценка"),
+    ("risk", "Отзывы"),
     ("reviews", "Отзывов"),
     ("rating", "Оценка"),
     ("", "Закономерности"),
@@ -124,9 +134,11 @@ def company_rows(
     conn: sqlite3.Connection, limit: int = 200, sort: str = "updated"
 ) -> list[list[str]]:
     sort = sort_pick(sort, tuple(COMPANY_SORTS), "updated")
+    scores = company_score_store.levels(conn)
     rows: list[list[str]] = []
     for row in _sorted(list(dossier.list_dossiers(conn, limit)), COMPANY_SORTS, sort):
         company = str(row["company"])
+        level = scores.get(company, company_score_rules.LEVEL_UNKNOWN)
         red = _flags(row["red_flags"])
         rating = "—"
         if row["avg_rating"] is not None:
@@ -135,6 +147,10 @@ def company_rows(
             [
                 '<a href="/company?name={link}">{name}</a>'.format(
                     link=esc(company), name=esc(company)
+                ),
+                '<span class="{cls}">{label}</span>'.format(
+                    cls=SCORE_CLASS.get(level, "muted"),
+                    label=esc(company_score_rules.LEVEL_RU.get(level, level)),
                 ),
                 '<span class="{cls}">{label}</span>'.format(
                     cls=RISK_CLASS.get(str(row["risk"]), "muted"),
@@ -306,6 +322,62 @@ def render_market(conn: sqlite3.Connection, name: str) -> str:
     return "<h3>Деньги против рынка</h3>{}<ul>{}</ul>".format(head, items)
 
 
+def render_score(conn: sqlite3.Connection, name: str) -> str:
+    """Общая оценка работодателя с раскрытием: оси, улики, покрытие, вето.
+
+    Уровень без улик — то же «плохая компания» без доказательств, поэтому
+    таблица улик показывается всегда, а не прячется под уровнем [HRD-003].
+    """
+    row = company_score_store.load(conn, name)
+    if row is None:
+        return ""
+    level = str(row["level"])
+    try:
+        axes = json.loads(row["axes"] or "{}")
+        evidence = json.loads(row["evidence"] or "[]")
+    except ValueError:
+        axes, evidence = {}, []
+    veto = str(row["veto"] or "")
+    head = '<div class="{cls}">{label} · осей с данными: {covered} из {total}{veto}</div>'.format(
+        cls=SCORE_CLASS.get(level, "muted"),
+        label=esc(company_score_rules.LEVEL_RU.get(level, level)),
+        covered=esc(row["covered"]),
+        total=len(company_score_rules.AXES),
+        veto=esc(
+            " · вето: {}".format(company_score_rules.VETO_RU.get(veto, veto))
+            if veto
+            else ""
+        ),
+    )
+    axis_line = " · ".join(
+        "{}: {:.0f}".format(company_score_rules.AXIS_RU.get(axis, axis), value)
+        for axis, value in axes.items()
+    )
+    if axis_line:
+        head += "<p class=muted>{}</p>".format(esc(axis_line))
+    rows = [
+        [
+            esc("—" if item.get("polarity") == "red" else "+"),
+            esc(company_score_rules.AXIS_RU.get(str(item.get("axis")), item.get("axis"))),
+            esc(item.get("text") or ""),
+            esc(item.get("weight") or 0),
+            esc("{:.2f}".format(float(item.get("trust") or 0))),
+        ]
+        for item in evidence
+    ]
+    table_html = "<p class=muted>Улик пока нет.</p>"
+    if rows:
+        table_html = table(("", "Ось", "Улика", "Вес", "Доверие"), rows)
+    note = (
+        "Уровень — худшая ось, а не среднее: плюсы не компенсируют невыплату "
+        "зарплаты. Доверие 1.00 — наши наблюдения, ниже — отзывы, и оно падает "
+        "при признаках накрутки. Оси без данных не считаются."
+    )
+    return "<h3>Оценка работодателя</h3>{}{}<p class=muted>{}</p>".format(
+        head, table_html, esc(note)
+    )
+
+
 def render_fake(conn: sqlite3.Connection, name: str, row: sqlite3.Row) -> str:
     """Метка накрутки и подозрительные отзывы.
 
@@ -404,6 +476,7 @@ def render_company(
         rating=esc(rating),
     )
 
+    score_block = render_score(conn, name)
     fake_block = render_fake(conn, name, row)
     money_block = render_market(conn, name)
 
@@ -453,11 +526,12 @@ def render_company(
         )
 
     about = (
-        "{money}{fake}{summary}"
+        "{score}{money}{fake}{summary}"
         "<h3>История публикаций</h3>{signals}"
         "<h3>Закономерности</h3>{patterns}"
         "<h3>Источники</h3>{reviews}"
     ).format(
+        score=score_block,
         money=money_block,
         fake=fake_block,
         summary=summary,
@@ -501,6 +575,7 @@ __all__ = (
     "render_cleanup",
     "render_companies",
     "render_company",
+    "render_score",
     "render_signals",
     "render_vacancies_for",
 )
