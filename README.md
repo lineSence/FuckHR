@@ -18,6 +18,10 @@
 Отзывы, похожие на заказные, в оценку не идут, а сама накрутка — отдельный сигнал о компании
 (`docs/fake-reviews.md`).
 
+Зарплата вакансии сравнивается с медианой похожих вакансий из собственных наблюдений за полгода:
+«ниже рынка» и «вилки нет почти нигде» — такие же факты о работодателе, как переработки
+(`docs/market-salary.md`).
+
 Метрика успеха — не «500 откликов в день», а **«5 вакансий с полным досье»**.
 
 ## Статус
@@ -87,6 +91,7 @@ hh.ru (HTML поиска, ADR-015) → score.py → db.py (SQLite)
 - [`docs/roadmap.md`](./docs/roadmap.md) — что сделано и что дальше
 - [`docs/testing.md`](./docs/testing.md) — тесты
 - [`docs/detector.md`](./docs/detector.md) — детектор HR-брехни
+- [`docs/market-salary.md`](./docs/market-salary.md) — рынок зарплат и метки отклонений
 - [`docs/contacts.md`](./docs/contacts.md) — поиск контактов и письма
 - [`docs/knowledge-lifecycle.md`](./docs/knowledge-lifecycle.md) — как растут знания агента
 - [`docs/contributing.md`](./docs/contributing.md) — как вести код и документацию

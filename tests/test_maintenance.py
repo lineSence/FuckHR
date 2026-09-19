@@ -18,8 +18,8 @@ def test_цели_описаны_и_совпадают():
     codes = [code for code, _label, _warning, _danger in maintenance.describe()]
     assert codes == list(maintenance.TARGET_CODES)
     assert set(maintenance.EVERYTHING) == set(maintenance.TARGET_CODES)
-    # Контакты и история — единственное, что не восстанавливается сбором.
-    assert set(maintenance.DANGEROUS) == {"contacts", "history"}
+    # Контакты, история и наблюдения по зарплатам сбором не восстанавливаются.
+    assert set(maintenance.DANGEROUS) == {"contacts", "history", "market"}
     assert maintenance.target_label("history") == "История публикаций"
 
 

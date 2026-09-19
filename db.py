@@ -43,6 +43,10 @@ CREATE TABLE IF NOT EXISTS vacancies (
     published_at    TEXT,
     score           REAL,
     score_reasons   TEXT,
+    market_label    TEXT,
+    market_median   REAL,
+    market_delta    REAL,
+    market_level    INTEGER,
     first_seen_at   TEXT NOT NULL,
     last_seen_at    TEXT NOT NULL,
     notified_at     TEXT,
@@ -84,8 +88,23 @@ def connect(path: str | Path) -> sqlite3.Connection:
     return conn
 
 
+# Колонки, добавленные позже схемы. Недостающая колонка не имеет права ронять
+# прогон: база у владельца одна и живёт месяцами.
+LATE_COLUMNS = (
+    ("market_label", "TEXT"),
+    ("market_median", "REAL"),
+    ("market_delta", "REAL"),
+    ("market_level", "INTEGER"),
+)
+
+
 def init_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(vacancies)")}
+    for column, kind in LATE_COLUMNS:
+        if column not in columns:
+            log.info("добавляю колонку %s в vacancies", column)
+            conn.execute("ALTER TABLE vacancies ADD COLUMN {} {}".format(column, kind))
     conn.commit()
 
 
@@ -94,6 +113,7 @@ def upsert_vacancy(
     vacancy: Any,
     score: float,
     reasons: Sequence[str],
+    market_marker: Any = None,
 ) -> bool:
     """Возвращает True, если вакансия видится впервые.
 
@@ -124,6 +144,10 @@ def upsert_vacancy(
         "published_at": vacancy.published_at,
         "score": score,
         "score_reasons": json.dumps(list(reasons), ensure_ascii=False),
+        "market_label": getattr(market_marker, "label", None),
+        "market_median": getattr(getattr(market_marker, "stats", None), "median", None),
+        "market_delta": getattr(market_marker, "deviation", None),
+        "market_level": getattr(getattr(market_marker, "stats", None), "level", None),
         "now": now,
     }
     if is_new:
@@ -133,11 +157,13 @@ def upsert_vacancy(
                 key, source, external_id, url, title, company, company_id, area,
                 salary_from, salary_to, currency, gross, schedule, experience,
                 employment, skills, description, published_at, score, score_reasons,
+                market_label, market_median, market_delta, market_level,
                 first_seen_at, last_seen_at
             ) VALUES (
                 :key, :source, :external_id, :url, :title, :company, :company_id, :area,
                 :salary_from, :salary_to, :currency, :gross, :schedule, :experience,
                 :employment, :skills, :description, :published_at, :score, :score_reasons,
+                :market_label, :market_median, :market_delta, :market_level,
                 :now, :now
             )
             """,
@@ -152,7 +178,10 @@ def upsert_vacancy(
                 currency = :currency, gross = :gross, schedule = :schedule,
                 experience = :experience, employment = :employment, skills = :skills,
                 description = :description, published_at = :published_at,
-                score = :score, score_reasons = :score_reasons, last_seen_at = :now
+                score = :score, score_reasons = :score_reasons,
+                market_label = :market_label, market_median = :market_median,
+                market_delta = :market_delta, market_level = :market_level,
+                last_seen_at = :now
             WHERE key = :key
             """,
             payload,

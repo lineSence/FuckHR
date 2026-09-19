@@ -54,11 +54,12 @@ experience_ok:
 
 # Сумма весов = 100. Меняй под себя, когда увидишь первые карточки.
 weights:
-  skills: 55
-  salary: 20
+  skills: 50
+  salary: 15
   nice_to_have: 10
   remote: 10
   experience: 5
+  market: 10          # вилка против медианы среза (docs/market-salary.md)
 
 min_score: 45
 

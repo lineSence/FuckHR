@@ -14,12 +14,15 @@ hh.ru, сайты отзывов, свой SearXNG, Telegram и адреса м�
 
 ```
 hh.ru (HTML поиска, ADR-015)
-  → предфильтр и скоринг (score.py, без модели)
+  → зарплатные наблюдения до предфильтра (market.py → market_observations)
+  → предфильтр и скоринг (score.py, без модели; метка рынка даёт вес market)
   → страница вакансии (hh_html.py) при включённых деталях
   → слепок в историю (db.vacancy_snapshots, ADR-010)
   → условия из описания (llm_tasks.extract_conditions, этап extract)
   → детектор утверждений (detector.py + detector_llm.py, ADR-009)
+  → пересчёт срезов рынка и метки вакансий (market_store.py)
   → досье на компании, прошедшие порог (dossier.py, в несколько потоков)
+  → метки работодателей по деньгам (market_company.py)
   → карточки в Telegram (bot.py)
   → канарейка, если прогон сам сломался (canary.py)
 ```
@@ -97,6 +100,7 @@ dossier.build(company)
 | `dossier_text.py`, `dossier_summary.py` | разбор текста отзывов и сводка/строки карточки |
 | `reviewitems.py` | страница → отдельные отзывы: дата, оценка, плюсы, минусы |
 | `fake_reviews.py`, `fake_rules.py`, `fake_company.py`, `fake_store.py`, `fake_llm.py` | детекция накрученных отзывов: сигналы, пороги, метка компании, хранение, сигнал модели |
+| `market.py`, `market_rules.py`, `market_store.py`, `market_company.py` | рынок зарплат: разбор вилки и среза, пороги, хранение и срезы, метка работодателя (`docs/market-salary.md`) |
 | `resume.py` | резюме: блоки, подтверждение, экспорт, стаж, противоречия (без модели) |
 | `resume_llm.py` | черновик секции и отбор блоков под вакансию |
 | `contacts.py`, `contacts_rules.py` | поиск рабочих контактов, лог и дедуп, словари этапа |
@@ -107,6 +111,8 @@ dossier.build(company)
 | `bot.py` | карточки и тревоги в Telegram: выключатель отправки, темп, тихие часы |
 | `canary.py` | тревога, когда прогон сломался, с суточным cooldown |
 | `maintenance.py` | очистка кэшей и данных по целям, с отметкой необратимых |
+| `ui_cleanup.py` | страница очистки: цели, подтверждение необратимого |
+| `run_setup.py` | обвязка прогона: логи, шлюз модели, отправка тревог |
 | `webui.py`, `jobs.py`, `ui_*.py` | локальный интерфейс и запуск задач подпроцессами |
 | `intake.py`, `ui_intake.py` | разговор о поиске: свободный текст владельца → критерии поиска и блоки резюме |
 | `settings.py`, `settings_fields.py` | чтение и запись `.env`, каталог полей настроек |
@@ -115,7 +121,8 @@ dossier.build(company)
 
 Один файл SQLite (`data/fuckhr.sqlite3`). Таблицы: `intake_log`, `vacancies`, `vacancy_snapshots`, `vacancy_conditions`,
 `hr_signals`, `company_dossier`, `company_reviews`, `contacts`, `resumes`, `resume_blocks`,
-`resume_versions`, `review_items`, `review_hashes`, `search_cache`, `page_cache`, `llm_cache`.
+`resume_versions`, `review_items`, `review_hashes`, `market_observations`, `market_stats`, `company_market`,
+`search_cache`, `page_cache`, `llm_cache`.
 
 `review_hashes` — общая таблица хэшей на всю базу: она ловит фабрики отзывов, работающие сразу на
 несколько компаний, и живёт ровно столько, сколько живут сами отзывы.

@@ -29,6 +29,7 @@ WEIGHTS: tuple[tuple[str, str], ...] = (
     ("nice_to_have", "желательные"),
     ("remote", "удалёнка"),
     ("experience", "опыт"),
+    ("market", "рынок"),
 )
 
 WEIGHT_HINTS: dict[str, str] = {
@@ -36,6 +37,7 @@ WEIGHT_HINTS: dict[str, str] = {
     "salary": "Насколько вилка выше твоего минимума.",
     "nice_to_have": "Совпадение с желательными навыками.",
     "remote": "Удалённый или гибридный формат.",
+    "market": "Вилка относительно медианы по нашим наблюдениям с hh.ru.",
     "experience": "Совпадение требуемого опыта с твоим.",
 }
 

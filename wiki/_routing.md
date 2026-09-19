@@ -68,6 +68,11 @@ triggers:
       - docs/fake-reviews.md
       - wiki/rules/hr-signal-detection.md
 
+  - id: market-salary
+    keywords: [рынок, средняя зарплата, медиана, перцентиль, вилка, ниже рынка, выше рынка, срез, market_stats]
+    load:
+      - docs/market-salary.md
+
   - id: legal
     keywords: [152-фз, gdpr, tos, персональные данные, телефон, linkedin, юридика, osint, спам, отказ от рассылки]
     load:

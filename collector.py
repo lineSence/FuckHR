@@ -8,7 +8,10 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 
+import market
+import market_store
 import settings
 from hh import Vacancy
 from hh_html import HHHtmlClient
@@ -22,6 +25,7 @@ def collect(
     profile: Profile,
     limit: int = 0,
     prefilter: settings.PrefilterOptions | None = None,
+    conn: sqlite3.Connection | None = None,
 ) -> tuple[dict[str, Vacancy], dict[str, Vacancy]]:
     """Собирает вакансии по запросам профиля, но не больше limit штук.
 
@@ -32,11 +36,17 @@ def collect(
     поиска бросается недочитанным, и остальные страницы не запрашиваются. Каждая
     незапрошенная страница — это сэкономленные две-три секунды паузы и шаг от капчи.
 
+    Зарплатные наблюдения снимаются здесь же, со всей выдачи и до предфильтра.
+    Считать рынок по прошедшим профиль нельзя: порог владельца обрезает выборку
+    снизу, и метки «ниже рынка» не существовало бы в принципе. Страница уже
+    скачана, новых запросов к hh.ru это не добавляет [CORE-016].
+
     Предфильтр настраивается: его можно выключить целиком или поднять порог
     чернового скора. Скор на выдаче занижен — описания ещё нет, поэтому по
     умолчанию порог нулевой и отсев идёт только по стоп-словам и вилке.
     """
     prefilter = prefilter or settings.prefilter_options()
+    observations: list[market.Observation] = []
     seen: dict[str, Vacancy] = {}
     passed: dict[str, Vacancy] = {}
     stopped_by_limit = False
@@ -56,6 +66,10 @@ def collect(
         )
         try:
             for draft in pages:
+                if draft.key not in seen:
+                    point = market.observe(draft)
+                    if point is not None:
+                        observations.append(point)
                 seen.setdefault(draft.key, draft)
                 rough = evaluate(draft, profile, prefilter.fuzzy)
                 if prefilter.enabled and rough.rejected:
@@ -97,4 +111,9 @@ def collect(
             limit,
             len(seen),
         )
+    if conn is not None and observations:
+        # Наблюдения пишутся одним куском после обхода: держать транзакцию
+        # открытой на всё время пауз hh.ru незачем.
+        market_store.record(conn, observations)
+        log.info("зарплатных наблюдений записано: %s", len(observations))
     return seen, passed
