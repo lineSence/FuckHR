@@ -8,7 +8,10 @@
 
 - `dossier_rules.py` — площадки, признаки, маркеры, пороги;
 - `dossier_store.py` — таблицы и запросы SQLite;
-- здесь — разбор текстов и сборка досье.
+- `dossier_text.py` — тональность, цитаты, закономерности;
+- `dossier_summary.py` — сводка словами и строки карточки;
+- `reviewitems.py`, `fake_*.py` — отдельные отзывы и детекция накрутки;
+- здесь — сборка досье и уровень риска.
 
 Имена из обоих модулей реэкспортируются ниже, поэтому `dossier.store`,
 `dossier.PATTERN_RULES` и прочее работают по-прежнему.
@@ -29,6 +32,13 @@
 зачётом позитивного совпадения проверяется префикс отрицания, иначе злой отзыв
 становится mixed и перестаёт красить работодателя.
 
+Накрученные отзывы. Страница разбирается на отдельные отзывы (reviewitems.py),
+каждый получает fake_score по детерминированным сигналам (fake_reviews.py), а
+компания — метку накрутки по агрегатам (fake_company.py). Заказные отзывы не
+участвуют в средней оценке и в доле негатива, сомнительные идут с половинным
+весом. Средняя по всем тоже сохраняется: разница между ней и чистой средней —
+и есть то, что видно владельцу. Проектное решение — docs/fake-reviews.md.
+
 Тексты отзывов. Выдача поиска даёт заголовок и сниппет, а у отзовиков сниппет —
 рекламная подпись сайта. По ней ни закономерностей, ни тональности не видно,
 поэтому страницы найденных отзывов открываются целиком (reviewpage.py), и весь
@@ -43,7 +53,29 @@ from dataclasses import dataclass, field
 from typing import Sequence
 
 import contacts
+import fake_company
+import fake_llm
+import fake_reviews
+import fake_rules
+import fake_store
 import reviewpage
+from dossier_summary import (  # noqa: F401 — реэкспорт для старых вызовов
+    format_lines,
+    format_summary,
+    summarize,
+)
+from dossier_text import (  # noqa: F401 — реэкспорт для старых вызовов
+    Pattern,
+    average_rating,
+    count_markers,
+    find_patterns,
+    is_negated,
+    matched_needle,
+    polarity_of,
+)
+from fake_company import CompanyMark
+from fake_reviews import Verdict
+from reviewitems import ReviewItem, extract_rating  # noqa: F401 — реэкспорт
 from dossier_rules import (  # noqa: F401 — реэкспорт для старых вызовов
     MAX_LLM_CHARS,
     MAX_LLM_REVIEWS,
@@ -58,6 +90,7 @@ from dossier_rules import (  # noqa: F401 — реэкспорт для стар
     RISK_GREEN,
     RISK_RED,
     RISK_RU,
+    RISK_THIN,
     RISK_UNKNOWN,
     RISK_YELLOW,
     SITE_NAMES,
@@ -111,23 +144,6 @@ class Review:
         return bool(self.body.strip())
 
 
-@dataclass(frozen=True)
-class Pattern:
-    """Закономерность: не один злой отзыв, а повторяющаяся жалоба."""
-
-    code: str
-    label: str
-    polarity: str
-    weight: int
-    hits: int
-    quotes: tuple[str, ...] = ()
-
-    @property
-    def confirmed(self) -> bool:
-        """Закономерность — от двух упоминаний или одного тяжёлого признака."""
-        return self.hits >= 2 or self.weight >= 4
-
-
 @dataclass
 class Dossier:
     """Итог по компании. Собирается один раз и переиспользуется всеми вакансиями."""
@@ -136,8 +152,12 @@ class Dossier:
     domain: str | None = None
     site_url: str | None = None
     reviews: tuple[Review, ...] = ()
+    items: tuple[ReviewItem, ...] = ()
+    verdicts: tuple[Verdict, ...] = ()
+    mark: CompanyMark = field(default_factory=CompanyMark)
     patterns: tuple[Pattern, ...] = ()
-    avg_rating: float | None = None
+    avg_rating: float | None = None       # без заказных, сомнительные с весом 0.5
+    avg_rating_all: float | None = None   # по всем отзывам, для сравнения
     risk: str = RISK_UNKNOWN
     summary: str | None = None
     summary_by: str = ""
@@ -154,6 +174,17 @@ class Dossier:
     @property
     def review_count(self) -> int:
         return len(self.reviews)
+
+    @property
+    def suspicious(self) -> tuple[Verdict, ...]:
+        """Отзывы, помеченные как сомнительные или заказные."""
+        return tuple(
+            v for v in self.verdicts if v.label != fake_rules.LABEL_CLEAN
+        )
+
+    @property
+    def item_by_index(self) -> dict[int, ReviewItem]:
+        return {item.index: item for item in self.items}
 
     @property
     def read_count(self) -> int:
@@ -207,186 +238,138 @@ def is_review_source(url: str) -> bool:
     return site_of(url) in SITE_NAMES
 
 
-def extract_rating(text: str) -> float | None:
-    """Оценка из текста выдачи. Стобалльная шкала приводится к пятибалльной."""
-    text = text or ""
-    match = RATING_RE.search(text) or STARS_RE.search(text)
-    if not match:
-        return None
-    raw = match.group(1).replace(",", ".")
-    try:
-        value = float(raw)
-    except ValueError:
-        return None
-    if "/10" in text or "из 10" in text:
-        value = value / 2
-    if not 0 < value <= 5:
-        return None
-    return round(value, 2)
-
-
-def is_negated(low: str, at: int) -> bool:
-    """Стоит ли отрицание прямо перед совпадением.
-
-    Смотрим узкое окно слева: «не платят вовремя» — отрицание, а «платят
-    вовремя, не придраться» — нет.
-    """
-    before = low[max(0, at - NEGATION_WINDOW):at]
-    return any(before.endswith(prefix) for prefix in NEGATION_PREFIXES)
-
-
-def count_markers(markers: Sequence[str], low: str, *, skip_negated: bool) -> int:
-    """Сколько маркеров нашлось. Под отрицанием позитивные не считаются."""
-    total = 0
-    for marker in markers:
-        start = 0
-        while True:
-            at = low.find(marker, start)
-            if at < 0:
-                break
-            start = at + len(marker)
-            if skip_negated and is_negated(low, at):
-                continue
-            total += 1
-    return total
-
-
-def matched_needle(
-    low: str, needles: Sequence[str], *, skip_negated: bool
-) -> str | None:
-    """Первый сработавший признак или None. Отрицания пропускаются."""
-    for needle in needles:
-        start = 0
-        while True:
-            at = low.find(needle, start)
-            if at < 0:
-                break
-            start = at + len(needle)
-            if skip_negated and is_negated(low, at):
-                continue
-            return needle
-    return None
-
-
-def polarity_of(text: str) -> str:
-    """Грубая тональность без модели: маркеры плюс признаки закономерностей."""
-    low = (text or "").lower()
-    negative = count_markers(NEGATIVE_MARKERS, low, skip_negated=False)
-    positive = count_markers(POSITIVE_MARKERS, low, skip_negated=True)
-    for _code, _label, pol, weight, needles in PATTERN_RULES:
-        # Зелёные признаки под отрицанием не считаются: «не платят вовремя» —
-        # это жалоба, а не похвала.
-        found = matched_needle(low, needles, skip_negated=pol == "green")
-        if not found:
-            continue
-        if pol == "red":
-            negative += 1 if weight < 4 else 2
-        else:
-            positive += 1
-    if negative and positive:
-        return "mixed"
-    if negative:
-        return "negative"
-    if positive:
-        return "positive"
-    return "unknown"
-
-
-def _quote(text: str, needle: str) -> str:
-    """Кусок текста вокруг признака: без цитаты вывод нельзя проверить."""
-    low = text.lower()
-    at = low.find(needle)
-    if at < 0:
-        return text[:MAX_QUOTE_CHARS].strip()
-    start = max(0, at - 80)
-    end = min(len(text), at + len(needle) + 120)
-    piece = text[start:end].strip()
-    if start:
-        piece = "…" + piece
-    if end < len(text):
-        piece = piece + "…"
-    return piece[:MAX_QUOTE_CHARS]
-
-
-def find_patterns(reviews: Sequence[Review]) -> tuple[Pattern, ...]:
-    """Ищет повторяющиеся сюжеты по всем отзывам сразу.
-
-    Считаются отзывы, а не встреченные слова: один эмоциональный текст с пятью
-    упоминаниями переработок — это один голос, а не закономерность.
-
-    Зелёные признаки под отрицанием не засчитываются: иначе отзыв «не платят
-    вовремя» давал бы green-флаг и подкрашивал risk_level в зелёный.
-    """
-    out: list[Pattern] = []
-    for code, label, polarity, weight, needles in PATTERN_RULES:
-        hits = 0
-        quotes: list[str] = []
-        for review in reviews:
-            text = review.text
-            low = text.lower()
-            matched = matched_needle(low, needles, skip_negated=polarity == "green")
-            if not matched:
-                continue
-            hits += 1
-            if len(quotes) < 3:
-                quotes.append(_quote(text, matched))
-        if hits:
-            out.append(
-                Pattern(
-                    code=code,
-                    label=label,
-                    polarity=polarity,
-                    weight=weight,
-                    hits=hits,
-                    quotes=tuple(quotes),
-                )
-            )
-    out.sort(key=lambda p: (p.polarity != "red", -p.weight * p.hits))
-    return tuple(out)
-
-
-def average_rating(reviews: Sequence[Review]) -> float | None:
-    values = [r.rating for r in reviews if r.rating is not None]
-    if not values:
-        return None
-    return round(sum(values) / len(values), 2)
-
-
 def risk_level(
-    reviews: Sequence[Review], patterns: Sequence[Pattern], avg_rating: float | None
+    reviews: Sequence[Review],
+    patterns: Sequence[Pattern],
+    avg_rating: float | None,
+    mark: CompanyMark | None = None,
+    negative_share: float | None = None,
 ) -> str:
-    """Цвет светофора. Нет данных — значит нет данных, а не «всё хорошо» [CORE-019]."""
+    """Цвет светофора. Нет данных — значит нет данных, а не «всё хорошо» [CORE-019].
+
+    Порядок проверок. Накрутка идёт первой: это красный флаг веса 4 (уровень
+    серой зарплаты), только про поведение компании, а не про условия труда.
+    Иначе получилось бы, что чем больше заказных отзывов, тем меньше осталось
+    честных — и тем спокойнее выглядит работодатель.
+
+    «Данных мало» — отдельный цвет: отзывы были, но после чистки их осталось
+    меньше MIN_CLEAN_REVIEWS, и пересчитывать риск по остаткам нечестно.
+    """
     if not reviews:
         return RISK_UNKNOWN
+    if mark is not None and mark.flagged:
+        return RISK_RED
+    if mark is not None and mark.total and mark.clean_weight < fake_rules.MIN_CLEAN_REVIEWS:
+        return RISK_THIN
+
     red = [p for p in patterns if p.polarity == "red" and p.confirmed]
     green = [p for p in patterns if p.polarity == "green" and p.confirmed]
     heavy = [p for p in red if p.weight >= 4]
-    negative = sum(1 for r in reviews if r.polarity in ("negative", "mixed"))
-    share = negative / len(reviews)
+    if negative_share is None:
+        negative = sum(1 for r in reviews if r.polarity in ("negative", "mixed"))
+        negative_share = negative / len(reviews)
 
-    if heavy or share >= 0.6 or (avg_rating is not None and avg_rating <= 2.5):
+    if heavy or negative_share >= 0.6 or (avg_rating is not None and avg_rating <= 2.5):
         return RISK_RED
-    if red or share >= 0.3 or (avg_rating is not None and avg_rating < 3.8):
+    if red or negative_share >= 0.3 or (avg_rating is not None and avg_rating < 3.8):
         return RISK_YELLOW
     if green or (avg_rating is not None and avg_rating >= 4.0):
         return RISK_GREEN
     return RISK_YELLOW
 
 
-def analyze(company: str, reviews: Sequence[Review], site_url: str | None = None) -> Dossier:
-    """Детерминированная часть досье: без сети и без модели."""
+def negative_share(
+    items: Sequence[ReviewItem], verdicts: Sequence[Verdict]
+) -> float | None:
+    """Доля негатива с весом метки: заказной отзыв не тянет ни в одну сторону."""
+    weights = {v.index: v.weight for v in verdicts}
+    total = 0.0
+    negative = 0.0
+    for item in items:
+        weight = weights.get(item.index, 1.0)
+        if not weight:
+            continue
+        total += weight
+        if polarity_of(item.text) in ("negative", "mixed"):
+            negative += weight
+    return round(negative / total, 2) if total else None
+
+
+def analyze(
+    company: str,
+    reviews: Sequence[Review],
+    site_url: str | None = None,
+    items: Sequence[ReviewItem] = (),
+    verdicts: Sequence[Verdict] = (),
+) -> Dossier:
+    """Детерминированная часть досье: без сети и без модели.
+
+    Отдельных отзывов может не быть (старая база, страница без разделителей) —
+    тогда всё считается по страницам, как раньше.
+    """
     reviews = tuple(reviews)
+    items = tuple(items)
+    verdicts = tuple(verdicts)
     patterns = find_patterns(reviews)
-    avg = average_rating(reviews)
+    mark = fake_company.evaluate(items, verdicts)
+    avg = mark.avg_clean if items else average_rating(reviews)
     return Dossier(
         company=company,
         domain=contacts.domain_of(site_url),
         site_url=site_url,
         reviews=reviews,
+        items=items,
+        verdicts=verdicts,
+        mark=mark,
         patterns=patterns,
         avg_rating=avg,
-        risk=risk_level(reviews, patterns, avg),
+        avg_rating_all=mark.avg_all if items else avg,
+        risk=risk_level(
+            reviews,
+            patterns,
+            avg,
+            mark=mark if items else None,
+            negative_share=negative_share(items, verdicts) if items else None,
+        ),
         sources=tuple(dict.fromkeys(r.url for r in reviews if r.url)),
+    )
+
+
+def items_from_reviews(
+    reviews: Sequence[Review], fetcher: object | None
+) -> tuple[ReviewItem, ...]:
+    """Собирает отдельные отзывы всех прочитанных страниц в один список.
+
+    Номера сквозные по компании: по ним потом сходятся вердикты, строки базы и
+    интерфейс, а внутри страницы нумерация своя и совпала бы у разных площадок.
+    """
+    from dataclasses import replace
+
+    pages = getattr(fetcher, "items", None) or {}
+    out: list[ReviewItem] = []
+    for review in reviews:
+        for item in pages.get(review.url, ()):  # type: ignore[union-attr]
+            out.append(replace(item, index=len(out), site=review.site, url=review.url))
+    return tuple(out)
+
+
+def score_reviews(
+    company: str,
+    items: Sequence[ReviewItem],
+    conn: object | None = None,
+    gateway: object | None = None,
+) -> tuple[Verdict, ...]:
+    """Считает fake_score. Хэши чужих компаний берутся из базы, если она есть."""
+    if not items:
+        return ()
+    known: dict[str, str] = {}
+    if conn is not None:
+        try:
+            known = fake_store.known_hashes(conn, company)  # type: ignore[arg-type]
+        except Exception as exc:  # noqa: BLE001 — детекция важнее одного сигнала
+            log.warning("хэши отзывов не прочитаны: %s", exc)
+    return fake_reviews.score_items(
+        items, known_hashes=known, llm_ads=fake_llm.ad_indexes(gateway, items)
     )
 
 
@@ -442,108 +425,6 @@ def reviews_from_hits(
     return tuple(out)
 
 
-def summarize(gateway: object | None, dossier: Dossier) -> tuple[str | None, str]:
-    """Сводка словами. Возвращает (текст, кем собрана).
-
-    Модель видит только название компании и тексты публичных отзывов. Она не
-    меняет ни флаги, ни риск: иначе один галлюцинированный абзац перекрашивал бы
-    компанию из красной в зелёную.
-
-    В выдержки идут сначала прочитанные страницы и только потом сниппеты: если
-    отдать модели рекламные заголовки отзовиков, она справедливо ответит, что
-    данных недостаточно.
-    """
-    deterministic = format_summary(dossier)
-    if gateway is None or not getattr(gateway, "enabled", False) or not dossier.reviews:
-        return deterministic, "правила"
-
-    ordered = sorted(dossier.reviews, key=lambda r: (not r.has_body, -len(r.text)))
-    excerpts = []
-    for review in ordered[:MAX_LLM_REVIEWS]:
-        text = (review.body or review.text).strip()
-        excerpts.append("[{}] {}".format(review.site_name, text[:MAX_LLM_CHARS]))
-
-    if dossier.read_count:
-        preface = "Ниже тексты отзывов сотрудников о работодателе «{company}»."
-    else:
-        preface = (
-            "Ниже только заголовки и сниппеты выдачи по работодателю «{company}»: "
-            "сами страницы отзывов открыть не удалось."
-        )
-    prompt = (
-        preface + "\n"
-        "Назови 3–5 повторяющихся закономерностей одним списком, без введения.\n"
-        "Правила: опирайся только на текст; если данных мало — скажи это прямо; "
-        "не выдумывай цифр; не упоминай имён людей.\n\n{body}"
-    ).format(company=dossier.company, body="\n\n".join(excerpts))
-
-    try:
-        answer = gateway.complete(  # type: ignore[attr-defined]
-            # Этап «dossier», а не «company»: в отзывах встречаются имена
-            # сотрудников, и профиль этапа (LOCAL, PERSONAL_STAGES) должен
-            # решать, уходит ли это на внешний прокси [CORE-012].
-            "dossier",
-            [{"role": "user", "content": prompt}],
-        )
-    except Exception as exc:  # noqa: BLE001 — досье важнее красивой сводки
-        log.warning("сводка по отзывам не собрана: %s", exc)
-        return deterministic, "правила"
-
-    if not answer:
-        return deterministic, "правила"
-    return answer.strip(), "модель"
-
-
-def format_summary(dossier: Dossier) -> str:
-    """Сводка без модели: только то, что посчитано."""
-    if not dossier.reviews:
-        return "Отзывов не найдено — о работодателе неизвестно ничего."
-    parts = [
-        "Отзывов: {}".format(dossier.review_count),
-    ]
-    if dossier.read_count:
-        parts.append(
-            "прочитано страниц: {} из {}".format(
-                dossier.read_count, dossier.review_count
-            )
-        )
-    else:
-        parts.append("тексты страниц не прочитаны, только выдача поиска")
-    if dossier.avg_rating is not None:
-        parts.append("средняя оценка {:.1f} из 5".format(dossier.avg_rating))
-    red = dossier.red_flags
-    green = dossier.green_flags
-    if red:
-        parts.append(
-            "повторяется: "
-            + "; ".join("{} ({})".format(p.label.lower(), p.hits) for p in red[:4])
-        )
-    if green:
-        parts.append(
-            "в плюс: "
-            + "; ".join("{} ({})".format(p.label.lower(), p.hits) for p in green[:3])
-        )
-    if not red and not green:
-        parts.append("повторяющихся сюжетов не видно")
-    return ". ".join(parts) + "."
-
-
-def format_lines(dossier: Dossier, limit: int = 3) -> list[str]:
-    """Строки для карточки в Telegram и для страницы вакансии."""
-    lines = [
-        "Работодатель: {} · отзывов {}".format(
-            RISK_RU.get(dossier.risk, dossier.risk), dossier.review_count
-        )
-    ]
-    if dossier.avg_rating is not None:
-        lines[0] += " · оценка {:.1f}".format(dossier.avg_rating)
-    for pattern in dossier.red_flags[:limit]:
-        lines.append("— {} (упоминаний: {})".format(pattern.label, pattern.hits))
-    for pattern in dossier.green_flags[:2]:
-        lines.append("+ {} (упоминаний: {})".format(pattern.label, pattern.hits))
-    return lines
-
-
 def build(
     company: str,
     provider: object,
@@ -551,6 +432,7 @@ def build(
     site_url: str | None = None,
     limit: int = 5,
     fetcher: object | None = None,
+    conn: object | None = None,
 ) -> Dossier:
     """Полный сбор по одной компании: поиск → страницы отзывов → разбор → сводка.
 
@@ -575,16 +457,25 @@ def build(
         # Кэш страниц живёт в той же базе, что и кэш поиска.
         fetcher = reviewpage.PageFetcher.from_env(conn=getattr(provider, "conn", None))
 
-    dossier = analyze(company, reviews_from_hits(hits, fetcher=fetcher), site_url=site_url)
+    if conn is None:
+        conn = getattr(provider, "conn", None)
+    reviews = reviews_from_hits(hits, fetcher=fetcher)
+    items = items_from_reviews(reviews, fetcher)
+    verdicts = score_reviews(company, items, conn=conn, gateway=gateway)
+    dossier = analyze(company, reviews, site_url=site_url, items=items, verdicts=verdicts)
     summary, by = summarize(gateway, dossier)
     dossier.summary = summary
     dossier.summary_by = by
     log.info(
-        "досье %s: отзывов %s (прочитано страниц %s), риск %s, красных флагов %s",
+        "досье %s: отзывов %s (прочитано страниц %s, разобрано отзывов %s, "
+        "похожи на заказные %s), риск %s, красных флагов %s, накрутка: %s",
         company,
         dossier.review_count,
         dossier.read_count,
+        len(dossier.items),
+        dossier.mark.fake,
         dossier.risk,
         len(dossier.red_flags),
+        dossier.mark.level,
     )
     return dossier

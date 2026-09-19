@@ -33,14 +33,21 @@ hh.ru (HTML поиска, ADR-015)
 dossier.build(company)
   → websearch.SearchProvider   поиск по сайтам отзывов (SearXNG / Tavily / Brave), кэш search_cache
   → reviewpage.PageFetcher     чтение самих страниц отзывов, кэш page_cache на 30 дней
-  → dossier.find_patterns      словарь маркеров + учёт отрицаний, без модели
-  → dossier.summarize          сводка словами (этап company), необязательная
-  → company_dossier / company_reviews
+  → reviewitems.split_page     страница → отдельные отзывы: дата, оценка, плюсы, минусы
+  → fake_reviews.score_items   fake_score по сигналам накрутки, без модели
+  → fake_company.evaluate      метка компании и средняя без заказных отзывов
+  → dossier_text.find_patterns словарь маркеров + учёт отрицаний, без модели
+  → dossier_summary.summarize  сводка словами (этап dossier), необязательная
+  → company_dossier / company_reviews / review_items / review_hashes
 ```
 
 Ключевое свойство: флаги и уровень риска считает Python по словарю `PATTERN_RULES`, модель только
 пересказывает (`[CORE-015]`). Поэтому досье воспроизводимо и объяснимо: в интерфейсе видно, какая
 фраза в каком отзыве дала флаг.
+
+Отзывы, похожие на заказные, не участвуют в средней оценке и в доле негатива, сомнительные идут с
+половинным весом; сама накрутка — отдельная метка компании и красный флаг веса 4. Сигналы, пороги и
+границы формулировок — `docs/fake-reviews.md`.
 
 ## Резюме владельца (B-01)
 
@@ -86,7 +93,10 @@ dossier.build(company)
 | `conditions.py` | условия работы, извлечённые из описания |
 | `websearch.py` | внешний поиск с кэшем и потолком запросов |
 | `reviewpage.py` | загрузка и очистка страниц отзывов, кэш страниц |
-| `dossier.py` | досье: отзывы, маркеры, риск, сводка |
+| `dossier.py` | досье: сборка, риск, реэкспорт имён |
+| `dossier_text.py`, `dossier_summary.py` | разбор текста отзывов и сводка/строки карточки |
+| `reviewitems.py` | страница → отдельные отзывы: дата, оценка, плюсы, минусы |
+| `fake_reviews.py`, `fake_rules.py`, `fake_company.py`, `fake_store.py`, `fake_llm.py` | детекция накрученных отзывов: сигналы, пороги, метка компании, хранение, сигнал модели |
 | `resume.py` | резюме: блоки, подтверждение, экспорт, стаж, противоречия (без модели) |
 | `resume_llm.py` | черновик секции и отбор блоков под вакансию |
 | `contacts.py`, `contacts_rules.py` | поиск рабочих контактов, лог и дедуп, словари этапа |
@@ -105,7 +115,10 @@ dossier.build(company)
 
 Один файл SQLite (`data/fuckhr.sqlite3`). Таблицы: `intake_log`, `vacancies`, `vacancy_snapshots`, `vacancy_conditions`,
 `hr_signals`, `company_dossier`, `company_reviews`, `contacts`, `resumes`, `resume_blocks`,
-`resume_versions`, `search_cache`, `page_cache`, `llm_cache`.
+`resume_versions`, `review_items`, `review_hashes`, `search_cache`, `page_cache`, `llm_cache`.
+
+`review_hashes` — общая таблица хэшей на всю базу: она ловит фабрики отзывов, работающие сразу на
+несколько компаний, и живёт ровно столько, сколько живут сами отзывы.
 
 Векторов нет: `sqlite-vec` из ADR-008 не подключён, семантический дедуп не нужен на текущих объёмах.
 Невосстановимы две вещи: `vacancy_snapshots` — hh.ru не расскажет задним числом, что вакансия висела
@@ -116,7 +129,7 @@ dossier.build(company)
 
 Шлюз `llm.py` знает два адреса: локальный (`LLM_BASE_URL`) и необязательный внешний прокси
 (`LLM_PROXY_BASE_URL`). Этап выбирает профиль (`STAGE_PROFILES`), профиль выбирает маршрут.
-Этапы `contacts`, `dossier`, `draft` работают с данными о живых людях и остаются на локальном адресе,
+Этапы `contacts`, `dossier`, `draft`, `review_fake` работают с данными о живых людях и остаются на локальном адресе,
 пока владелец не выставит `LLM_PERSONAL_VIA_PROXY=1` (`[CORE-012]`).
 
 Этапы резюме (`resume_section`, `resume_tailor`) в этот список не входят: это данные самого

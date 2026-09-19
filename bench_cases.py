@@ -146,6 +146,23 @@ LETTER = (
     "подскажите, кто ведёт направление."
 )
 
+# Отзывы для этапа review_fake. Первый и третий — живой опыт, второй написан
+# как реклама: ни одной проверяемой детали, зато весь набор клише.
+FAKE_REVIEWS = (
+    "Работал два года в отделе биллинга. Зарплата приходила 10 и 25 числа, "
+    "переработки бывали перед релизом, но их оплачивали.",
+    "Динамично развивающаяся компания, дружный коллектив, современный офис и "
+    "перспективы роста. Рекомендую всем, кто ищет стабильную работу!",
+    "Ушёл после испытательного: обещали python, посадили на поддержку 1С. "
+    "Руководитель отдела сменился дважды за три месяца.",
+)
+HONEST_REVIEWS = (
+    "Три месяца на испытательном, оффер совпал с тем, что говорили на "
+    "собеседовании. Из минусов — тесты пишет один человек на всю команду.",
+    "Задерживали зарплату в декабре на неделю, извинились и выплатили. "
+    "Отпуск дают без споров, график 5/2.",
+)
+
 CASES: tuple[Case, ...] = (
     Case(
         "extract: гибрид и вилка",
@@ -224,6 +241,19 @@ CASES: tuple[Case, ...] = (
         {"min_lines": 3, "max_lines": 6},
     ),
     Case(
+        "review_fake: рекламный текст среди живых",
+        "review_fake",
+        {"reviews": FAKE_REVIEWS},
+        {"ad": (1,)},
+    ),
+    Case(
+        "review_fake: живые отзывы не трогать",
+        "review_fake",
+        {"reviews": HONEST_REVIEWS},
+        {"ad": ()},
+        trap=True,
+    ),
+    Case(
         "draft: переписать письмо",
         "draft",
         {"body": LETTER, "facts": ("8 лет опыта",)},
@@ -242,6 +272,8 @@ def check(case: Case, result: Any) -> tuple[float, str]:
         return _check_contacts(case, result)
     if case.stage == "draft":
         return _check_draft(case, result)
+    if case.stage == "review_fake":
+        return _check_review_fake(case, result)
     if case.stage == "intake":
         return _check_intake(case, result)
     if case.stage == "hr_filter":
@@ -406,6 +438,22 @@ def _check_contacts(case: Case, result: Any) -> tuple[float, str]:
         return 0.0, "адресат не выбран"
     ok = getattr(result, "label", "") == want.label
     return (1.0 if ok else 0.0), getattr(result, "label", "")[:48]
+
+
+def _check_review_fake(case: Case, result: Any) -> tuple[float, str]:
+    """Сигнал по отзывам: важнее не пропуск рекламы, а молчание на живом тексте.
+
+    Ложное срабатывание здесь дороже, поэтому лишний индекс обнуляет кейс, а
+    пропущенный — только половинит [CORE-019].
+    """
+    got = set(result or ())
+    want = set(case.expect.get("ad", ()))
+    extra = sorted(got - want)
+    if extra:
+        return 0.0, "лишние: {}".format(", ".join(str(i) for i in extra))
+    if got == want:
+        return 1.0, "совпало"
+    return 0.5, "пропустила: {}".format(", ".join(str(i) for i in sorted(want - got)))
 
 
 def _check_draft(case: Case, result: Any) -> tuple[float, str]:

@@ -22,6 +22,8 @@ import company_signals
 import contact_finds
 import contacts
 import dossier
+import fake_rules
+import fake_store
 import maintenance
 from ui_core import details, esc, sort_head, sort_pick, table
 from ui_views import draft_button
@@ -31,6 +33,7 @@ RISK_CLASS = {
     dossier.RISK_YELLOW: "warn",
     dossier.RISK_GREEN: "ok",
     dossier.RISK_UNKNOWN: "muted",
+    dossier.RISK_THIN: "warn",
 }
 
 POLARITY_RU = {
@@ -268,6 +271,64 @@ def render_vacancies_for(
     return table(sort_head(VACANCY_COLUMNS, base, "jsort", sort), body, raw_head=True)
 
 
+def render_fake(conn: sqlite3.Connection, name: str, row: sqlite3.Row) -> str:
+    """Метка накрутки и подозрительные отзывы.
+
+    Метка всегда раскрывается: какие признаки сработали и сколько отзывов
+    затронуто. Сами отзывы показываются, а не прячутся: скрытые данные нельзя
+    перепроверить. Вердиктов «фейк» здесь нет — доказать заказной отзыв нельзя,
+    поэтому формулировка «похоже на заказной» и ссылка на источник.
+    """
+    level = str(row["fake_level"] or fake_rules.MARK_NONE)
+    try:
+        signs = json.loads(row["fake_signs"] or "[]")
+    except ValueError:
+        signs = []
+    подозрительные = [
+        item
+        for item in fake_store.load_items(conn, name)
+        if str(item["label"]) != fake_rules.LABEL_CLEAN
+    ]
+    if level == fake_rules.MARK_NONE and not подозрительные:
+        return ""
+
+    head = '<div class="{cls}">{label}</div>'.format(
+        cls="danger" if level == fake_rules.MARK_FAKE else "warn",
+        label=esc(fake_rules.MARK_RU.get(level, level)),
+    )
+    if signs:
+        head += "<ul>{}</ul>".format(
+            "".join("<li>{}</li>".format(esc(sign.get("text") or "")) for sign in signs)
+        )
+
+    rows = []
+    for item in подозрительные:
+        try:
+            signals = json.loads(item["signals"] or "[]")
+        except ValueError:
+            signals = []
+        rows.append(
+            [
+                '<a href="{url}" target=_blank rel=noreferrer>{site}</a>'.format(
+                    url=esc(item["url"]),
+                    site=esc(dossier.SITE_NAMES.get(str(item["site"]), item["site"] or "источник")),
+                ),
+                esc(str(item["dated_at"] or "—")),
+                esc("—" if item["rating"] is None else "{:.1f}".format(float(item["rating"]))),
+                esc(fake_rules.LABEL_RU.get(str(item["label"]), item["label"])),
+                esc("{:.2f}".format(float(item["fake_score"] or 0))),
+                esc("; ".join(fake_rules.SIGNALS[c][1] for c in signals if c in fake_rules.SIGNALS)),
+                esc(item["excerpt"] or ""),
+            ]
+        )
+    table_html = "<p class=muted>Подозрительных отзывов нет.</p>"
+    if rows:
+        table_html = table(
+            ("Площадка", "Дата", "Оценка", "Метка", "Счёт", "Сигналы", "Фрагмент"), rows
+        )
+    return "<h3>Похоже на накрутку отзывов</h3>{}{}".format(head, table_html)
+
+
 def render_company(
     conn: sqlite3.Connection,
     name: str,
@@ -293,6 +354,11 @@ def render_company(
     rating = "—"
     if row["avg_rating"] is not None:
         rating = "{:.1f} из 5".format(float(row["avg_rating"]))
+        if row["avg_rating_all"] is not None and float(row["avg_rating_all"]) != float(
+            row["avg_rating"]
+        ):
+            # Обе средние рядом: разница между ними и есть цена накрутки.
+            rating += " (по всем отзывам {:.1f})".format(float(row["avg_rating_all"]))
     head = (
         '<div class="{cls}">Работодатель: {risk} · отзывов: {count} · средняя оценка: '
         "{rating}</div>"
@@ -302,6 +368,8 @@ def render_company(
         count=esc(row["review_count"]),
         rating=esc(rating),
     )
+
+    fake_block = render_fake(conn, name, row)
 
     summary = ""
     if row["summary"]:
@@ -349,11 +417,12 @@ def render_company(
         )
 
     about = (
-        "{summary}"
+        "{fake}{summary}"
         "<h3>История публикаций</h3>{signals}"
         "<h3>Закономерности</h3>{patterns}"
         "<h3>Источники</h3>{reviews}"
     ).format(
+        fake=fake_block,
         summary=summary,
         signals=render_signals(conn, name),
         patterns=patterns_block,

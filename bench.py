@@ -47,6 +47,7 @@ STAGES = (
     "company",
     "contacts",
     "dossier",
+    "review_fake",
     "draft",
     "resume_section",
     "resume_tailor",
@@ -139,6 +140,15 @@ def run_case(gateway: Any, case: Case) -> Any:
         )
         card = dossier_mod.Dossier(company=case.payload["company"], reviews=reviews)
         return dossier_mod.summarize(gateway, card)[0]
+    if case.stage == "review_fake":
+        import fake_llm
+        import reviewitems
+
+        items = tuple(
+            reviewitems.ReviewItem(url="https://example/{}".format(i), index=i, body=body)
+            for i, body in enumerate(case.payload["reviews"])
+        )
+        return fake_llm.ad_indexes(gateway, items, force=True)
     raise ValueError("неизвестный этап: {}".format(case.stage))
 
 

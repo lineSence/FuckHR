@@ -165,12 +165,16 @@ NEGATION_PREFIXES = (
 NEGATION_WINDOW = 20  # сколько символов слева смотрим на отрицание
 
 RISK_UNKNOWN = "unknown"
+# «Данных мало» — это не «нет отзывов». Отзывы были, но после чистки заказных
+# их осталось меньше MIN_CLEAN_REVIEWS, и пересчитывать риск по остаткам нечестно.
+RISK_THIN = "thin"
 RISK_GREEN = "green"
 RISK_YELLOW = "yellow"
 RISK_RED = "red"
 
 RISK_RU = {
     RISK_UNKNOWN: "нет данных",
+    RISK_THIN: "данных мало",
     RISK_GREEN: "претензий не видно",
     RISK_YELLOW: "есть к чему придраться",
     RISK_RED: "красные флаги",

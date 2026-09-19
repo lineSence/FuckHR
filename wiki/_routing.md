@@ -62,6 +62,12 @@ triggers:
       - wiki/architecture/pipeline.md
       - wiki/rules/hr-signal-detection.md
 
+  - id: fake-reviews
+    keywords: [накрутка, заказные отзывы, фейковые отзывы, fake_score, шингл, дубли отзывов, всплеск отзывов, метка компании]
+    load:
+      - docs/fake-reviews.md
+      - wiki/rules/hr-signal-detection.md
+
   - id: legal
     keywords: [152-фз, gdpr, tos, персональные данные, телефон, linkedin, юридика, osint, спам, отказ от рассылки]
     load:

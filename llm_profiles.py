@@ -36,6 +36,8 @@ STAGE_PROFILES: dict[str, str] = {
     "score": SMART,
     "contacts": LOCAL,
     "dossier": LOCAL,
+    # review_fake — тексты чужих отзывов, где встречаются имена сотрудников.
+    "review_fake": LOCAL,
     "draft": LOCAL,
     "resume_section": FAST,
     "resume_tailor": FAST,
@@ -43,7 +45,7 @@ STAGE_PROFILES: dict[str, str] = {
 }
 
 # Этапы, где в промпте есть данные о конкретных людях.
-PERSONAL_STAGES = frozenset({"contacts", "dossier", "draft"})
+PERSONAL_STAGES = frozenset({"contacts", "dossier", "draft", "review_fake"})
 
 # Имена маршрутов — то, что видно в логах и в интерфейсе.
 ROUTE_LOCAL = "local"

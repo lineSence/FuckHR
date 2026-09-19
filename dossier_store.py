@@ -19,6 +19,8 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 import company_key
+import fake_rules
+import fake_store
 from dossier_rules import RISK_RU, STALE_AFTER_DAYS
 
 if TYPE_CHECKING:
@@ -33,6 +35,9 @@ CREATE TABLE IF NOT EXISTS company_dossier (
     site_url      TEXT,
     review_count  INTEGER NOT NULL DEFAULT 0,
     avg_rating    REAL,
+    avg_rating_all REAL,
+    fake_level    TEXT NOT NULL DEFAULT 'none',
+    fake_signs    TEXT NOT NULL DEFAULT '[]',
     risk          TEXT NOT NULL DEFAULT 'unknown',
     patterns      TEXT NOT NULL DEFAULT '[]',
     red_flags     TEXT NOT NULL DEFAULT '[]',
@@ -62,14 +67,24 @@ CREATE INDEX IF NOT EXISTS idx_dossier_risk ON company_dossier(risk);
 """
 
 
+DOSSIER_COLUMNS = (
+    ("body", "company_reviews", "TEXT"),
+    ("avg_rating_all", "company_dossier", "REAL"),
+    ("fake_level", "company_dossier", "TEXT NOT NULL DEFAULT 'none'"),
+    ("fake_signs", "company_dossier", "TEXT NOT NULL DEFAULT '[]'"),
+)
+
+
 def ensure_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
-    # Миграция для баз, созданных до чтения страниц: колонки body там нет,
-    # а ронять прогон из-за этого нельзя.
-    columns = {row[1] for row in conn.execute("PRAGMA table_info(company_reviews)")}
-    if "body" not in columns:
-        log.info("добавляю колонку body в company_reviews")
-        conn.execute("ALTER TABLE company_reviews ADD COLUMN body TEXT")
+    fake_store.ensure_schema(conn)
+    # Миграции для баз, созданных раньше: недостающая колонка не имеет права
+    # ронять прогон.
+    for column, table, kind in DOSSIER_COLUMNS:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info({})".format(table))}
+        if column not in columns:
+            log.info("добавляю колонку %s в %s", column, table)
+            conn.execute("ALTER TABLE {} ADD COLUMN {} {}".format(table, column, kind))
     conn.commit()
 
 
@@ -110,14 +125,18 @@ def store(conn: sqlite3.Connection, dossier: "Dossier") -> None:
     conn.execute(
         """
         INSERT INTO company_dossier (
-            company, domain, site_url, review_count, avg_rating, risk,
+            company, domain, site_url, review_count, avg_rating, avg_rating_all,
+            fake_level, fake_signs, risk,
             patterns, red_flags, green_flags, summary, summary_by, sources, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(company) DO UPDATE SET
             domain = excluded.domain,
             site_url = excluded.site_url,
             review_count = excluded.review_count,
             avg_rating = excluded.avg_rating,
+            avg_rating_all = excluded.avg_rating_all,
+            fake_level = excluded.fake_level,
+            fake_signs = excluded.fake_signs,
             risk = excluded.risk,
             patterns = excluded.patterns,
             red_flags = excluded.red_flags,
@@ -133,6 +152,15 @@ def store(conn: sqlite3.Connection, dossier: "Dossier") -> None:
             dossier.site_url,
             dossier.review_count,
             dossier.avg_rating,
+            getattr(dossier, "avg_rating_all", None),
+            getattr(getattr(dossier, "mark", None), "level", fake_rules.MARK_NONE),
+            json.dumps(
+                [
+                    {"code": sign.code, "text": sign.text}
+                    for sign in getattr(getattr(dossier, "mark", None), "signs", ())
+                ],
+                ensure_ascii=False,
+            ),
             dossier.risk,
             json.dumps(
                 [
@@ -182,6 +210,9 @@ def store(conn: sqlite3.Connection, dossier: "Dossier") -> None:
                 _now(),
             ),
         )
+    fake_store.store(
+        conn, company, getattr(dossier, "items", ()), getattr(dossier, "verdicts", ())
+    )
     conn.commit()
 
 
@@ -227,9 +258,21 @@ def row_to_lines(row: sqlite3.Row) -> list[str]:
     if row["avg_rating"] is not None:
         head += " · оценка {:.1f}".format(float(row["avg_rating"]))
     lines = [head]
+    if _column(row, "fake_level") == fake_rules.MARK_FAKE:
+        lines.append(
+            "— {}: оценке площадки верить нельзя".format(fake_rules.MARK_FLAG_LABEL)
+        )
     lines += ["— {}".format(label) for label in red[:3]]
     lines += ["+ {}".format(label) for label in green[:2]]
     return lines
+
+
+def _column(row: sqlite3.Row, name: str) -> str:
+    """Значение колонки, которой может не быть в старой базе."""
+    try:
+        return str(row[name] or "")
+    except (IndexError, KeyError):
+        return ""
 
 
 def coverage(conn: sqlite3.Connection) -> tuple[int, int, int]:
