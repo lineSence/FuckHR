@@ -401,6 +401,22 @@ def reviews_from_hits(
     """
     out: list[Review] = []
     seen: set[str] = set()
+    urls = []
+    for hit in hits:
+        url = str(getattr(hit, "url", "") or "")
+        if url and url not in seen and is_review_source(url):
+            seen.add(url)
+            urls.append(url)
+    seen.clear()
+
+    # Страницы читаются разом: по одной это восемь пауз подряд на компанию.
+    bodies: dict[str, str] = {}
+    if urls and fetcher is not None and getattr(fetcher, "enabled", False):
+        if hasattr(fetcher, "fetch_many"):
+            bodies = fetcher.fetch_many(urls)  # type: ignore[attr-defined]
+        else:
+            bodies = {url: str(fetcher.fetch(url) or "") for url in urls}  # type: ignore[attr-defined]
+
     for hit in hits:
         url = str(getattr(hit, "url", "") or "")
         if not url or url in seen:
@@ -410,9 +426,7 @@ def reviews_from_hits(
         seen.add(url)
         title = str(getattr(hit, "title", "") or "")
         snippet = str(getattr(hit, "snippet", "") or "")
-        body = ""
-        if fetcher is not None and getattr(fetcher, "enabled", False):
-            body = str(fetcher.fetch(url) or "")  # type: ignore[attr-defined]
+        body = str(bodies.get(url, "") or "")
         text = " ".join(part for part in (title, snippet, body) if part)
         out.append(
             Review(

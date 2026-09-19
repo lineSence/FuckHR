@@ -52,6 +52,7 @@ import os
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable, Sequence
 
 import contacts_rules
@@ -189,6 +190,18 @@ def _digest(provider: str, query: str, limit: int, variant: str = "") -> str:
         [provider, query, limit, variant], ensure_ascii=False, sort_keys=True
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+MAX_SEARCH_WORKERS = 8  # выше инстанс SearXNG начинает ронять запросы сам
+
+
+def search_workers() -> int:
+    """Сколько запросов к поиску идёт одновременно."""
+    try:
+        raw = int(float(os.getenv("SEARCH_WORKERS", "4")))
+    except (TypeError, ValueError):
+        raw = 4
+    return max(1, min(MAX_SEARCH_WORKERS, raw))
 
 
 def contact_queries(company: str, roles: Sequence[str] = ()) -> list[str]:
@@ -510,13 +523,61 @@ class SearchProvider:
         return self._http_call(query, limit)
 
     def search_many(self, queries: Sequence[str], limit: int = 5) -> list[Hit]:
-        """Объединяет результаты по нескольким запросам, убирая дубли по URL."""
+        """Объединяет результаты по нескольким запросам, убирая дубли по URL.
+
+        Запросы к сети идут параллельно: каждый — это секунды ожидания чужого
+        сервера, а досье на компанию складывается из десятка таких запросов.
+        Кэш и счётчики остаются в вызывающем потоке: соединение sqlite между
+        потоками не делится, а потолок SEARCH_MAX_CALLS должен считаться один
+        раз, а не каждым потоком по-своему.
+        """
+        plan: list[str] = []
+        ready: dict[str, list[Hit]] = {}
+        for query in queries:
+            query = (query or "").strip()
+            if not query or query in ready or query in plan:
+                continue
+            if not self.enabled:
+                self.usage.skipped += 1
+                continue
+            cached = self._cache_get(_digest(self.provider, query, limit, self._variant()))
+            if cached is not None:
+                self.usage.cached += 1
+                ready[query] = cached
+            elif self.usage.calls + len(plan) < self.max_calls:
+                plan.append(query)
+            else:
+                self.usage.skipped += 1
+                log.warning("потолок запросов к поиску исчерпан (%s)", self.max_calls)
+
+        if plan:
+            workers = min(search_workers(), len(plan))
+            log.info("поиск: запросов %s, потоков %s", len(plan), workers)
+            caller = self.transport or self._http_call_adapter
+            with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="search") as pool:
+                futures = {
+                    pool.submit(caller, self.provider, query, limit): query
+                    for query in plan
+                }
+                for future in as_completed(futures):
+                    query = futures[future]
+                    try:
+                        hits = list(future.result())
+                    except Exception as exc:  # noqa: BLE001 — [CORE-017]
+                        self.usage.failures += 1
+                        log.warning("поиск %s не ответил: %s", self.provider, exc)
+                        continue
+                    self.usage.calls += 1
+                    log.info("найдено ссылок по «%s»: %s", query, len(hits))
+                    ready[query] = hits
+                    self._cache_put(
+                        _digest(self.provider, query, limit, self._variant()), query, hits
+                    )
+
         seen: set[str] = set()
         out: list[Hit] = []
-        total = len(queries)
-        for number, query in enumerate(queries, 1):
-            log.info("запрос %s/%s", number, total)
-            for hit in self.search(query, limit=limit):
+        for query in queries:
+            for hit in ready.get((query or "").strip(), ()):
                 if hit.url and hit.url not in seen:
                     seen.add(hit.url)
                     out.append(hit)

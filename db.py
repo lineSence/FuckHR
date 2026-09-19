@@ -161,6 +161,25 @@ def upsert_vacancy(
     return is_new
 
 
+def cached_details(conn: sqlite3.Connection, key: str) -> tuple[str, list[str], str | None] | None:
+    """Описание и навыки, которые уже лежат в базе, если они там есть.
+
+    Нужно, чтобы не качать карточку вакансии второй раз: страница детали стоит
+    паузы в пару секунд, и на повторном прогоне это основная часть времени.
+    Возвращает (описание, навыки, дата публикации) или None.
+    """
+    row = conn.execute(
+        "SELECT description, skills, published_at FROM vacancies WHERE key = ?", (key,)
+    ).fetchone()
+    if row is None or not (row["description"] or "").strip():
+        return None
+    try:
+        skills = json.loads(row["skills"] or "[]")
+    except (TypeError, ValueError):
+        skills = []
+    return row["description"], list(skills), row["published_at"]
+
+
 def touch_seen(conn: sqlite3.Connection, keys: Iterable[str]) -> None:
     """Отмечает, что вакансия попалась в выдаче, даже если скоринг её отклонил.
 

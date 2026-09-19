@@ -183,15 +183,17 @@ def find_contacts(
     row: sqlite3.Row,
     provider: websearch.SearchProvider,
     check_mx: bool = False,
+    hits: Sequence[websearch.Hit] | None = None,
 ) -> tuple[contacts.Discovery, list[websearch.Hit]]:
     """Ищет рабочие каналы по одной вакансии. Внешний поиск — один раз.
 
     Хиты возвращаются наружу: справка о компании собирается из них же, чтобы
-    не платить за второй поиск.
+    не платить за второй поиск. Готовые хиты можно передать: у трёх вакансий
+    одной компании страницы «Команда» и «Контакты» одни и те же.
     """
     company = row["company"]
     text = "\n".join(str(row[field] or "") for field in ("title", "description"))
-    hits = company_hits(provider, company, row["title"])
+    hits = list(hits) if hits is not None else company_hits(provider, company, row["title"])
     pages = pages_from_hits(hits)
     site_url = next((contacts.domain_of(url) for url, _ in pages if contacts.domain_of(url)), None)
     discovery = contacts.discover(
@@ -203,7 +205,7 @@ def find_contacts(
         check_mx=check_mx,
         vacancy_url=row["url"],
     )
-    return discovery, hits
+    return discovery, list(hits)
 
 
 def collect_contacts(
@@ -221,12 +223,27 @@ def collect_contacts(
     if not rows:
         return 0
     found = 0
+    # Внешний поиск — один раз на компанию, а не на вакансию: страницы команды и
+    # контактов у трёх вакансий одного работодателя одни и те же, а роль берётся
+    # по самой интересной из них. Раньше это были три набора запросов и три
+    # промаха кэша.
+    by_company: dict[str, list[websearch.Hit]] = {}
+    for row in rows:
+        name = (row["company"] or "").strip()
+        if name and name not in by_company:
+            best = max(
+                (r for r in rows if (r["company"] or "").strip() == name),
+                key=lambda r: r["score"] if "score" in r.keys() and r["score"] is not None else 0,
+            )
+            by_company[name] = company_hits(provider, name, best["title"])
+
     for position, row in enumerate(rows, start=1):
         reason = precondition(conn, row)
         if reason:
             log.debug("%s: контакты не ищем — %s", row["key"], reason)
             continue
-        discovery, _ = find_contacts(conn, row, provider, check_mx=check_mx)
+        shared = by_company.get((row["company"] or "").strip())
+        discovery, _ = find_contacts(conn, row, provider, check_mx=check_mx, hits=shared)
         contact_finds.save(conn, discovery)
         if discovery.candidates:
             found += 1

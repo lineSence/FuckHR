@@ -298,12 +298,19 @@ class HHHtmlClient:
     def __init__(
         self,
         pause: float = 2.0,
+        pause_min: float = 0.8,
         timeout: float = 30.0,
         cookie: str | None = None,
         proxy: str | None = None,
         failure_dir: str | Path | None = FAILURE_DIR,
     ) -> None:
-        self.pause = pause
+        # Пауза адаптивная: HH_PAUSE — верхняя граница и точка возврата, а не
+        # постоянная величина. На чистых ответах она снижается до HH_PAUSE_MIN,
+        # на 403/429/капче возвращается к максимуму. Раньше каждый из тысячи
+        # запросов ждал одинаковые «безопасные» 2–3 секунды.
+        self.pause_max = max(0.0, float(pause))
+        self.pause_min = max(0.0, min(float(pause_min), self.pause_max))
+        self.pause = self.pause_max
         self.failure_dir = failure_dir
         self.pages_fetched = 0
         self.fallback_pages = 0
@@ -335,6 +342,14 @@ class HHHtmlClient:
 
     def _sleep(self) -> None:
         time.sleep(self.pause + random.uniform(0, 1.0))
+
+    def _ease(self) -> None:
+        """Ответ чистый — идём чуть быстрее, но не быстрее нижней границы."""
+        self.pause = max(self.pause_min, self.pause * 0.85)
+
+    def _back_off(self) -> None:
+        """Ответ подозрительный — сразу к верхней границе, без полумер."""
+        self.pause = self.pause_max
 
     def _dump(self, body: str, reason: str) -> None:
         """Сохраняет страницу для разбора. Ошибка записи не должна рвать прогон."""
@@ -374,11 +389,13 @@ class HHHtmlClient:
                         "hh.ru требует капчу или блокирует запросы. Открой hh.ru в браузере, "
                         "пройди капчу и положи свежие cookie в HH_COOKIE, либо увеличь HH_PAUSE"
                     )
+                self._back_off()
                 time.sleep(delay)
                 delay *= 2
                 continue
             response.raise_for_status()
             self.pages_fetched += 1
+            self._ease()
             self._sleep()
             return body
         raise RuntimeError("unreachable")
@@ -424,6 +441,7 @@ class HHHtmlClient:
             except ExtractionError as exc:
                 log.warning("JSON состояния не найден (%s), иду по разметке", exc)
                 self.fallback_pages += 1
+                self._back_off()
                 self._dump(body, "no-state")
                 vacancies = parse_cards_fallback(body)
 

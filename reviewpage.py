@@ -51,6 +51,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable
 
 log = logging.getLogger(__name__)
@@ -115,6 +116,18 @@ class FetchUsage:
     cached: int = 0
     failures: int = 0
     skipped: int = 0
+
+
+MAX_FETCH_WORKERS = 8  # площадки отзывов не любят частых заходов
+
+
+def fetch_workers() -> int:
+    """Сколько страниц отзывов читается одновременно."""
+    try:
+        raw = int(float(os.getenv("REVIEW_FETCH_WORKERS", "4")))
+    except (TypeError, ValueError):
+        raw = 4
+    return max(1, min(MAX_FETCH_WORKERS, raw))
 
 
 def ensure_cache(conn: sqlite3.Connection) -> None:
@@ -312,6 +325,57 @@ class PageFetcher:
         if self.pause and self.transport is None:
             time.sleep(self.pause)
         return text
+
+    def fetch_many(self, urls: Sequence[str]) -> dict[str, str]:
+        """Несколько страниц отзывов разом. Сеть — параллельно.
+
+        Кэш, счётчики и потолок страниц остаются в вызывающем потоке: соединение
+        sqlite между потоками не делится, а REVIEW_FETCH_PAGES должен считаться
+        один раз. Досье на компанию — это до восьми страниц с разных площадок,
+        последовательно они складывались в десяток секунд ожидания.
+        """
+        plan: list[str] = []
+        out: dict[str, str] = {}
+        for url in urls:
+            url = (url or "").strip()
+            if not url or url in out or url in plan:
+                continue
+            if not self.enabled:
+                self.usage.skipped += 1
+                continue
+            cached = self._cache_get(url)
+            if cached is not None:
+                self.usage.cached += 1
+                out[url] = cached
+            elif self.usage.fetched + len(plan) < self.max_pages:
+                plan.append(url)
+            else:
+                self.usage.skipped += 1
+                log.warning("потолок страниц отзывов исчерпан (%s)", self.max_pages)
+
+        if not plan:
+            return out
+        workers = min(fetch_workers(), len(plan))
+        log.info("отзывы: страниц %s, потоков %s", len(plan), workers)
+        caller = self.transport or self._http_get
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="reviews") as pool:
+            futures = {pool.submit(caller, url): url for url in plan}
+            for future in as_completed(futures):
+                url = futures[future]
+                try:
+                    raw = future.result()
+                except Exception as exc:  # noqa: BLE001 — [CORE-017]
+                    self.usage.failures += 1
+                    log.warning("страница отзывов не открылась (%s): %s", url, exc)
+                    continue
+                self.usage.fetched += 1
+                text = extract_reviews(raw, self.max_chars)
+                if not text:
+                    log.info("на странице не нашлось текста отзывов: %s", url)
+                self._dump(url, text)
+                self._cache_put(url, text)
+                out[url] = text
+        return out
 
 
 __all__ = (

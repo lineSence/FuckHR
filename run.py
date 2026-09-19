@@ -49,6 +49,7 @@ import os
 import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
 
@@ -62,6 +63,7 @@ import detector
 import detector_llm
 import dossier
 import llm
+import llm_batch
 import llm_tasks
 import outreach
 import settings
@@ -207,6 +209,9 @@ def main() -> int:
 
     new_count = 0
     enriched = 0
+    reused_details = 0
+    to_extract: list[Any] = []
+    to_claim: list[tuple[Any, Any]] = []
     empty_descriptions = 0
     blocked = False
     with_details = options.details
@@ -219,6 +224,7 @@ def main() -> int:
 
     client = HHHtmlClient(
         pause=settings.as_float(os.getenv("HH_PAUSE"), 2.0),
+        pause_min=settings.as_float(os.getenv("HH_PAUSE_MIN"), 0.8),
         cookie=os.getenv("HH_COOKIE") or None,
         proxy=os.getenv("HH_PROXY") or None,
         failure_dir=settings.get("FAILURE_DIR", "data/failures"),
@@ -231,7 +237,16 @@ def main() -> int:
             # Счётчик в квадратных скобках — то, по чему интерфейс рисует полоску.
             log.info("[%s/%s] %s — %s", position, total, draft.title, draft.company)
             vacancy = draft
-            if with_details:
+            # Описание из базы вместо второго похода на hh.ru. Карточка вакансии
+            # стоит паузы в пару секунд, и на повторном прогоне именно эти
+            # запросы съедали почти всё время. Дата публикации сменилась —
+            # значит объявление переопубликовали, описание качаем заново.
+            cached = db.cached_details(conn, draft.key) if with_details else None
+            if cached and (not draft.published_at or cached[2] == draft.published_at):
+                text, skills, _published = cached
+                vacancy = draft.model_copy(update={"description": text, "skills": skills})
+                reused_details += 1
+            elif with_details:
                 try:
                     vacancy = enrich(draft, client.vacancy(draft.external_id))
                     enriched += 1
@@ -264,10 +279,10 @@ def main() -> int:
 
             # Этап extract. Только для вакансий, прошедших скоринг: гонять модель
             # по отклонённым — жечь бюджет вызовов ради данных, которые никто не прочтёт.
+            # Сами вызовы идут после обхода, пулом: ожидание шлюза внутри цикла
+            # останавливало сбор на секунды и сбивало ритм пауз hh.ru.
             if gateway is not None and vacancy.description.strip():
-                items = llm_tasks.extract_conditions(gateway, vacancy.description)
-                if conditions.store(conn, vacancy.key, items):
-                    extracted += 1
+                to_extract.append(vacancy)
 
             # Детектор запускается сразу после слепка: история уже включает
             # текущий прогон, и вывод не отстаёт от карточки на один запуск.
@@ -276,13 +291,32 @@ def main() -> int:
                 if gateway is not None and detector_opts.use_llm_claims:
                     # Этап hr_filter: модель только отмечает утверждения, вердикт у всех
                     # таких пунктов — «недостаточно данных» (detector_llm.with_llm_claims).
-                    report = detector_llm.with_llm_claims(report, vacancy, gateway)
-                detector.store(conn, report)
+                    to_claim.append((vacancy, report))
+                else:
+                    detector.store(conn, report)
     except BlockedError as exc:
         blocked = True
         log.error("%s", exc)
     finally:
         client.close()
+
+    if reused_details:
+        log.info(
+            "описаний взято из базы: %s, скачано с hh.ru: %s",
+            reused_details,
+            enriched,
+        )
+
+    # Этапы модели по всему собранному разом: сеть ждут параллельно, в базу
+    # пишет главный поток.
+    if to_extract:
+        for key, items in llm_batch.extract_all(db_path, to_extract).items():
+            if conditions.store(conn, key, items):
+                extracted += 1
+    if to_claim:
+        enriched_reports = llm_batch.claims_all(db_path, to_claim)
+        for vacancy, report in to_claim:
+            detector.store(conn, enriched_reports.get(vacancy.key, report))
 
     # Отметка «видели сегодня» нужна и для отклонённых вакансий, иначе они будут
     # считаться пропавшими сразу после первого прогона.
