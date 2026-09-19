@@ -66,6 +66,7 @@ import llm_tasks
 import outreach
 import settings
 import websearch
+from collector import collect  # noqa: F401 — реэкспорт: сбор живёт в collector.py
 from hh import Vacancy, enrich
 from hh_html import BlockedError, HHHtmlClient
 from research import (  # noqa: F401 — реэкспорт для старых вызовов
@@ -104,60 +105,6 @@ def setup_logging(log_path: Path, verbose: bool) -> None:
         handlers=[file_handler, stream],
         force=True,
     )
-
-
-def collect(
-    client: HHHtmlClient, profile: Profile, limit: int = 0
-) -> tuple[dict[str, Vacancy], dict[str, Vacancy]]:
-    """Собирает вакансии по запросам профиля, но не больше limit штук.
-
-    Возвращает две карты: всё увиденное и то, что прошло предфильтр. Первая нужна
-    истории: «вакансия видна в выдаче» — факт о рынке, независимый от нашего интереса.
-
-    limit останавливает обход сразу как только набралось нужное число: генератор
-    поиска бросается недочитанным, и остальные страницы не запрашиваются. Каждая
-    незапрошенная страница — это сэкономленные две-три секунды паузы и шаг от капчи.
-    """
-    seen: dict[str, Vacancy] = {}
-    passed: dict[str, Vacancy] = {}
-    queries = [q for q in profile.queries if q.get("text")]
-    for index, query in enumerate(queries, start=1):
-        if limit and len(passed) >= limit:
-            log.info("лимит %s набран, остальные запросы не трогаем", limit)
-            break
-        text = query["text"]
-        log.info("[%s/%s] запрос: %s", index, len(queries), text)
-        pages = client.search(
-            text=text,
-            area=query.get("area") or profile.areas or None,
-            period=int(query.get("period", 7)),
-            max_pages=int(query.get("max_pages", 3)),
-            extra=query.get("extra"),
-        )
-        try:
-            for draft in pages:
-                seen.setdefault(draft.key, draft)
-                rough = evaluate(draft, profile)
-                if rough.rejected:
-                    log.debug(
-                        "отброшено на предфильтре: %s (%s)",
-                        draft.title,
-                        rough.reject_reason,
-                    )
-                    continue
-                passed.setdefault(draft.key, draft)
-                if limit and len(passed) >= limit:
-                    log.info(
-                        "собрали %s вакансий при лимите %s, больше страниц не запрашиваем",
-                        len(passed),
-                        limit,
-                    )
-                    break
-        finally:
-            # Генератор закрываем явно: иначе он доживает до сборки мусора и не
-            # очевидно когда отпустит соединение.
-            pages.close()
-    return seen, passed
 
 
 def build_gateway(conn, disabled: bool) -> llm.Gateway | None:
@@ -216,6 +163,8 @@ def main() -> int:
 
     load_dotenv()
     options = settings.collect_options()
+    prefilter = settings.prefilter_options()
+    detector_opts = settings.detector_options()
     db_path = Path(settings.get("DB_PATH", "data/fuckhr.sqlite3"))
     setup_logging(Path(settings.get("LOG_PATH", "data/fuckhr.log")), args.verbose)
     log.info(
@@ -225,6 +174,22 @@ def main() -> int:
         "да" if options.details else "нет",
         "да" if options.use_llm else "нет",
     )
+    log.info(
+        "предфильтр: %s, черновой порог %.0f, нечёткость %s%%",
+        "включён" if prefilter.enabled else "выключен",
+        prefilter.min_score,
+        prefilter.fuzzy,
+    )
+    if detector_opts.enabled:
+        detector.configure(
+            detector.Limits(
+                min_days=detector_opts.min_days,
+                republish_alarm=detector_opts.republish_alarm,
+                wide_band=detector_opts.wide_band,
+            )
+        )
+    else:
+        log.info("детектор брехни выключен в настройках: карточки пойдут без HR-флагов")
 
     profile = Profile.load(options.profile)
 
@@ -256,7 +221,7 @@ def main() -> int:
         failure_dir=settings.get("FAILURE_DIR", "data/failures"),
     )
     try:
-        seen, drafts = collect(client, profile, options.limit)
+        seen, drafts = collect(client, profile, options.limit, prefilter)
         log.info("увидели: %s, прошло предфильтр: %s", len(seen), len(drafts))
         total = len(drafts)
         for position, draft in enumerate(drafts.values(), start=1):
@@ -276,7 +241,7 @@ def main() -> int:
                     with_details = False
                 except Exception:  # noqa: BLE001 — вакансия могла быть уже закрыта
                     log.warning("нет деталей по %s, берём черновик", draft.external_id)
-            verdict = evaluate(vacancy, profile)
+            verdict = evaluate(vacancy, profile, prefilter.fuzzy)
             # Слепок пишется для всего, даже для отклоныённого: история публикаций
             # нужна детектору независимо от нашего интереса (ADR-009, ADR-010).
             db.add_snapshot(conn, vacancy)
@@ -303,12 +268,13 @@ def main() -> int:
 
             # Детектор запускается сразу после слепка: история уже включает
             # текущий прогон, и вывод не отстаёт от карточки на один запуск.
-            report = detector.assess(vacancy, detector.history(conn, vacancy.key))
-            if gateway is not None:
-                # Этап hr_filter: модель только отмечает утверждения, вердикт у всех
-                # таких пунктов — «недостаточно данных» (detector_llm.with_llm_claims).
-                report = detector_llm.with_llm_claims(report, vacancy, gateway)
-            detector.store(conn, report)
+            if detector_opts.enabled:
+                report = detector.assess(vacancy, detector.history(conn, vacancy.key))
+                if gateway is not None and detector_opts.use_llm_claims:
+                    # Этап hr_filter: модель только отмечает утверждения, вердикт у всех
+                    # таких пунктов — «недостаточно данных» (detector_llm.with_llm_claims).
+                    report = detector_llm.with_llm_claims(report, vacancy, gateway)
+                detector.store(conn, report)
     except BlockedError as exc:
         blocked = True
         log.error("%s", exc)

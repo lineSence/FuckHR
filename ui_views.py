@@ -82,13 +82,22 @@ def render_run(active_id: int | None = None, note: str = "") -> tuple[str, int]:
 
     collect = settings.collect_options()
     outreach_opts = settings.outreach_options()
+    prefilter = settings.prefilter_options()
+    detector_opts = settings.detector_options()
     parts.append(
         (
-            "<p class=muted>Сейчас так: сбор {limit} вакансий, письма от скора {min_score:.0f} "
+            "<p class=muted>Сейчас так: сбор {limit} вакансий, предфильтр {prefilter}, "
+            "детектор брехни {detector}, письма от скора {min_score:.0f} "
             "до {letters} штук, модель {llm_state}. "
             '<a href="/settings">Изменить</a></p>'
         ).format(
             limit=collect.limit,
+            prefilter=(
+                "от {:.0f}".format(prefilter.min_score)
+                if prefilter.enabled
+                else "выключен"
+            ),
+            detector="включён" if detector_opts.enabled else "выключен",
             min_score=outreach_opts.min_score,
             letters=outreach_opts.limit,
             llm_state="включена" if collect.use_llm else "выключена",
