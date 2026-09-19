@@ -151,6 +151,39 @@ def winners(rows: Sequence[Row]) -> dict[str, tuple[str, float]]:
     return {stage: (key[2], round(key[0], 3)) for stage, key in best.items()}
 
 
+def recommend(
+    rows: Sequence[Row], tolerance: float = 0.05
+) -> dict[str, tuple[str, float, float]]:
+    """Модель на профиль: сначала балл, при почти равных баллах — скорость.
+
+    Этап отвечает на вопрос «что проверяли», а настройка живёт на профиле
+    (`LLM_PROXY_MODEL_FAST` и соседи), поэтому этапы одного профиля
+    усредняются. tolerance — насколько балл может быть ниже лучшего, чтобы
+    считаться ничьей: разница в две сотых на шести кейсах ничего не значит,
+    а секунды на каждом вызове значат [CORE-016].
+    """
+    bucket: dict[tuple[str, str], list[Row]] = {}
+    for row in rows:
+        profile = llm.STAGE_PROFILES.get(row.stage)
+        if profile is None:
+            continue
+        bucket.setdefault((profile, row.model), []).append(row)
+
+    means = {key: sum(r.score for r in v) / len(v) for key, v in bucket.items()}
+    speeds = {key: sum(r.seconds for r in v) / len(v) for key, v in bucket.items()}
+
+    out: dict[str, tuple[str, float, float]] = {}
+    for profile in {p for p, _ in means}:
+        candidates = [(m, s) for (p, m), s in means.items() if p == profile]
+        top = max(score for _, score in candidates)
+        near = [(m, s) for m, s in candidates if s >= top - tolerance]
+        model, score = min(
+            near, key=lambda ms: (round(speeds[(profile, ms[0])], 2), ms[0])
+        )
+        out[profile] = (model, round(score, 3), round(speeds[(profile, model)], 2))
+    return out
+
+
 def _speed(rows: Sequence[Row], stage: str, model: str) -> float:
     values = [r.seconds for r in rows if r.stage == stage and r.model == model]
     return sum(values) / len(values) if values else 0.0
@@ -175,6 +208,15 @@ def render(rows: Sequence[Row]) -> str:
     lines.append("")
     for stage, (model, score) in sorted(winners(rows).items()):
         lines.append("- **{}** → {} ({:.2f})".format(stage, model, score))
+
+    lines.append("")
+    lines.append("Подставить в настройки:")
+    for profile, (model, score, seconds) in sorted(recommend(rows).items()):
+        lines.append(
+            "- {} = {} ({:.2f}, {:.1f} с) → {}".format(
+                profile, model, score, seconds, llm.PROXY_MODEL_ENV.get(profile, "—")
+            )
+        )
 
     lines.append("")
     lines.append("| Модель | Кейс | Балл | Сек | Что вышло |")
@@ -277,6 +319,7 @@ __all__ = (
     "by_stage",
     "gateway_for",
     "main",
+    "recommend",
     "render",
     "run_case",
     "run_model",

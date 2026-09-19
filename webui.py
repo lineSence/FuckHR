@@ -268,6 +268,33 @@ class Handler(BaseHTTPRequestHandler):
                 self._redirect("/llm")
                 return
 
+            if parsed.path == "/llm/apply":
+                # Из браузера приходят имя ключа и имя модели: ключ сверяется
+                # с закрытым списком LLM_PROXY_MODEL_*, имя — с bench_models.
+                updates = {}
+                for key in form.get("apply") or []:
+                    if key not in ui_bench.ENV_KEYS:
+                        continue
+                    names = bench_models((form.get("model:" + key) or [""])[0])
+                    if names:
+                        updates[key] = names[0]
+                saved = settings.save(updates) if updates else []
+                if saved:
+                    note = "<div class=ok>Записано в .env: {}</div>".format(
+                        esc(", ".join(saved))
+                    )
+                else:
+                    note = (
+                        "<div class=warn>Ничего не изменилось: либо профили не "
+                        "отмечены, либо там уже стоят эти модели.</div>"
+                    )
+                conn = open_db()
+                try:
+                    self._send(page("Модель", note + render_llm(conn)))
+                finally:
+                    conn.close()
+                return
+
             if parsed.path == "/stop":
                 job_id = settings.as_int((form.get("job") or [""])[0], 0)
                 jobs.runner.stop(job_id)

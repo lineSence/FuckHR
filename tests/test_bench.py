@@ -150,7 +150,7 @@ def test_отчёт_показывает_таблицу_а_не_лог(tmp_path)
     report = ui_bench.load_report(path)
     assert report is not None
     html = ui_bench.render_report(report)
-    assert "<table>" in html and "Лучше всех" in html
+    assert "<table>" in html and "Лучший балл" in html
     assert "быстрая" in html and "выдумала вилку" in html
     assert 'class="danger">0.20' in html
 
@@ -169,3 +169,27 @@ def test_прогресс_печатается_счётчиком() -> None:
     import jobs
 
     assert jobs.parse_progress("[3/30] быстрая · к1 · 1.00 за 0.4 с") == (3, 30)
+
+
+def test_рекомендация_учитывает_скорость_при_равном_балле() -> None:
+    """Разница в две сотых балла ничего не значит, секунды на вызов — значат."""
+    rows = [
+        bench.Row("медленная", "extract", "к1", 1.0, "", 8.0),
+        bench.Row("быстрая", "extract", "к1", 0.98, "", 0.7),
+        bench.Row("быстрая", "company", "к2", 0.3, "выдумала цифру", 0.5),
+        bench.Row("медленная", "company", "к2", 1.0, "", 6.0),
+    ]
+    picks = bench.recommend(rows)
+    assert picks[llm.STAGE_PROFILES["extract"]][0] == "быстрая"
+    # На company разрыв большой: скорость не спасает.
+    assert picks[llm.STAGE_PROFILES["company"]][0] == "медленная"
+
+
+def test_форма_подстановки_предлагает_ключи_env() -> None:
+    import ui_bench
+
+    rows = [bench.Row("быстрая", "extract", "к1", 1.0, "", 0.7)]
+    html = ui_bench.render_apply_form(rows)
+    assert "LLM_PROXY_MODEL_FAST" in html
+    assert 'action="/llm/apply"' in html
+    assert "LLM_PROXY_MODEL_FAST" in ui_bench.ENV_KEYS

@@ -17,10 +17,16 @@ from typing import Any, Sequence
 
 import bench
 import jobs
+import llm
+import settings
 from ui_core import details, esc, table
 
 ROOT = Path(__file__).resolve().parent
 REPORT_PATH = ROOT / "data" / "bench" / "last.json"
+
+# Ключи .env, куда можно подставить модель. Список закрытый: из браузера
+# приходит имя ключа, и записать он должен только настройку модели.
+ENV_KEYS = frozenset(llm.PROXY_MODEL_ENV.values())
 
 # Границы окраски балла: 0.8 — рабочая модель, 0.5 — «иногда врёт», ниже — брак.
 GOOD, SO_SO = 0.8, 0.5
@@ -123,7 +129,10 @@ def render_report(report: dict[str, Any], job: jobs.Job | None = None) -> str:
         "<h3>Результат</h3>",
         "<p class=muted>{}</p>".format(esc(meta)),
         table(head, body, raw_head=True),
-        "<div class=ok><b>Лучше всех:</b> {}</div>".format(esc(best or "не вышло")),
+        "<div class=ok><b>Лучший балл по этапам:</b> {}</div>".format(
+            esc(best or "не вышло")
+        ),
+        render_apply_form(rows),
         details(
             "Разбор кейсов",
             "{} из {} ниже {:.1f}".format(len(failures), len(rows), GOOD),
@@ -140,6 +149,67 @@ def render_report(report: dict[str, Any], job: jobs.Job | None = None) -> str:
             )
         )
     return "".join(parts)
+
+
+def render_apply_form(rows: Sequence[bench.Row]) -> str:
+    """Подстановка победителей в .env: профиль → LLM_PROXY_MODEL_*.
+
+    Выбор делает bench.recommend: сначала балл, при почти равном балле —
+    скорость. Галочки сняты у профилей, где и так стоит эта модель: незачем
+    предлагать запись, которая ничего не меняет.
+    """
+    picks = bench.recommend(rows)
+    if not picks:
+        return ""
+    values = settings.load()
+    body, hidden = [], []
+    for profile, (model, score, seconds) in sorted(picks.items()):
+        env_key = llm.PROXY_MODEL_ENV.get(profile)
+        if not env_key:
+            continue
+        current = values.get(env_key, "")
+        same = current == model
+        hidden.append(
+            '<input type=hidden name="model:{key}" value="{model}">'.format(
+                key=esc(env_key), model=esc(model)
+            )
+        )
+        body.append(
+            [
+                '<label><input type=checkbox name=apply value="{key}"{on}> '
+                "{profile}</label>".format(
+                    key=esc(env_key), on="" if same else " checked", profile=esc(profile)
+                ),
+                esc(env_key),
+                esc(current or "не задана"),
+                "<b>{}</b>".format(esc(model)),
+                "{} · {:.1f} с".format(score_cell(score), seconds),
+            ]
+        )
+    if not body:
+        return ""
+    personal = (
+        "<p class=muted>Профиль local-only — это персональные этапы (contacts, "
+        "dossier, draft). Имя модели на прокси для них работает только при "
+        "включённом LLM_PERSONAL_VIA_PROXY [CORE-012].</p>"
+        if any(row[1] == esc(llm.PROXY_MODEL_ENV[llm.LOCAL]) for row in body)
+        else ""
+    )
+    return (
+        "<h3>Подставить в настройки</h3>"
+        "<p class=muted>Победитель профиля: сначала балл, при разнице меньше "
+        "0.05 — тот, кто отвечает быстрее. Запись идёт в .env, как со страницы "
+        "«Настройки».</p>"
+        "{personal}"
+        '<form method=post action="/llm/apply">{hidden}{table}'
+        "<button>Записать отмеченные</button></form>"
+    ).format(
+        personal=personal,
+        hidden="".join(hidden),
+        table=table(
+            ["Профиль", "Ключ", "Сейчас", "Ставим", "Балл и время"], body
+        ),
+    )
 
 
 def render_bench_form(note: str = "", known: Sequence[str] = ()) -> str:
@@ -198,9 +268,11 @@ def render_bench_form(note: str = "", known: Sequence[str] = ()) -> str:
 
 
 __all__ = (
+    "ENV_KEYS",
     "REPORT_PATH",
     "load_report",
     "refresh_seconds",
+    "render_apply_form",
     "render_bench_form",
     "render_report",
     "render_status",
