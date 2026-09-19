@@ -120,9 +120,12 @@ def build_gateway(conn, disabled: bool) -> llm.Gateway | None:
     if not gateway.enabled:
         log.info("модель не настроена (%s), идём без неё", gateway.disabled_reason)
         return None
-    for stage, profile, route, model in gateway.describe_routes():
+    for stage, profile, route, model, source in gateway.describe_routes():
         if stage in {"extract", "hr_filter", "company"}:
-            log.info("этап %s: профиль %s, маршрут %s, модель %s", stage, profile, route, model)
+            log.info(
+                "этап %s: профиль %s, маршрут %s, модель %s (имя из: %s)",
+                stage, profile, route, model, source,
+            )
     return gateway
 
 

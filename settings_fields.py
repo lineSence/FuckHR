@@ -7,6 +7,8 @@ settings, чтобы вызывающие не переучивались.
 
 from __future__ import annotations
 
+import llm
+
 from dataclasses import dataclass
 
 TEXT = "text"
@@ -40,6 +42,7 @@ GROUP_DETECTOR = "Детектор брехни"
 GROUP_SOURCE = "Источник вакансий"
 GROUP_TELEGRAM = "Telegram"
 GROUP_LLM = "Модель"
+GROUP_LLM_STAGES = "Модель по этапам"
 GROUP_SEARCH = "Внешний поиск"
 GROUP_PATHS = "Файлы и логи"
 
@@ -254,6 +257,17 @@ FIELDS: tuple[Field, ...] = (
     Field("LLM_PROXY_MODEL_SMART", "Модель для разбора", GROUP_LLM, TEXT, "", "HR-фильтр и скоринг."),
     Field("LLM_PROXY_MODEL_LONG", "Модель для длинных текстов", GROUP_LLM, TEXT, "", "Справка о компании."),
     Field("LLM_PROXY_MODEL_EMBEDDINGS", "Модель векторов", GROUP_LLM, TEXT, "", "Например bge-m3."),
+    *(
+        Field(
+            env_key,
+            "Этап {}".format(stage),
+            GROUP_LLM_STAGES,
+            TEXT,
+            "",
+            "Пусто — берётся модель профиля {}.".format(llm.STAGE_PROFILES[stage]),
+        )
+        for stage, env_key in llm.STAGE_MODEL_ENV.items()
+    ),
     Field(
         "LLM_PERSONAL_VIA_PROXY",
         "Пускать персональные этапы на прокси",

@@ -181,14 +181,22 @@ def render_llm(conn: sqlite3.Connection, probe: bool = False) -> str:
         )
 
     rows = []
-    for stage, profile, route, model in gateway.describe_routes():
+    for stage, profile, route, model, source in gateway.describe_routes():
         marker = ""
         if stage in llm.PERSONAL_STAGES and route == llm.ROUTE_PROXY:
             marker = ' <span class=pill>персональные данные уходят наружу</span>'
         rows.append(
-            [esc(stage), esc(profile), esc(route) + marker, esc(model or "не задана")]
+            [
+                esc(stage),
+                esc(profile),
+                esc(route) + marker,
+                esc(model or "не задана"),
+                esc(source),
+            ]
         )
-    parts.append(table(["Этап", "Профиль", "Маршрут", "Модель"], rows))
+    parts.append(
+        table(["Этап", "Профиль", "Маршрут", "Модель", "Имя из"], rows)
+    )
 
     unmapped = gateway.unmapped_profiles() if gateway.proxy_base_url else []
     if unmapped:

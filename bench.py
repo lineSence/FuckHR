@@ -139,49 +139,33 @@ def by_stage(rows: Sequence[Row]) -> dict[tuple[str, str], float]:
     return {key: sum(v) / len(v) for key, v in bucket.items()}
 
 
-def winners(rows: Sequence[Row]) -> dict[str, tuple[str, float]]:
-    """Лучшая модель на каждый этап. При равных баллах выигрывает быстрая."""
-    means = by_stage(rows)
-    best: dict[str, tuple[float, float, str]] = {}
-    for (stage, model), score in means.items():
-        seconds = _speed(rows, stage, model)
-        key = (score, -seconds, model)
-        if stage not in best or key > best[stage]:
-            best[stage] = key
-    return {stage: (key[2], round(key[0], 3)) for stage, key in best.items()}
-
-
 def recommend(
     rows: Sequence[Row], tolerance: float = 0.05
 ) -> dict[str, tuple[str, float, float]]:
-    """Модель на профиль: сначала балл, при почти равных баллах — скорость.
+    """Модель на каждый этап: сначала балл, при почти равном балле — скорость.
 
-    Этап отвечает на вопрос «что проверяли», а настройка живёт на профиле
-    (`LLM_PROXY_MODEL_FAST` и соседи), поэтому этапы одного профиля
-    усредняются. tolerance — насколько балл может быть ниже лучшего, чтобы
-    считаться ничьей: разница в две сотых на шести кейсах ничего не значит,
-    а секунды на каждом вызове значат [CORE-016].
+    Настройка живёт на этапе (`llm.STAGE_MODEL_ENV`), а не только на профиле:
+    у extract и resume_section один класс задачи, но победители разные.
+    tolerance — насколько балл может быть ниже лучшего, чтобы считаться ничьей:
+    две сотых на шести кейсах ничего не значат, а секунды на каждом вызове
+    значат [CORE-016].
     """
-    bucket: dict[tuple[str, str], list[Row]] = {}
-    for row in rows:
-        profile = llm.STAGE_PROFILES.get(row.stage)
-        if profile is None:
-            continue
-        bucket.setdefault((profile, row.model), []).append(row)
-
-    means = {key: sum(r.score for r in v) / len(v) for key, v in bucket.items()}
-    speeds = {key: sum(r.seconds for r in v) / len(v) for key, v in bucket.items()}
-
+    means = by_stage(rows)
     out: dict[str, tuple[str, float, float]] = {}
-    for profile in {p for p, _ in means}:
-        candidates = [(m, s) for (p, m), s in means.items() if p == profile]
+    for stage in {stage for stage, _ in means}:
+        candidates = [(m, s) for (st, m), s in means.items() if st == stage]
         top = max(score for _, score in candidates)
         near = [(m, s) for m, s in candidates if s >= top - tolerance]
         model, score = min(
-            near, key=lambda ms: (round(speeds[(profile, ms[0])], 2), ms[0])
+            near, key=lambda ms: (round(_speed(rows, stage, ms[0]), 2), ms[0])
         )
-        out[profile] = (model, round(score, 3), round(speeds[(profile, model)], 2))
+        out[stage] = (model, round(score, 3), round(_speed(rows, stage, model), 2))
     return out
+
+
+def winners(rows: Sequence[Row]) -> dict[str, tuple[str, float]]:
+    """Лучший балл на каждый этап. При равных баллах выигрывает быстрая."""
+    return {stage: (model, score) for stage, (model, score, _) in recommend(rows, 0.0).items()}
 
 
 def _speed(rows: Sequence[Row], stage: str, model: str) -> float:
@@ -211,10 +195,10 @@ def render(rows: Sequence[Row]) -> str:
 
     lines.append("")
     lines.append("Подставить в настройки:")
-    for profile, (model, score, seconds) in sorted(recommend(rows).items()):
+    for stage, (model, score, seconds) in sorted(recommend(rows).items()):
         lines.append(
             "- {} = {} ({:.2f}, {:.1f} с) → {}".format(
-                profile, model, score, seconds, llm.PROXY_MODEL_ENV.get(profile, "—")
+                stage, model, score, seconds, llm.STAGE_MODEL_ENV.get(stage, "—")
             )
         )
 

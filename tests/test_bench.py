@@ -180,9 +180,22 @@ def test_рекомендация_учитывает_скорость_при_р�
         bench.Row("медленная", "company", "к2", 1.0, "", 6.0),
     ]
     picks = bench.recommend(rows)
-    assert picks[llm.STAGE_PROFILES["extract"]][0] == "быстрая"
+    assert picks["extract"][0] == "быстрая"
     # На company разрыв большой: скорость не спасает.
-    assert picks[llm.STAGE_PROFILES["company"]][0] == "медленная"
+    assert picks["company"][0] == "медленная"
+
+
+def test_модель_ставится_на_этап_а_не_на_профиль() -> None:
+    """Имя этапа сильнее имени профиля: у extract и resume_section один профиль."""
+    gateway = llm.Gateway(
+        proxy_base_url="http://proxy/v1",
+        proxy_models={llm.FAST: "общая"},
+        stage_models={"extract": "своя-на-extract"},
+    )
+    assert gateway.model_for("extract") == ("своя-на-extract", "этап")
+    assert gateway.model_for("resume_section") == ("общая", "профиль")
+    routes = {row[0]: (row[3], row[4]) for row in gateway.describe_routes()}
+    assert routes["extract"] == ("своя-на-extract", "этап")
 
 
 def test_форма_подстановки_предлагает_ключи_env() -> None:
@@ -190,9 +203,9 @@ def test_форма_подстановки_предлагает_ключи_env()
 
     rows = [bench.Row("быстрая", "extract", "к1", 1.0, "", 0.7)]
     html = ui_bench.render_apply_form(rows)
-    assert "LLM_PROXY_MODEL_FAST" in html
+    assert "LLM_STAGE_MODEL_EXTRACT" in html
     assert 'action="/llm/apply"' in html
-    assert "LLM_PROXY_MODEL_FAST" in ui_bench.ENV_KEYS
+    assert "LLM_STAGE_MODEL_EXTRACT" in ui_bench.ENV_KEYS
 
 
 def test_ловушка_про_вилку_ловит_число_а_не_поле() -> None:

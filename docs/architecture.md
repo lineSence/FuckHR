@@ -92,7 +92,7 @@ dossier.build(company)
 | `contacts.py`, `contacts_rules.py` | поиск рабочих контактов, лог и дедуп, словари этапа |
 | `contact_finds.py` | находки этапа discovery по вакансии: кэш каналов для карточки и письма |
 | `outreach.py`, `outreach_draft.py` | прогон этапа писем и сборка текста черновика |
-| `llm.py`, `llm_tasks.py`, `check_llm.py` | шлюз к моделям, задачи этапов, диагностика |
+| `llm.py`, `llm_profiles.py`, `llm_tasks.py`, `check_llm.py` | шлюз к моделям, карта этапов и профилей, задачи этапов, диагностика |
 | `bench.py`, `bench_cases.py`, `ui_bench.py` | сравнение моделей на задачах пайплайна и его страница (`docs/model-bench.md`) |
 | `bot.py` | карточки и тревоги в Telegram: выключатель отправки, темп, тихие часы |
 | `canary.py` | тревога, когда прогон сломался, с суточным cooldown |

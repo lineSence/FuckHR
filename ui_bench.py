@@ -26,7 +26,9 @@ REPORT_PATH = ROOT / "data" / "bench" / "last.json"
 
 # Ключи .env, куда можно подставить модель. Список закрытый: из браузера
 # приходит имя ключа, и записать он должен только настройку модели.
-ENV_KEYS = frozenset(llm.PROXY_MODEL_ENV.values())
+ENV_KEYS = frozenset(llm.PROXY_MODEL_ENV.values()) | frozenset(
+    llm.STAGE_MODEL_ENV.values()
+)
 
 # Границы окраски балла: 0.8 — рабочая модель, 0.5 — «иногда врёт», ниже — брак.
 GOOD, SO_SO = 0.8, 0.5
@@ -152,10 +154,10 @@ def render_report(report: dict[str, Any], job: jobs.Job | None = None) -> str:
 
 
 def render_apply_form(rows: Sequence[bench.Row]) -> str:
-    """Подстановка победителей в .env: профиль → LLM_PROXY_MODEL_*.
+    """Подстановка победителей в .env: своя модель на каждый проверенный этап.
 
     Выбор делает bench.recommend: сначала балл, при почти равном балле —
-    скорость. Галочки сняты у профилей, где и так стоит эта модель: незачем
+    скорость. Галочки сняты у этапов, где нужная модель уже стоит: незачем
     предлагать запись, которая ничего не меняет.
     """
     picks = bench.recommend(rows)
@@ -163,12 +165,18 @@ def render_apply_form(rows: Sequence[bench.Row]) -> str:
         return ""
     values = settings.load()
     body, hidden = [], []
-    for profile, (model, score, seconds) in sorted(picks.items()):
-        env_key = llm.PROXY_MODEL_ENV.get(profile)
+    personal = False
+    for stage, (model, score, seconds) in sorted(picks.items()):
+        env_key = llm.STAGE_MODEL_ENV.get(stage)
         if not env_key:
             continue
+        profile = llm.STAGE_PROFILES.get(stage, "")
         current = values.get(env_key, "")
-        same = current == model
+        named = values.get(llm.PROXY_MODEL_ENV.get(profile, ""), "")
+        fallback = "по профилю {}{}".format(
+            profile, ": {}".format(named) if named else ""
+        )
+        personal = personal or stage in llm.PERSONAL_STAGES
         hidden.append(
             '<input type=hidden name="model:{key}" value="{model}">'.format(
                 key=esc(env_key), model=esc(model)
@@ -177,38 +185,37 @@ def render_apply_form(rows: Sequence[bench.Row]) -> str:
         body.append(
             [
                 '<label><input type=checkbox name=apply value="{key}"{on}> '
-                "{profile}</label>".format(
-                    key=esc(env_key), on="" if same else " checked", profile=esc(profile)
+                "{stage}</label>".format(
+                    key=esc(env_key),
+                    on="" if current == model else " checked",
+                    stage=esc(stage),
                 ),
-                esc(env_key),
-                esc(current or "не задана"),
+                esc(current or fallback),
                 "<b>{}</b>".format(esc(model)),
                 "{} · {:.1f} с".format(score_cell(score), seconds),
             ]
         )
     if not body:
         return ""
-    personal = (
-        "<p class=muted>Профиль local-only — это персональные этапы (contacts, "
-        "dossier, draft). Имя модели на прокси для них работает только при "
-        "включённом LLM_PERSONAL_VIA_PROXY [CORE-012].</p>"
-        if any(row[1] == esc(llm.PROXY_MODEL_ENV[llm.LOCAL]) for row in body)
+    note = (
+        "<p class=muted>Среди этапов есть персональные (contacts, dossier, "
+        "draft): имя модели на прокси сработает только при включённом "
+        "LLM_PERSONAL_VIA_PROXY [CORE-012].</p>"
+        if personal
         else ""
     )
     return (
         "<h3>Подставить в настройки</h3>"
-        "<p class=muted>Победитель профиля: сначала балл, при разнице меньше "
-        "0.05 — тот, кто отвечает быстрее. Запись идёт в .env, как со страницы "
-        "«Настройки».</p>"
-        "{personal}"
+        "<p class=muted>Модель ставится на конкретный этап и перебивает модель "
+        "профиля. Непроверенные этапы остаются на профиле. Запись идёт в .env, "
+        "как со страницы «Настройки».</p>"
+        "{note}"
         '<form method=post action="/llm/apply">{hidden}{table}'
         "<button>Записать отмеченные</button></form>"
     ).format(
-        personal=personal,
+        note=note,
         hidden="".join(hidden),
-        table=table(
-            ["Профиль", "Ключ", "Сейчас", "Ставим", "Балл и время"], body
-        ),
+        table=table(["Этап", "Сейчас", "Ставим", "Балл и время"], body),
     )
 
 

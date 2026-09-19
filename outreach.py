@@ -397,10 +397,11 @@ def build_gateway(conn: sqlite3.Connection, disabled: bool) -> llm.Gateway | Non
     if not candidate.enabled:
         log.info("модель не настроена (%s), идём без неё", candidate.disabled_reason)
         return None
-    for stage, profile, route, model in candidate.describe_routes():
+    for stage, profile, route, model, source in candidate.describe_routes():
         if stage in {"company", "contacts", "draft"}:
             log.info(
-                "этап %s: профиль %s, маршрут %s, модель %s", stage, profile, route, model
+                "этап %s: профиль %s, маршрут %s, модель %s (имя из: %s)",
+                stage, profile, route, model, source,
             )
     return candidate
 
