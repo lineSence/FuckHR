@@ -466,6 +466,7 @@ class PageFetcher:
                 if not text:
                     log.info("на странице не нашлось текста отзывов: %s", url)
                 self.items[url] = split_items(raw, url, text)
+                self._dump_page(url, raw)  # ВРЕМЕННО, см. _dump_page
                 self._dump(url, text)
                 self._cache_put(url, text)
                 out[url] = text

@@ -158,3 +158,26 @@ def test_галочка_на_главной_включает_сбор_образ
         "collect-dry", env={"REVIEW_PAGE_DUMP_DIR": "data/pages"}
     )
     assert job.env["REVIEW_PAGE_DUMP_DIR"] == "data/pages"
+
+
+def test_образцы_страниц_пишутся_на_обоих_путях(tmp_path, conn):
+    """ВРЕМЕННО: дамп нужен и в fetch, и в fetch_many — прогон ходит вторым."""
+    import reviewpage
+
+    страница = '<div class="review-card"><p>{}</p></div>'.format(ЖИВОЙ)
+    fetcher = reviewpage.PageFetcher(
+        conn=conn,
+        transport=lambda _u: страница,
+        pause=0,
+        page_dump_dir=str(tmp_path),
+    )
+    fetcher.fetch_many(["https://dreamjob.ru/c/1"])
+    fetcher.fetch("https://orabote.top/c/2")
+    имена = sorted(p.name for p in tmp_path.glob("*.html"))
+    assert len(имена) == 2
+    assert имена[0].startswith("dreamjob.ru-") and имена[1].startswith("orabote.top-")
+
+    # Потолок на площадку: третья страница того же сайта не сохраняется.
+    for i in range(3, 6):
+        fetcher.fetch_many(["https://dreamjob.ru/c/{}".format(i)])
+    assert len(list(tmp_path.glob("dreamjob.ru-*.html"))) == reviewpage.PAGE_DUMP_PER_SITE
