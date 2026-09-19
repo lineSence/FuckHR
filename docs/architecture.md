@@ -23,6 +23,7 @@ hh.ru (HTML поиска, ADR-015)
   → пересчёт срезов рынка и метки вакансий (market_store.py)
   → досье на компании, прошедшие порог (dossier.py, в несколько потоков)
   → метки работодателей по деньгам (market_company.py)
+  → общая оценка работодателя (company_score.py, ADR-018)
   → карточки в Telegram (bot.py)
   → канарейка, если прогон сам сломался (canary.py)
 ```
@@ -103,6 +104,7 @@ dossier.build(company)
 | `reviewlegit.py`, `reviewlegit_rules.py`, `reviewlegit_store.py` | легитимность отзыва, шаблоны площадок, здоровье сбора (`docs/review-quality.md`) |
 | `reviewitems.py` | страница → отдельные отзывы: дата, оценка, плюсы, минусы |
 | `fake_reviews.py`, `fake_rules.py`, `fake_company.py`, `fake_store.py`, `fake_llm.py` | детекция накрученных отзывов: сигналы, пороги, метка компании, хранение, сигнал модели |
+| `company_score.py`, `company_score_rules.py`, `company_score_store.py` | общая оценка работодателя: оси, улики, вето (`docs/company-score.md`) |
 | `market.py`, `market_rules.py`, `market_store.py`, `market_company.py` | рынок зарплат: разбор вилки и среза, пороги, хранение и срезы, метка работодателя (`docs/market-salary.md`) |
 | `aitext.py`, `aitext_rules.py`, `aitext_llm.py` | признаки сгенерированного текста в вакансиях и отзывах (`docs/ai-text.md`) |
 | `resume.py` | резюме: блоки, подтверждение, экспорт, стаж, противоречия (без модели) |
@@ -125,7 +127,7 @@ dossier.build(company)
 
 Один файл SQLite (`data/fuckhr.sqlite3`). Таблицы: `intake_log`, `vacancies`, `vacancy_snapshots`, `vacancy_conditions`,
 `hr_signals`, `company_dossier`, `company_reviews`, `contacts`, `resumes`, `resume_blocks`,
-`resume_versions`, `review_items`, `review_hashes`, `site_lines`, `site_health`, `market_observations`, `market_stats`, `company_market`,
+`resume_versions`, `review_items`, `review_hashes`, `site_lines`, `site_health`, `market_observations`, `market_stats`, `company_market`, `company_score`,
 `search_cache`, `page_cache`, `llm_cache`.
 
 `review_hashes` — общая таблица хэшей на всю базу: она ловит фабрики отзывов, работающие сразу на

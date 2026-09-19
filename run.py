@@ -53,6 +53,8 @@ from dotenv import load_dotenv
 
 import bot as tg
 import canary
+import company_score_rules
+import company_score_store
 import conditions
 import contact_finds
 import contacts
@@ -98,6 +100,7 @@ def main() -> int:
     options = settings.collect_options()
     prefilter = settings.prefilter_options()
     detector_opts = settings.detector_options()
+    score_opts = settings.company_score_options()
     db_path = Path(settings.get("DB_PATH", "data/fuckhr.sqlite3"))
     setup_logging(Path(settings.get("LOG_PATH", "data/fuckhr.log")), args.verbose)
     log.info(
@@ -131,6 +134,7 @@ def main() -> int:
     detector.ensure_schema(conn)
     conditions.ensure_schema(conn)
     dossier.ensure_schema(conn)
+    company_score_store.ensure_schema(conn)
 
     gateway = build_gateway(conn, not options.use_llm)
     extracted = 0
@@ -205,6 +209,20 @@ def main() -> int:
             if verdict.rejected:
                 log.info("    отклонена: %s", verdict.reject_reason)
                 continue
+            # Оценка работодателя по умолчанию только справочная. Учёт в скоринге
+            # включается настройкой и берёт уровень прошлого прогона: свежий
+            # считается в конце, когда все вакансии уже в наблюдениях.
+            if score_opts.in_score and vacancy.company:
+                if (
+                    company_score_store.level_of(conn, vacancy.company)
+                    == company_score_rules.LEVEL_RED
+                ):
+                    verdict.score = max(0.0, verdict.score - score_opts.penalty)
+                    verdict.reasons.append(
+                        "оценка работодателя: красные флаги (−{:g})".format(
+                            score_opts.penalty
+                        )
+                    )
             if db.upsert_vacancy(
                 conn,
                 vacancy,
@@ -332,6 +350,20 @@ def main() -> int:
     # прогона попали в наблюдения, иначе доли считались бы по половине данных.
     market_company.refresh(conn, market_store.companies(conn))
 
+    # Общая оценка работодателя (ADR-018) считается последней: ей нужны и
+    # свежие метки по деньгам, и досье, и слепки этого прогона.
+    if score_opts.enabled:
+        company_score_store.refresh(
+            conn, sorted(set(market_store.companies(conn)) | set(to_research))
+        )
+        scored, red_companies, unknown = company_score_store.coverage(conn)
+        log.info(
+            "оценка работодателей: всего %s, красных %s, без данных %s",
+            scored,
+            red_companies,
+            unknown,
+        )
+
     rows = db.pending_cards(conn, profile.min_score, options.limit)
     log.info("новых вакансий: %s, к отправке: %s", new_count, len(rows))
 
@@ -345,6 +377,10 @@ def main() -> int:
         ai_line = aitext.row_line(row)
         if ai_line:
             lines.append(ai_line)
+        if score_opts.enabled:
+            lines += company_score_store.row_lines(
+                company_score_store.load(conn, row["company"])
+            )
         saved = dossier.load(conn, row["company"]) if row["company"] else None
         if saved is not None:
             lines += dossier.row_to_lines(saved)

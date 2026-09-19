@@ -256,6 +256,15 @@ class DetectorOptions:
     use_llm_claims: bool
 
 
+@dataclass(frozen=True)
+class CompanyScoreOptions:
+    """Общая оценка работодателя (ADR-018): считать и учитывать ли её."""
+
+    enabled: bool
+    in_score: bool
+    penalty: float
+
+
 def collect_options() -> CollectOptions:
     return CollectOptions(
         limit=as_int(os.getenv("RUN_LIMIT"), 30),
@@ -304,6 +313,14 @@ def detector_options() -> DetectorOptions:
         republish_alarm=max(2, as_int(os.getenv("DETECTOR_REPUBLISH_ALARM"), 3)),
         wide_band=max(1.1, as_float(os.getenv("DETECTOR_WIDE_BAND"), 2.0)),
         use_llm_claims=flag("DETECTOR_LLM_CLAIMS") and flag("LLM_ENABLED"),
+    )
+
+
+def company_score_options() -> CompanyScoreOptions:
+    return CompanyScoreOptions(
+        enabled=flag("COMPANY_SCORE_ENABLED"),
+        in_score=flag("COMPANY_SCORE_IN_SCORE"),
+        penalty=max(0.0, as_float(os.getenv("COMPANY_SCORE_PENALTY"), 15.0)),
     )
 
 
@@ -379,6 +396,7 @@ def form_updates(
 __all__ = (
     "BOOL",
     "CollectOptions",
+    "CompanyScoreOptions",
     "DetectorOptions",
     "PrefilterOptions",
     "ENV_PATH",
@@ -395,6 +413,7 @@ __all__ = (
     "as_int",
     "as_minutes",
     "collect_options",
+    "company_score_options",
     "detector_options",
     "flag",
     "form_updates",
