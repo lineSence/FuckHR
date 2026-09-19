@@ -17,6 +17,7 @@ import company_score_rules as R
 import company_score_store
 import db
 import dossier_store
+import fake_store
 import maintenance
 import ui_companies
 
@@ -93,6 +94,100 @@ def _dossier(conn, company: str, patterns, fake_level="none", fake_signs=()):
         ),
     )
     conn.commit()
+
+
+def _item(conn, company, codes, site="dreamjob.ru", label="clean", days_ago=30):
+    """Разобранный отзыв: у улики из него есть и площадка, и дата."""
+    fake_store.ensure_schema(conn)
+    idx = conn.execute(
+        "SELECT COUNT(*) FROM review_items WHERE company = ?", (company,)
+    ).fetchone()[0]
+    conn.execute(
+        """
+        INSERT INTO review_items (
+            company, url, idx, site, text_hash, excerpt, rating, dated_at,
+            date_precision, has_reply, fake_score, signals, patterns, label, created_at
+        ) VALUES (?, ?, ?, ?, ?, '', 4.0, ?, 'exact', 0, 0, '[]', ?, ?, ?)
+        """,
+        (
+            company,
+            "https://dreamjob.ru/r/{}".format(idx),
+            idx,
+            site,
+            "hash{}".format(idx),
+            _ts(days_ago)[:10],
+            json.dumps(list(codes)),
+            label,
+            _ts(0),
+        ),
+    )
+    conn.commit()
+
+
+def test_улика_из_отзыва_несёт_площадку_и_дату():
+    conn = _conn()
+    _dossier(conn, "Ромашка", [("overtime", 1)])
+    _item(conn, "Ромашка", ["overtime"], days_ago=40)
+
+    улики = [e for e in company_score.evaluate(conn, "Ромашка").evidence if e.code == "overtime"]
+
+    assert улики and "Dream Job" in улики[0].text
+    assert улики[0].observed_at == _ts(40)[:10]
+    # 0.8 «чужие слова» × площадка 1.0 × чистый отзыв 1.0 × нет накрутки
+    assert улики[0].trust == 0.8
+
+
+def test_заказной_отзыв_не_даёт_улики():
+    conn = _conn()
+    _dossier(conn, "Ромашка", [("overtime", 1)])
+    _item(conn, "Ромашка", ["overtime"], label="fake")
+
+    коды = {e.code for e in company_score.evaluate(conn, "Ромашка").evidence}
+
+    assert "overtime" not in коды
+
+
+def test_отзыв_на_слабой_площадке_весит_меньше():
+    сильная = _conn()
+    _dossier(сильная, "Ромашка", [])
+    _item(сильная, "Ромашка", ["toxic"], site="dreamjob.ru")
+    _item(сильная, "Ромашка", ["toxic"], site="dreamjob.ru")
+    слабая = _conn()
+    _dossier(слабая, "Ромашка", [])
+    _item(слабая, "Ромашка", ["toxic"], site="antijob.net")
+    _item(слабая, "Ромашка", ["toxic"], site="antijob.net")
+
+    сильно = company_score.evaluate(сильная, "Ромашка").axes[R.CONDITIONS]
+    слабо = company_score.evaluate(слабая, "Ромашка").axes[R.CONDITIONS]
+
+    assert слабо < сильно
+
+
+def test_старый_отзыв_весит_меньше_свежего():
+    свежий = _conn()
+    _dossier(свежий, "Ромашка", [])
+    _item(свежий, "Ромашка", ["toxic"], days_ago=30)
+    старый = _conn()
+    _dossier(старый, "Ромашка", [])
+    _item(старый, "Ромашка", ["toxic"], days_ago=30 * 40)
+
+    assert (
+        company_score.evaluate(старый, "Ромашка").axes[R.CONDITIONS]
+        < company_score.evaluate(свежий, "Ромашка").axes[R.CONDITIONS]
+    )
+
+
+def test_одна_жалоба_с_трёх_площадок_даёт_одну_строку():
+    conn = _conn()
+    _dossier(conn, "Ромашка", [])
+    for site in ("dreamjob.ru", "pravda-sotrudnikov.ru", "orabote.top"):
+        _item(conn, "Ромашка", ["salary_delay"], site=site)
+    _history(conn, "hh:1", "Ромашка", republished=3)
+    _history(conn, "hh:2", "Ромашка", republished=3)
+
+    строки = company_score.evaluate(conn, "Ромашка").lines()
+
+    assert sum(1 for line in строки if "выплат" in line) == 1
 
 
 def test_одна_ось_не_даёт_вывода():
@@ -234,3 +329,20 @@ def test_очистка_убирает_только_оценку():
 
     assert company_score_store.load(conn, "Ромашка") is None
     assert dossier_store.load(conn, "Ромашка") is not None
+
+
+def test_одного_отзыва_про_задержки_мало_для_вето():
+    conn = _conn()
+    _dossier(conn, "Ромашка", [])
+    _item(conn, "Ромашка", ["salary_delay"])
+    _history(conn, "hh:1", "Ромашка", republished=3)
+    _history(conn, "hh:2", "Ромашка", republished=3)
+
+    один = company_score.evaluate(conn, "Ромашка")
+    assert один.veto == ""
+
+    _item(conn, "Ромашка", ["salary_delay"], site="pravda-sotrudnikov.ru")
+    два = company_score.evaluate(conn, "Ромашка")
+
+    assert два.veto == R.VETO_RED
+    assert два.level == R.LEVEL_RED

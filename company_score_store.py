@@ -115,7 +115,18 @@ def row_lines(row: sqlite3.Row | None, limit: int = 3) -> list[str]:
         head += " · {}".format(R.VETO_RU.get(veto, veto))
     red = [e for e in evidence if e.get("polarity") == "red" and e.get("text")]
     red.sort(key=lambda e: float(e.get("weight", 0)) * float(e.get("trust", 0)), reverse=True)
-    return [head] + ["— {}".format(e["text"]) for e in red[:limit]]
+    # По одной строке на код: одна и та же жалоба с трёх площадок — одна новость.
+    seen: set[str] = set()
+    out: list[str] = []
+    for item in red:
+        code = str(item.get("code") or "")
+        if code in seen:
+            continue
+        seen.add(code)
+        out.append("— {}".format(item["text"]))
+        if len(out) >= limit:
+            break
+    return [head] + out
 
 
 def refresh(conn: sqlite3.Connection, companies: list[str]) -> int:

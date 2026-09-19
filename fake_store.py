@@ -17,8 +17,11 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+
 from datetime import datetime, timezone
 from typing import Sequence
+
+import dossier_text
 
 log = logging.getLogger(__name__)
 
@@ -37,6 +40,7 @@ CREATE TABLE IF NOT EXISTS review_items (
     has_reply   INTEGER NOT NULL DEFAULT 0,
     fake_score  REAL NOT NULL DEFAULT 0,
     signals     TEXT NOT NULL DEFAULT '[]',
+    patterns    TEXT NOT NULL DEFAULT '[]',
     label       TEXT NOT NULL DEFAULT 'clean',
     created_at  TEXT NOT NULL,
     UNIQUE (company, url, idx)
@@ -60,6 +64,14 @@ EXCERPT_CHARS = 240
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
+    # База у владельца одна и живёт месяцами: недостающая колонка не имеет
+    # права ронять прогон.
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(review_items)")}
+    if "patterns" not in columns:
+        log.info("добавляю колонку patterns в review_items")
+        conn.execute(
+            "ALTER TABLE review_items ADD COLUMN patterns TEXT NOT NULL DEFAULT '[]'"
+        )
     conn.commit()
 
 
@@ -97,8 +109,9 @@ def store(
             """
             INSERT INTO review_items (
                 company, url, idx, site, text_hash, excerpt, rating, dated_at,
-                date_precision, has_reply, fake_score, signals, label, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                date_precision, has_reply, fake_score, signals, patterns, label,
+                created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(company, url, idx) DO UPDATE SET
                 text_hash = excluded.text_hash,
                 excerpt = excluded.excerpt,
@@ -108,6 +121,7 @@ def store(
                 has_reply = excluded.has_reply,
                 fake_score = excluded.fake_score,
                 signals = excluded.signals,
+                patterns = excluded.patterns,
                 label = excluded.label
             """,
             (
@@ -123,6 +137,10 @@ def store(
                 int(bool(getattr(item, "has_reply", False))),
                 float(getattr(verdict, "score", 0.0) or 0.0),
                 json.dumps(list(getattr(verdict, "signals", ())), ensure_ascii=False),
+                json.dumps(
+                    list(dossier_text.codes_in(str(getattr(item, "text", "")))),
+                    ensure_ascii=False,
+                ),
                 str(getattr(verdict, "label", "clean")),
                 now,
             ),

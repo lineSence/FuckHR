@@ -25,8 +25,10 @@ from datetime import datetime, timezone
 import company_score_rules as R
 import company_signals
 import detector
+import dossier_rules
 import dossier_store
 import fake_rules
+import fake_store
 import market_store
 
 log = logging.getLogger(__name__)
@@ -64,9 +66,20 @@ class CompanyScore:
         return R.LEVEL_RU.get(self.level, self.level)
 
     def top(self, limit: int = 3) -> tuple[Evidence, ...]:
-        red = [e for e in self.evidence if e.polarity == "red"]
+        """Три главные улики, по одной на код: три строки про один и тот же
+        салари-делей с трёх площадок — это одна новость, а не три."""
+        red = [e for e in self.evidence if e.polarity == "red" and e.text]
         red.sort(key=lambda e: (e.weight * e.trust), reverse=True)
-        return tuple(red[:limit])
+        seen: set[str] = set()
+        out: list[Evidence] = []
+        for item in red:
+            if item.code in seen:
+                continue
+            seen.add(item.code)
+            out.append(item)
+            if len(out) >= limit:
+                break
+        return tuple(out)
 
     def lines(self) -> list[str]:
         if self.level == R.LEVEL_UNKNOWN:
@@ -119,13 +132,70 @@ def _saturate(total: float, cap: float) -> float:
 # --- сбор улик ---
 
 
-def _dossier_evidence(conn: sqlite3.Connection, company: str) -> list[Evidence]:
-    """Отзывы: паттерны досье и сама метка накрутки."""
-    row = dossier_store.load(conn, company)
-    if row is None:
-        return []
-    level = str(row["fake_level"] or fake_rules.MARK_NONE)
-    trust = R.TRUST_REVIEW * R.INTEGRITY_TRUST.get(level, 1.0)
+def _review_trust(row: sqlite3.Row, integrity: float) -> float:
+    """Доверие к одному отзыву: площадка × метка накрутки × метка компании.
+
+    Заказной отзыв получает ноль и в оценку не попадает вообще: его уже не
+    учитывает средняя, и в уликах ему тоже не место.
+    """
+    site = str(row["site"] or "")
+    label = str(row["label"] or fake_rules.LABEL_CLEAN)
+    return (
+        R.TRUST_REVIEW
+        * dossier_rules.SITE_TRUST.get(site, 0.6)
+        * fake_rules.LABEL_WEIGHT.get(label, 1.0)
+        * integrity
+    )
+
+
+def _review_evidence(
+    conn: sqlite3.Connection, company: str, integrity: float, fallback_date: str
+) -> tuple[list[Evidence], int]:
+    """Улики из отдельных отзывов: у каждой своя площадка и своя дата.
+
+    Второе значение — сколько разобранных отзывов вообще нашлось. Ноль улик при
+    найденных отзывах — это результат (все заказные), а не повод откатываться на
+    агрегат досье.
+    """
+    rows = fake_store.load_items(conn, dossier_store.resolve_company(conn, company))
+    out: list[Evidence] = []
+    for row in rows:
+        try:
+            codes = json.loads(_cell(row, "patterns") or "[]")
+        except ValueError:
+            codes = []
+        trust = _review_trust(row, integrity)
+        if not codes or trust <= 0:
+            continue
+        site = str(row["site"] or "")
+        dated = str(row["dated_at"] or "") if str(row["date_precision"]) != "none" else ""
+        where = dossier_rules.SITE_NAMES.get(site, site or "площадка неизвестна")
+        if dated:
+            where += ", {}".format(dated[:10])
+        for code in codes:
+            axis = R.PATTERN_AXIS.get(str(code))
+            meta = R.PATTERN_META.get(str(code))
+            if axis is None or meta is None:
+                continue
+            label, polarity, weight = meta
+            out.append(
+                Evidence(
+                    code=str(code),
+                    axis=axis,
+                    polarity=polarity,
+                    weight=weight,
+                    trust=trust,
+                    text="{} — {}".format(label, where),
+                    observed_at=dated or fallback_date,
+                )
+            )
+    return out, len(rows)
+
+
+def _pattern_evidence(row: sqlite3.Row, integrity: float) -> list[Evidence]:
+    """Запасной путь для баз, собранных до перехода на review_items: агрегат
+    досье без площадки и без даты отдельного отзыва."""
+    trust = R.TRUST_REVIEW * integrity
     updated = str(row["updated_at"] or "")
     out: list[Evidence] = []
     try:
@@ -139,23 +209,44 @@ def _dossier_evidence(conn: sqlite3.Connection, company: str) -> list[Evidence]:
         if axis is None or meta is None or not item.get("hits"):
             continue
         label, polarity, weight = meta
-        out.append(
-            Evidence(
-                code=code,
-                axis=axis,
-                polarity=polarity,
-                weight=weight,
-                trust=trust,
-                text="{}: упоминаний в отзывах {}".format(label, int(item["hits"])),
-                observed_at=updated,
+        # Улика на каждое упоминание, до пяти: так старый агрегат считается тем
+        # же способом, что и отзывы по отдельности, включая порог вето.
+        hits = max(1, min(int(item["hits"]), 5))
+        for number in range(hits):
+            out.append(
+                Evidence(
+                    code=code,
+                    axis=axis,
+                    polarity=polarity,
+                    weight=weight,
+                    trust=trust,
+                    text=(
+                        "{}: упоминаний в отзывах {}".format(label, int(item["hits"]))
+                        if number == 0
+                        else ""
+                    ),
+                    observed_at=updated,
+                )
             )
-        )
+    return out
+
+
+def _dossier_evidence(conn: sqlite3.Connection, company: str) -> list[Evidence]:
+    """Отзывы: закономерности отдельных отзывов и сама метка накрутки."""
+    row = dossier_store.load(conn, company)
+    if row is None:
+        return []
+    level = str(row["fake_level"] or fake_rules.MARK_NONE)
+    integrity = R.INTEGRITY_TRUST.get(level, 1.0)
+    updated = str(row["updated_at"] or "")
+    out, reviews = _review_evidence(conn, company, integrity, updated)
+    if not reviews:
+        out = _pattern_evidence(row, integrity)
     if level != fake_rules.MARK_NONE:
         try:
             signs = json.loads(row["fake_signs"] or "[]")
         except ValueError:
             signs = []
-        codes = [str(s.get("code") or "") for s in signs]
         text = "; ".join(str(s.get("text") or "") for s in signs)
         out.append(
             Evidence(
@@ -169,7 +260,8 @@ def _dossier_evidence(conn: sqlite3.Connection, company: str) -> list[Evidence]:
             )
         )
         # Признаки накрутки участвуют в закономерностях по своим кодам.
-        for code in codes:
+        for sign in signs:
+            code = str(sign.get("code") or "")
             if code:
                 out.append(
                     Evidence(
@@ -355,24 +447,19 @@ def _covered(items: list[Evidence]) -> bool:
 
 
 def _veto(evidence: list[Evidence]) -> tuple[str, str]:
-    """(код вето, уровень-потолок). Пустое значение — вето не сработало."""
-    for item in evidence:
-        if item.code != R.VETO_RED:
-            continue
-        # Улика отзывов несёт число упоминаний в тексте, поэтому порог проверяем
-        # по доверию: наше наблюдение достаточно само по себе.
-        hits = _hits_in(item.text)
-        if item.trust >= R.COVER_TRUST or hits >= R.VETO_RED_HITS:
-            return R.VETO_RED, R.LEVEL_RED
+    """(код вето, уровень-потолок). Пустое значение — вето не сработало.
+
+    Задержки зарплаты закрывают вопрос, но одного чужого слова для этого мало:
+    нужны два независимых отзыва либо наше собственное наблюдение.
+    """
+    delays = [e for e in evidence if e.code == R.VETO_RED and e.trust > 0]
+    own = any(e.trust >= R.TRUST_OWN for e in delays)
+    if own or len(delays) >= R.VETO_RED_HITS:
+        return R.VETO_RED, R.LEVEL_RED
     for item in evidence:
         if item.code in R.VETO_YELLOW and item.weight > 0:
             return item.code, R.LEVEL_YELLOW
     return "", ""
-
-
-def _hits_in(text: str) -> int:
-    digits = "".join(ch if ch.isdigit() else " " for ch in text).split()
-    return int(digits[-1]) if digits else 0
 
 
 def _worst(levels: list[str]) -> str:

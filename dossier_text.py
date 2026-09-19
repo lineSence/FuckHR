@@ -128,6 +128,23 @@ def _quote(text: str, needle: str) -> str:
     return piece[:MAX_QUOTE_CHARS]
 
 
+def codes_in(text: str) -> tuple[str, ...]:
+    """Коды закономерностей одного отзыва.
+
+    Нужны, чтобы улика в оценке работодателя знала свою площадку и дату:
+    агрегат по всем отзывам сразу обе размерности теряет. Правила те же, что у
+    find_patterns, — один словарь на оба места.
+    """
+    low = (text or "").lower()
+    if not low:
+        return ()
+    return tuple(
+        code
+        for code, _label, polarity, _weight, needles in PATTERN_RULES
+        if matched_needle(low, needles, skip_negated=polarity == "green")
+    )
+
+
 def find_patterns(reviews: Sequence["Review"]) -> tuple[Pattern, ...]:
     """Ищет повторяющиеся сюжеты по всем отзывам сразу.
 
