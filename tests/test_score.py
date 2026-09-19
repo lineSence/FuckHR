@@ -78,3 +78,35 @@ def test_рабочий_профиль_читается_загрузчиком()
 
     assert isinstance(loaded.queries, list)
     assert loaded.min_score >= 0
+
+
+def test_стоп_слово_ловится_в_теле_в_другой_форме(profile, make_vacancy):
+    """На выдаче тела нет, и весь мусор виден только в описании."""
+    verdict = evaluate(
+        make_vacancy(description="<p>Работа <b>вахтой</b> 60/30, python</p>"), profile
+    )
+    assert verdict.rejected
+    assert "вахта" in (verdict.reject_reason or "")
+    assert "в теле" in (verdict.reject_reason or "")
+
+
+def test_стоп_слово_в_названии_помечено_как_название(profile, make_vacancy):
+    verdict = evaluate(make_vacancy(title="Стажировка Python"), profile)
+    assert verdict.rejected
+    assert "в названии" in (verdict.reject_reason or "")
+
+
+def test_стоп_фраза_ищется_целиком(profile, make_vacancy):
+    """Фраза не должна срабатывать по одному своему слову."""
+    ok = evaluate(make_vacancy(description="Python, работа с отделом продаж"), profile)
+    assert not ok.rejected
+    bad = evaluate(make_vacancy(description="Нужен менеджер по продажам"), profile)
+    assert bad.rejected
+
+
+def test_короткое_стоп_слово_не_ловит_лишнее(profile, make_vacancy):
+    """«1c» не должно срабатывать на «1сек» или числах в тексте."""
+    verdict = evaluate(
+        make_vacancy(description="Python, отклик за 1 день, 100 000 запросов"), profile
+    )
+    assert not verdict.rejected

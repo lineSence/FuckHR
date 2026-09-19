@@ -11,7 +11,9 @@
 
 from __future__ import annotations
 
+import html as html_lib
 import logging
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -24,6 +26,13 @@ import profile_schema
 log = logging.getLogger(__name__)
 
 FUZZY_THRESHOLD = 88
+
+TAG_RE = re.compile(r"<[^>]+>")
+SPACE_RE = re.compile(r"\s+")
+WORD_RE = re.compile(r"[0-9a-zа-я+#._-]+")
+# Со слова такой длины отсекаем последнюю букву и ищем по основе: «вахта»
+# должна ловить «вахтой», но «1c» нельзя укорачивать до «1».
+STEM_FROM = 5
 
 
 @dataclass
@@ -82,9 +91,46 @@ class Verdict:
     reject_reason: str | None = None
 
 
+def normalize(text: object) -> str:
+    """Текст вакансии в вид, пригодный для поиска слов.
+
+    Описание с hh.ru приезжает HTML-ом: без снятия тегов и мнемоник стоп-слово
+    «продажи» не находится в «<b>прода</b>жи», а «&nbsp;» слипает слова.
+    """
+    raw = TAG_RE.sub(" ", str(text or ""))
+    raw = html_lib.unescape(raw).replace("ё", "е").replace("Ё", "Е")
+    return SPACE_RE.sub(" ", raw).strip().lower()
+
+
 def _haystack(vacancy: Any) -> str:
     parts = [vacancy.title, vacancy.description, " ".join(vacancy.skills)]
-    return " ".join(p for p in parts if p).lower()
+    return normalize(" ".join(str(p) for p in parts if p))
+
+
+def stop_hit(text: str, stop_words: "list[str]") -> str | None:
+    """Первое стоп-слово, найденное в тексте, или None.
+
+    Фраза («менеджер по продажам») ищется вхождением целиком. Одиночное слово —
+    по основе: в теле вакансии оно почти всегда в другой форме, и точное
+    вхождение пропускало «вахтой» и «стажировки». Основу короче четырёх букв не
+    берём, иначе «1c» начал бы ловить любой номер.
+    """
+    hay = normalize(text)
+    if not hay:
+        return None
+    tokens = WORD_RE.findall(hay)
+    for raw in stop_words:
+        word = normalize(raw)
+        if not word:
+            continue
+        if " " in word:
+            if word in hay:
+                return raw
+            continue
+        stem = word[:-1] if len(word) >= STEM_FROM else word
+        if any(token == word or token.startswith(stem) for token in tokens):
+            return raw
+    return None
 
 
 def _matches(term: str, haystack: str, fuzzy: int = FUZZY_THRESHOLD) -> bool:
@@ -98,10 +144,14 @@ def evaluate(vacancy: Any, profile: Profile, fuzzy: int = FUZZY_THRESHOLD) -> Ve
     haystack = _haystack(vacancy)
     reasons: list[str] = []
 
-    # 1. Стоп-слова — жёсткий отказ до любых баллов.
-    for word in profile.stop_words:
-        if word and word in haystack:
-            return Verdict(0.0, [], rejected=True, reject_reason=f"стоп-слово: {word}")
+    # 1. Стоп-слова — жёсткий отказ до любых баллов. Ищутся и в названии, и в
+    #    теле: на выдаче описания ещё нет, и половина мусора видна только там.
+    hit = stop_hit(haystack, profile.stop_words)
+    if hit:
+        where = "в названии" if stop_hit(vacancy.title, profile.stop_words) else "в теле"
+        return Verdict(
+            0.0, [], rejected=True, reject_reason="стоп-слово {} {}".format(hit, where)
+        )
 
     # 2. Зарплата. Отсутствие вилки — не отказ, а штраф: на hh.ru много хороших
     #    вакансий без указанной вилки, и их скрытие само по себе сигнал.
