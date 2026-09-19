@@ -56,6 +56,22 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable, Sequence
 
+from llm_profiles import (  # noqa: F401 — публичные имена остаются в llm
+    EMBEDDINGS,
+    FAST,
+    LOCAL,
+    LONG,
+    PERSONAL_STAGES,
+    PROXY_MODEL_ENV,
+    ROUTE_LOCAL,
+    ROUTE_PROXY,
+    SMART,
+    STAGE_MODEL_ENV,
+    STAGE_PROFILES,
+    ProfileError,
+    profile_for,
+)
+
 log = logging.getLogger(__name__)
 
 CACHE_SCHEMA = """
@@ -68,59 +84,9 @@ CREATE TABLE IF NOT EXISTS llm_cache (
 );
 """
 
-# Профили шлюза вместо model="auto" (wiki/architecture/model-routing.md).
-FAST = "auto:fast"
-SMART = "auto:smart"
-LONG = "auto:long"
-LOCAL = "local-only"
-EMBEDDINGS = "embeddings"
-
-# Этап пайплайна -> профиль. Новый этап обязан объявить свой профиль здесь:
-# молчаливого дефолта нет специально, иначе данные о людях когда-нибудь
-# утекут в облако через «забыли добавить этап».
-#
-# resume_section и resume_tailor работают с резюме владельца — это тоже
-# персональные данные, но его собственные, а не третьих лиц. Своё резюме
-# владелец и так отдаёт работодателям, поэтому в PERSONAL_STAGES эти этапы не
-# внесены: запрет облака здесь защищал бы его от самого себя. FAST — потому что
-# задачи узкие (перефразировать ответ, выбрать номера блоков), а вызовов много:
-# версия собирается на каждую прошедшую скоринг вакансию [CORE-016].
-STAGE_PROFILES: dict[str, str] = {
-    "extract": FAST,
-    "hr_filter": SMART,
-    "company": LONG,
-    "score": SMART,
-    "contacts": LOCAL,
-    "dossier": LOCAL,
-    "draft": LOCAL,
-    "resume_section": FAST,
-    "resume_tailor": FAST,
-    "embeddings": EMBEDDINGS,
-}
-
-# Этапы, где в промпте есть данные о конкретных людях.
-PERSONAL_STAGES = frozenset({"contacts", "dossier", "draft"})
-
-# Имена маршрутов — то, что видно в логах и в интерфейсе.
-ROUTE_LOCAL = "local"
-ROUTE_PROXY = "proxy"
-
-# Переменная окружения с именем модели на прокси для каждого профиля.
-PROXY_MODEL_ENV = {
-    FAST: "LLM_PROXY_MODEL_FAST",
-    SMART: "LLM_PROXY_MODEL_SMART",
-    LONG: "LLM_PROXY_MODEL_LONG",
-    LOCAL: "LLM_PROXY_MODEL_LOCAL",
-    EMBEDDINGS: "LLM_PROXY_MODEL_EMBEDDINGS",
-}
-
 # Коды, при которых повтор имеет смысл: это состояние сервиса, не запроса.
 RETRY_STATUSES = frozenset({408, 409, 425, 429, 500, 502, 503, 504, 529})
 MAX_ERROR_CHARS = 600
-
-
-class ProfileError(RuntimeError):
-    """Неизвестный этап или попытка увести ПД из local-only."""
 
 
 class ApiError(RuntimeError):
@@ -156,20 +122,6 @@ class Route:
     @property
     def is_proxy(self) -> bool:
         return self.name == ROUTE_PROXY
-
-
-def profile_for(stage: str) -> str:
-    try:
-        profile = STAGE_PROFILES[stage]
-    except KeyError as exc:
-        raise ProfileError(
-            f"этап {stage!r} не объявил профиль в STAGE_PROFILES"
-        ) from exc
-    if stage in PERSONAL_STAGES and profile != LOCAL:
-        raise ProfileError(
-            f"этап {stage!r} работает с персональными данными и требует {LOCAL}"
-        )
-    return profile
 
 
 def ensure_cache(conn: sqlite3.Connection) -> None:
@@ -240,6 +192,7 @@ class Gateway:
         proxy_base_url: str | None = None,
         proxy_api_key: str | None = None,
         proxy_models: dict[str, str] | None = None,
+        stage_models: dict[str, str] | None = None,
         personal_via_proxy: bool = False,
     ) -> None:
         self.base_url = (base_url or "").rstrip("/")
@@ -247,6 +200,7 @@ class Gateway:
         self.proxy_base_url = (proxy_base_url or "").rstrip("/")
         self.proxy_api_key = proxy_api_key
         self.proxy_models = dict(proxy_models or {})
+        self.stage_models = dict(stage_models or {})
         self.personal_via_proxy = bool(personal_via_proxy)
         self.timeout = timeout
         self.max_calls = max_calls
@@ -267,6 +221,11 @@ class Gateway:
             value = os.getenv(name)
             if value:
                 models[profile] = value.strip()
+        stages = {}
+        for stage, name in STAGE_MODEL_ENV.items():
+            value = os.getenv(name)
+            if value:
+                stages[stage] = value.strip()
         return cls(
             base_url=os.getenv("LLM_BASE_URL") or None,
             api_key=os.getenv("LLM_API_KEY") or None,
@@ -276,6 +235,7 @@ class Gateway:
             proxy_base_url=os.getenv("LLM_PROXY_BASE_URL") or None,
             proxy_api_key=os.getenv("LLM_PROXY_API_KEY") or None,
             proxy_models=models,
+            stage_models=stages,
             personal_via_proxy=(os.getenv("LLM_PERSONAL_VIA_PROXY", "") or "").strip()
             in {"1", "true", "yes", "on"},
         )
@@ -295,6 +255,17 @@ class Gateway:
         auto:fast / auto:smart / auto:long — тогда настраивать здесь нечего.
         """
         return self.proxy_models.get(profile, profile)
+
+    def model_for(self, stage: str) -> tuple[str, str]:
+        """Имя модели на прокси для этапа и откуда оно взялось.
+
+        Имя этапа сильнее имени профиля: профиль — это класс задачи, а победитель
+        бенчмарка считается по этапу (`bench.recommend`).
+        """
+        name = self.stage_models.get(stage)
+        if name:
+            return name, "этап"
+        return self._proxy_model(profile_for(stage)), "профиль"
 
     def unmapped_profiles(self) -> list[tuple[str, str, str]]:
         """Профили без явного имени модели: (профиль, что уйдёт, переменная).
@@ -345,7 +316,7 @@ class Gateway:
             if self.base_url
             else None
         )
-        proxy_model = self._proxy_model(profile)
+        proxy_model = self.model_for(stage)[0]
         proxy = (
             Route(ROUTE_PROXY, self.proxy_base_url, self.proxy_api_key, proxy_model)
             if self.proxy_base_url
@@ -375,17 +346,21 @@ class Gateway:
 
         return proxy or local
 
-    def describe_routes(self) -> list[tuple[str, str, str, str]]:
-        """(этап, профиль, маршрут, модель) — для интерфейса и логов."""
+    def describe_routes(self) -> list[tuple[str, str, str, str, str]]:
+        """(этап, профиль, маршрут, модель, откуда имя) — для интерфейса и логов."""
         out = []
         for stage in STAGE_PROFILES:
             route = self.route_for(stage)
+            source = "профиль"
+            if route is not None and route.is_proxy:
+                source = self.model_for(stage)[1]
             out.append(
                 (
                     stage,
                     profile_for(stage),
                     route.name if route else "нет маршрута",
                     route.model if route else "—",
+                    source,
                 )
             )
         return out
@@ -555,6 +530,7 @@ __all__ = (
     "LONG",
     "PERSONAL_STAGES",
     "PROXY_MODEL_ENV",
+    "STAGE_MODEL_ENV",
     "ProfileError",
     "RETRY_STATUSES",
     "ROUTE_LOCAL",

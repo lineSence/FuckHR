@@ -8,7 +8,10 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 
+import market
+import market_store
 import settings
 from hh import Vacancy
 from hh_html import HHHtmlClient
@@ -22,6 +25,7 @@ def collect(
     profile: Profile,
     limit: int = 0,
     prefilter: settings.PrefilterOptions | None = None,
+    conn: sqlite3.Connection | None = None,
 ) -> tuple[dict[str, Vacancy], dict[str, Vacancy]]:
     """Собирает вакансии по запросам профиля, но не больше limit штук.
 
@@ -32,13 +36,20 @@ def collect(
     поиска бросается недочитанным, и остальные страницы не запрашиваются. Каждая
     незапрошенная страница — это сэкономленные две-три секунды паузы и шаг от капчи.
 
+    Зарплатные наблюдения снимаются здесь же, со всей выдачи и до предфильтра.
+    Считать рынок по прошедшим профиль нельзя: порог владельца обрезает выборку
+    снизу, и метки «ниже рынка» не существовало бы в принципе. Страница уже
+    скачана, новых запросов к hh.ru это не добавляет [CORE-016].
+
     Предфильтр настраивается: его можно выключить целиком или поднять порог
     чернового скора. Скор на выдаче занижен — описания ещё нет, поэтому по
     умолчанию порог нулевой и отсев идёт только по стоп-словам и вилке.
     """
     prefilter = prefilter or settings.prefilter_options()
+    observations: list[market.Observation] = []
     seen: dict[str, Vacancy] = {}
     passed: dict[str, Vacancy] = {}
+    stopped_by_limit = False
     queries = [q for q in profile.queries if q.get("text")]
     for index, query in enumerate(queries, start=1):
         if limit and len(passed) >= limit:
@@ -50,11 +61,15 @@ def collect(
             text=text,
             area=query.get("area") or profile.areas or None,
             period=int(query.get("period", 7)),
-            max_pages=int(query.get("max_pages", 3)),
+            max_pages=int(query.get("max_pages") or 0),
             extra=query.get("extra"),
         )
         try:
             for draft in pages:
+                if draft.key not in seen:
+                    point = market.observe(draft)
+                    if point is not None:
+                        observations.append(point)
                 seen.setdefault(draft.key, draft)
                 rough = evaluate(draft, profile, prefilter.fuzzy)
                 if prefilter.enabled and rough.rejected:
@@ -74,6 +89,7 @@ def collect(
                     continue
                 passed.setdefault(draft.key, draft)
                 if limit and len(passed) >= limit:
+                    stopped_by_limit = True
                     log.info(
                         "собрали %s вакансий при лимите %s, больше страниц не запрашиваем",
                         len(passed),
@@ -84,4 +100,20 @@ def collect(
             # Генератор закрываем явно: иначе он доживает до сборки мусора и не
             # очевидно когда отпустит соединение.
             pages.close()
+    # Лимит не набран, а страницы кончились — это не сбой сбора, а конец
+    # выдачи: ниже по прогону число вакансий объяснять больше нечем.
+    if limit and not stopped_by_limit and len(passed) < limit:
+        log.warning(
+            "вакансии в выдаче кончились: найдено %s из лимита %s "
+            "(увидели всего %s). Больше по этим запросам hh.ru не отдаёт — "
+            "расширь срок, географию или добавь запрос.",
+            len(passed),
+            limit,
+            len(seen),
+        )
+    if conn is not None and observations:
+        # Наблюдения пишутся одним куском после обхода: держать транзакцию
+        # открытой на всё время пауз hh.ru незачем.
+        market_store.record(conn, observations)
+        log.info("зарплатных наблюдений записано: %s", len(observations))
     return seen, passed

@@ -25,16 +25,36 @@ import os
 import sys
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Sequence
 
 import bench_cases
+import detector_llm
+import dossier as dossier_mod
+import intake
 import llm
 import llm_tasks
+import resume
+import resume_llm
 from bench_cases import CASES, Case
 
 log = logging.getLogger("bench")
 
-STAGES = ("extract", "company", "contacts", "draft")
+STAGES = (
+    "intake",
+    "extract",
+    "hr_filter",
+    "company",
+    "contacts",
+    "dossier",
+    "review_fake",
+    "draft",
+    "resume_section",
+    "resume_tailor",
+)
+
+# Отчёт последнего прогона: его читает страница «Модель» (ui_bench).
+REPORT_PATH = Path(__file__).resolve().parent / "data" / "bench" / "last.json"
 
 
 @dataclass(frozen=True)
@@ -89,6 +109,46 @@ def run_case(gateway: Any, case: Case) -> Any:
     if case.stage == "draft":
         draft = bench_cases.Draft(body=case.payload["body"])
         return llm_tasks.polish_draft(gateway, draft, case.payload.get("facts", ()))
+    if case.stage == "intake":
+        return intake.ask(gateway, case.payload["text"], {})
+    if case.stage == "hr_filter":
+        return detector_llm.llm_claims(gateway, case.payload["text"])
+    if case.stage == "resume_section":
+        return resume_llm.draft_section(
+            gateway,
+            case.payload["section"],
+            case.payload["answer"],
+            case.payload.get("role_hint", ""),
+        )
+    if case.stage == "resume_tailor":
+        blocks = [
+            resume.Block(
+                id=number,
+                section=section,
+                position=number,
+                heading="",
+                body=body,
+                confirmed=True,
+            )
+            for number, (section, body) in enumerate(case.payload["blocks"], start=1)
+        ]
+        return resume_llm.pick_blocks(gateway, blocks, case.payload["vacancy"])
+    if case.stage == "dossier":
+        reviews = tuple(
+            dossier_mod.Review(url="https://example/{}".format(i), site=site, body=body)
+            for i, (site, body) in enumerate(case.payload["reviews"])
+        )
+        card = dossier_mod.Dossier(company=case.payload["company"], reviews=reviews)
+        return dossier_mod.summarize(gateway, card)[0]
+    if case.stage == "review_fake":
+        import fake_llm
+        import reviewitems
+
+        items = tuple(
+            reviewitems.ReviewItem(url="https://example/{}".format(i), index=i, body=body)
+            for i, body in enumerate(case.payload["reviews"])
+        )
+        return fake_llm.ad_indexes(gateway, items, force=True)
     raise ValueError("неизвестный этап: {}".format(case.stage))
 
 
@@ -98,6 +158,7 @@ def run_model(
     route: str = llm.ROUTE_PROXY,
     repeat: int = 1,
     gateway: Any = None,
+    on_row: Any = None,
 ) -> list[Row]:
     """Прогон всех кейсов. Падение модели — ноль по кейсу, а не конец бенчмарка."""
     gw = gateway or gateway_for(model, route)
@@ -121,6 +182,8 @@ def run_model(
                     seconds=round(time.monotonic() - started, 2),
                 )
             )
+            if on_row is not None:
+                on_row(rows[-1])
     return rows
 
 
@@ -132,16 +195,33 @@ def by_stage(rows: Sequence[Row]) -> dict[tuple[str, str], float]:
     return {key: sum(v) / len(v) for key, v in bucket.items()}
 
 
-def winners(rows: Sequence[Row]) -> dict[str, tuple[str, float]]:
-    """Лучшая модель на каждый этап. При равных баллах выигрывает быстрая."""
+def recommend(
+    rows: Sequence[Row], tolerance: float = 0.05
+) -> dict[str, tuple[str, float, float]]:
+    """Модель на каждый этап: сначала балл, при почти равном балле — скорость.
+
+    Настройка живёт на этапе (`llm.STAGE_MODEL_ENV`), а не только на профиле:
+    у extract и resume_section один класс задачи, но победители разные.
+    tolerance — насколько балл может быть ниже лучшего, чтобы считаться ничьей:
+    две сотых на шести кейсах ничего не значат, а секунды на каждом вызове
+    значат [CORE-016].
+    """
     means = by_stage(rows)
-    best: dict[str, tuple[float, float, str]] = {}
-    for (stage, model), score in means.items():
-        seconds = _speed(rows, stage, model)
-        key = (score, -seconds, model)
-        if stage not in best or key > best[stage]:
-            best[stage] = key
-    return {stage: (key[2], round(key[0], 3)) for stage, key in best.items()}
+    out: dict[str, tuple[str, float, float]] = {}
+    for stage in {stage for stage, _ in means}:
+        candidates = [(m, s) for (st, m), s in means.items() if st == stage]
+        top = max(score for _, score in candidates)
+        near = [(m, s) for m, s in candidates if s >= top - tolerance]
+        model, score = min(
+            near, key=lambda ms: (round(_speed(rows, stage, ms[0]), 2), ms[0])
+        )
+        out[stage] = (model, round(score, 3), round(_speed(rows, stage, model), 2))
+    return out
+
+
+def winners(rows: Sequence[Row]) -> dict[str, tuple[str, float]]:
+    """Лучший балл на каждый этап. При равных баллах выигрывает быстрая."""
+    return {stage: (model, score) for stage, (model, score, _) in recommend(rows, 0.0).items()}
 
 
 def _speed(rows: Sequence[Row], stage: str, model: str) -> float:
@@ -170,6 +250,15 @@ def render(rows: Sequence[Row]) -> str:
         lines.append("- **{}** → {} ({:.2f})".format(stage, model, score))
 
     lines.append("")
+    lines.append("Подставить в настройки:")
+    for stage, (model, score, seconds) in sorted(recommend(rows).items()):
+        lines.append(
+            "- {} = {} ({:.2f}, {:.1f} с) → {}".format(
+                stage, model, score, seconds, llm.STAGE_MODEL_ENV.get(stage, "—")
+            )
+        )
+
+    lines.append("")
     lines.append("| Модель | Кейс | Балл | Сек | Что вышло |")
     lines.append("| --- | --- | --- | --- | --- |")
     for row in rows:
@@ -181,13 +270,41 @@ def render(rows: Sequence[Row]) -> str:
     return "\n".join(lines)
 
 
+def save_report(
+    path: str,
+    rows: Sequence[Row],
+    models: Sequence[str],
+    cases: Sequence[Case],
+    repeat: int,
+    route: str,
+) -> None:
+    """Отчёт для страницы «Модель»: строки плюс параметры прогона."""
+    report = {
+        "finished_at": time.time(),
+        "models": list(models),
+        "stages": sorted({c.stage for c in cases}),
+        "repeat": repeat,
+        "route": route,
+        "rows": [row.__dict__ for row in rows],
+    }
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Сравнение моделей на задачах пайплайна")
     parser.add_argument("--models", required=True, help="имена моделей через запятую")
     parser.add_argument("--route", default=llm.ROUTE_PROXY, choices=[llm.ROUTE_PROXY, llm.ROUTE_LOCAL])
     parser.add_argument("--stages", default="", help="этапы через запятую")
     parser.add_argument("--repeat", type=int, default=1, help="прогонов на кейс")
-    parser.add_argument("--json", default="", help="куда сложить сырые строки")
+    parser.add_argument(
+        "--json",
+        default=str(REPORT_PATH),
+        help="куда сложить отчёт (его читает страница «Модель»)",
+    )
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -204,17 +321,31 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("нет кейсов под такие этапы: {}".format(args.stages))
         return 2
 
+    models = [m.strip() for m in args.models.split(",") if m.strip()]
+    # Счётчик печатается в формате «[3/30]»: интерфейс вычитывает прогресс из
+    # логов задачи, отдельного протокола между процессами нет.
+    total = len(models) * len(cases) * max(1, args.repeat)
+    state = {"done": 0}
+
+    def tick(row: Row) -> None:
+        state["done"] += 1
+        print(
+            "[{}/{}] {} · {} · {:.2f} за {:.1f} с".format(
+                state["done"], total, row.model, row.case, row.score, row.seconds
+            ),
+            flush=True,
+        )
+
     rows: list[Row] = []
-    for model in [m.strip() for m in args.models.split(",") if m.strip()]:
+    for model in models:
         print("гоняю {} ({} кейсов × {})".format(model, len(cases), args.repeat))
-        rows.extend(run_model(model, cases, args.route, args.repeat))
+        rows.extend(run_model(model, cases, args.route, args.repeat, on_row=tick))
 
     print()
     print(render(rows))
     if args.json:
-        with open(args.json, "w", encoding="utf-8") as fh:
-            json.dump([row.__dict__ for row in rows], fh, ensure_ascii=False, indent=2)
-        print("\nсырые строки: {}".format(args.json))
+        save_report(args.json, rows, models, cases, args.repeat, args.route)
+        print("\nотчёт: {}".format(args.json))
     return 0
 
 
@@ -222,4 +353,16 @@ if __name__ == "__main__":
     sys.exit(main())
 
 
-__all__ = ("Row", "by_stage", "gateway_for", "main", "render", "run_case", "run_model", "winners")
+__all__ = (
+    "REPORT_PATH",
+    "Row",
+    "by_stage",
+    "gateway_for",
+    "main",
+    "recommend",
+    "render",
+    "run_case",
+    "run_model",
+    "save_report",
+    "winners",
+)

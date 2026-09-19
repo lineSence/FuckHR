@@ -43,6 +43,7 @@ X — читайте на …»). Досье собиралось из таки�
 from __future__ import annotations
 
 import html as html_mod
+import json
 import logging
 import os
 import re
@@ -51,7 +52,8 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Callable, Sequence
 
 log = logging.getLogger(__name__)
 
@@ -59,6 +61,7 @@ CACHE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS page_cache (
     url        TEXT PRIMARY KEY,
     text       TEXT NOT NULL,
+    items      TEXT NOT NULL DEFAULT '[]',
     fetched_at TEXT NOT NULL
 );
 """
@@ -117,9 +120,62 @@ class FetchUsage:
     skipped: int = 0
 
 
+MAX_FETCH_WORKERS = 8  # площадки отзывов не любят частых заходов
+
+
+def fetch_workers() -> int:
+    """Сколько страниц отзывов читается одновременно."""
+    try:
+        raw = int(float(os.getenv("REVIEW_FETCH_WORKERS", "4")))
+    except (TypeError, ValueError):
+        raw = 4
+    return max(1, min(MAX_FETCH_WORKERS, raw))
+
+
 def ensure_cache(conn: sqlite3.Connection) -> None:
     conn.executescript(CACHE_SCHEMA)
+    # Кэш из баз, созданных до разбора страницы на отдельные отзывы.
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(page_cache)")}
+    if "items" not in columns:
+        log.info("добавляю колонку items в page_cache")
+        conn.execute("ALTER TABLE page_cache ADD COLUMN items TEXT NOT NULL DEFAULT '[]'")
     conn.commit()
+
+
+def encode_items(items: Sequence[object]) -> str:
+    from dataclasses import asdict
+
+    return json.dumps([asdict(item) for item in items], ensure_ascii=False)  # type: ignore[arg-type]
+
+
+def decode_items(raw: str, url: str, text: str) -> tuple[object, ...]:
+    """Отзывы из кэша. Пусто — страница считается одним отзывом [CORE-017]."""
+    import reviewitems
+
+    try:
+        data = json.loads(raw or "[]")
+    except ValueError:
+        data = []
+    items = tuple(
+        reviewitems.ReviewItem(**row) for row in data if isinstance(row, dict)
+    )
+    if items or not (text or "").strip():
+        return items
+    return (
+        reviewitems.ReviewItem(
+            url=url, body=text, rating=reviewitems.extract_rating(text)
+        ),
+    )
+
+
+def split_items(raw_html: str, url: str, text: str) -> tuple[object, ...]:
+    """Страница → отдельные отзывы, с откатом на «одна страница — один отзыв»."""
+    import reviewitems
+
+    items = reviewitems.split_page(raw_html, url=url)
+    if items:
+        return items
+    return decode_items("[]", url, text)
 
 
 def strip_tags(page: str) -> str:
@@ -196,6 +252,8 @@ class PageFetcher:
         self.transport = transport
         self.dump_path = (dump_path or "").strip() or None
         self.usage = FetchUsage()
+        # Отдельные отзывы прочитанных страниц: url → кортеж ReviewItem.
+        self.items: dict[str, tuple[object, ...]] = {}
         if conn is not None:
             ensure_cache(conn)
 
@@ -225,7 +283,7 @@ class PageFetcher:
         if self.conn is None:
             return None
         row = self.conn.execute(
-            "SELECT text, fetched_at FROM page_cache WHERE url = ?", (url,)
+            "SELECT text, fetched_at, items FROM page_cache WHERE url = ?", (url,)
         ).fetchone()
         if row is None:
             return None
@@ -237,14 +295,22 @@ class PageFetcher:
             fetched = fetched.replace(tzinfo=timezone.utc)
         if datetime.now(timezone.utc) - fetched > timedelta(days=self.cache_days):
             return None
-        return str(row[0])
+        text = str(row[0])
+        self.items[url] = decode_items(str(row[2] or "[]"), url, text)
+        return text
 
     def _cache_put(self, url: str, text: str) -> None:
         if self.conn is None:
             return
         self.conn.execute(
-            "INSERT OR REPLACE INTO page_cache (url, text, fetched_at) VALUES (?, ?, ?)",
-            (url, text, datetime.now(timezone.utc).replace(microsecond=0).isoformat()),
+            "INSERT OR REPLACE INTO page_cache (url, text, items, fetched_at)"
+            " VALUES (?, ?, ?, ?)",
+            (
+                url,
+                text,
+                encode_items(self.items.get(url, ())),
+                datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+            ),
         )
         self.conn.commit()
 
@@ -307,15 +373,71 @@ class PageFetcher:
         text = extract_reviews(raw, self.max_chars)
         if not text:
             log.info("на странице не нашлось текста отзывов: %s", url)
+        self.items[url] = split_items(raw, url, text)
         self._dump(url, text)
         self._cache_put(url, text)
         if self.pause and self.transport is None:
             time.sleep(self.pause)
         return text
 
+    def fetch_many(self, urls: Sequence[str]) -> dict[str, str]:
+        """Несколько страниц отзывов разом. Сеть — параллельно.
+
+        Кэш, счётчики и потолок страниц остаются в вызывающем потоке: соединение
+        sqlite между потоками не делится, а REVIEW_FETCH_PAGES должен считаться
+        один раз. Досье на компанию — это до восьми страниц с разных площадок,
+        последовательно они складывались в десяток секунд ожидания.
+        """
+        plan: list[str] = []
+        out: dict[str, str] = {}
+        for url in urls:
+            url = (url or "").strip()
+            if not url or url in out or url in plan:
+                continue
+            if not self.enabled:
+                self.usage.skipped += 1
+                continue
+            cached = self._cache_get(url)
+            if cached is not None:
+                self.usage.cached += 1
+                out[url] = cached
+            elif self.usage.fetched + len(plan) < self.max_pages:
+                plan.append(url)
+            else:
+                self.usage.skipped += 1
+                log.warning("потолок страниц отзывов исчерпан (%s)", self.max_pages)
+
+        if not plan:
+            return out
+        workers = min(fetch_workers(), len(plan))
+        log.info("отзывы: страниц %s, потоков %s", len(plan), workers)
+        caller = self.transport or self._http_get
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="reviews") as pool:
+            futures = {pool.submit(caller, url): url for url in plan}
+            for future in as_completed(futures):
+                url = futures[future]
+                try:
+                    raw = future.result()
+                except Exception as exc:  # noqa: BLE001 — [CORE-017]
+                    self.usage.failures += 1
+                    log.warning("страница отзывов не открылась (%s): %s", url, exc)
+                    continue
+                self.usage.fetched += 1
+                text = extract_reviews(raw, self.max_chars)
+                if not text:
+                    log.info("на странице не нашлось текста отзывов: %s", url)
+                self.items[url] = split_items(raw, url, text)
+                self._dump(url, text)
+                self._cache_put(url, text)
+                out[url] = text
+        return out
+
 
 __all__ = (
     "PageFetcher",
+    "decode_items",
+    "encode_items",
+    "split_items",
     "FetchUsage",
     "ensure_cache",
     "extract_reviews",

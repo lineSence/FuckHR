@@ -83,7 +83,7 @@ class Query(BaseModel):
     text: str = ""
     area: int | IntList | None = None
     period: int = 7
-    max_pages: int = 3
+    max_pages: int = 0  # 0 — до конца выдачи
     extra: dict[str, Any] | None = None
 
 

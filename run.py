@@ -46,9 +46,8 @@ import argparse
 import asyncio
 import logging
 import os
-import sys
-from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
 
@@ -62,6 +61,10 @@ import detector
 import detector_llm
 import dossier
 import llm
+import llm_batch
+import market
+import market_company
+import market_store
 import llm_tasks
 import outreach
 import settings
@@ -69,6 +72,7 @@ import websearch
 from collector import collect  # noqa: F401 — реэкспорт: сбор живёт в collector.py
 from hh import Vacancy, enrich
 from hh_html import BlockedError, HHHtmlClient
+from run_setup import build_gateway, notify_if_broken, setup_logging
 from research import (  # noqa: F401 — реэкспорт для старых вызовов
     MAX_RESEARCH_WORKERS,
     _research_one,
@@ -78,79 +82,6 @@ from research import (  # noqa: F401 — реэкспорт для старых 
 from score import Profile, evaluate
 
 log = logging.getLogger("fuckhr")
-
-
-def setup_logging(log_path: Path, verbose: bool) -> None:
-    """Лог всегда идёт и в файл, и в stdout.
-
-    Строки в stdout — единственный источник обратной связи для интерфейса и
-    планировщика: он читает их и по счётчикам вида «[3/30]» рисует полоску.
-    Раньше stdout появлялся только при --verbose, и запуск из браузера выглядел
-    как зависание. Теперь --verbose меняет только подробность (DEBUG).
-
-    Потоки досье пишут в тот же лог: имя потока в формате нужно, иначе
-    переплетённые строки нескольких компаний невозможно различить.
-    """
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    stream = logging.StreamHandler(sys.stdout)
-    stream.setFormatter(logging.Formatter("%(levelname)s %(name)s %(message)s"))
-    file_handler = RotatingFileHandler(
-        log_path, maxBytes=2_000_000, backupCount=3, encoding="utf-8"
-    )
-    file_handler.setFormatter(
-        logging.Formatter("%(asctime)s %(levelname)s %(name)s [%(threadName)s] %(message)s")
-    )
-    logging.basicConfig(
-        level=logging.DEBUG if verbose else logging.INFO,
-        handlers=[file_handler, stream],
-        force=True,
-    )
-
-
-def build_gateway(conn, disabled: bool) -> llm.Gateway | None:
-    """Шлюз или None. None — штатный режим, а не авария.
-
-    Кэш живёт в той же базе, что и вакансии: повторный прогон по тем же
-    описаниям не должен стоить ни одного вызова [LLM-006].
-    """
-    if disabled:
-        log.info("модель выключена в настройках (LLM_ENABLED)")
-        return None
-    gateway = llm.Gateway.from_env(conn)
-    if not gateway.enabled:
-        log.info("модель не настроена (%s), идём без неё", gateway.disabled_reason)
-        return None
-    for stage, profile, route, model in gateway.describe_routes():
-        if stage in {"extract", "hr_filter", "company"}:
-            log.info("этап %s: профиль %s, маршрут %s, модель %s", stage, profile, route, model)
-    return gateway
-
-
-def notify_if_broken(stats: canary.RunStats, dry_run: bool) -> list[canary.Alert]:
-    """Считает поводы для тревоги и пишет в Telegram не чаще раза в сутки."""
-    alerts = canary.check(stats)
-    for alert in alerts:
-        log.warning("канарейка [%s]: %s", alert.kind, alert.text.replace("\n", " "))
-    if not alerts or dry_run:
-        return alerts
-
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
-    chat_id = os.getenv("TELEGRAM_CHAT_ID")
-    if not token or not chat_id:
-        log.warning("канарейке некуда писать: нет TELEGRAM_BOT_TOKEN или TELEGRAM_CHAT_ID")
-        return alerts
-
-    state_path = Path(os.getenv("ALERT_STATE_PATH", "data/alerts.json"))
-    state = canary.load_state(state_path)
-    due = canary.filter_due(
-        state, alerts, cooldown_hours=float(os.getenv("ALERT_COOLDOWN_HOURS", "24"))
-    )
-    if not due:
-        log.info("о этих сбоях уже писали недавно, молчим")
-        return alerts
-    if asyncio.run(tg.send_alert(token, chat_id, canary.format_message(due))):
-        canary.save_state(state_path, state)
-    return alerts
 
 
 def main() -> int:
@@ -204,6 +135,9 @@ def main() -> int:
 
     new_count = 0
     enriched = 0
+    reused_details = 0
+    to_extract: list[Any] = []
+    to_claim: list[tuple[Any, Any]] = []
     empty_descriptions = 0
     blocked = False
     with_details = options.details
@@ -216,19 +150,34 @@ def main() -> int:
 
     client = HHHtmlClient(
         pause=settings.as_float(os.getenv("HH_PAUSE"), 2.0),
+        pause_min=settings.as_float(os.getenv("HH_PAUSE_MIN"), 0.8),
         cookie=os.getenv("HH_COOKIE") or None,
         proxy=os.getenv("HH_PROXY") or None,
         failure_dir=settings.get("FAILURE_DIR", "data/failures"),
     )
     try:
-        seen, drafts = collect(client, profile, options.limit, prefilter)
+        seen, drafts = collect(client, profile, options.limit, prefilter, conn=conn)
         log.info("увидели: %s, прошло предфильтр: %s", len(seen), len(drafts))
+        # Рынок пересчитывается до скоринга: вес `market` в score.py берётся
+        # из свежих срезов, иначе первая вакансия прогона сравнивалась бы с
+        # позавчерашней медианой.
+        market_store.drop_stale(conn)
+        market_store.recompute(conn)
         total = len(drafts)
         for position, draft in enumerate(drafts.values(), start=1):
             # Счётчик в квадратных скобках — то, по чему интерфейс рисует полоску.
             log.info("[%s/%s] %s — %s", position, total, draft.title, draft.company)
             vacancy = draft
-            if with_details:
+            # Описание из базы вместо второго похода на hh.ru. Карточка вакансии
+            # стоит паузы в пару секунд, и на повторном прогоне именно эти
+            # запросы съедали почти всё время. Дата публикации сменилась —
+            # значит объявление переопубликовали, описание качаем заново.
+            cached = db.cached_details(conn, draft.key) if with_details else None
+            if cached and (not draft.published_at or cached[2] == draft.published_at):
+                text, skills, _published = cached
+                vacancy = draft.model_copy(update={"description": text, "skills": skills})
+                reused_details += 1
+            elif with_details:
                 try:
                     vacancy = enrich(draft, client.vacancy(draft.external_id))
                     enriched += 1
@@ -241,14 +190,17 @@ def main() -> int:
                     with_details = False
                 except Exception:  # noqa: BLE001 — вакансия могла быть уже закрыта
                     log.warning("нет деталей по %s, берём черновик", draft.external_id)
-            verdict = evaluate(vacancy, profile, prefilter.fuzzy)
+            marker = market_store.marker_for(conn, vacancy)
+            verdict = evaluate(vacancy, profile, prefilter.fuzzy, market_marker=marker)
             # Слепок пишется для всего, даже для отклоныённого: история публикаций
             # нужна детектору независимо от нашего интереса (ADR-009, ADR-010).
             db.add_snapshot(conn, vacancy)
             if verdict.rejected:
                 log.info("    отклонена: %s", verdict.reject_reason)
                 continue
-            if db.upsert_vacancy(conn, vacancy, verdict.score, verdict.reasons):
+            if db.upsert_vacancy(
+                conn, vacancy, verdict.score, verdict.reasons, market_marker=marker
+            ):
                 new_count += 1
             log.info("    скор %.1f", verdict.score)
 
@@ -261,10 +213,10 @@ def main() -> int:
 
             # Этап extract. Только для вакансий, прошедших скоринг: гонять модель
             # по отклонённым — жечь бюджет вызовов ради данных, которые никто не прочтёт.
+            # Сами вызовы идут после обхода, пулом: ожидание шлюза внутри цикла
+            # останавливало сбор на секунды и сбивало ритм пауз hh.ru.
             if gateway is not None and vacancy.description.strip():
-                items = llm_tasks.extract_conditions(gateway, vacancy.description)
-                if conditions.store(conn, vacancy.key, items):
-                    extracted += 1
+                to_extract.append(vacancy)
 
             # Детектор запускается сразу после слепка: история уже включает
             # текущий прогон, и вывод не отстаёт от карточки на один запуск.
@@ -273,13 +225,32 @@ def main() -> int:
                 if gateway is not None and detector_opts.use_llm_claims:
                     # Этап hr_filter: модель только отмечает утверждения, вердикт у всех
                     # таких пунктов — «недостаточно данных» (detector_llm.with_llm_claims).
-                    report = detector_llm.with_llm_claims(report, vacancy, gateway)
-                detector.store(conn, report)
+                    to_claim.append((vacancy, report))
+                else:
+                    detector.store(conn, report)
     except BlockedError as exc:
         blocked = True
         log.error("%s", exc)
     finally:
         client.close()
+
+    if reused_details:
+        log.info(
+            "описаний взято из базы: %s, скачано с hh.ru: %s",
+            reused_details,
+            enriched,
+        )
+
+    # Этапы модели по всему собранному разом: сеть ждут параллельно, в базу
+    # пишет главный поток.
+    if to_extract:
+        for key, items in llm_batch.extract_all(db_path, to_extract).items():
+            if conditions.store(conn, key, items):
+                extracted += 1
+    if to_claim:
+        enriched_reports = llm_batch.claims_all(db_path, to_claim)
+        for vacancy, report in to_claim:
+            detector.store(conn, enriched_reports.get(vacancy.key, report))
 
     # Отметка «видели сегодня» нужна и для отклонённых вакансий, иначе они будут
     # считаться пропавшими сразу после первого прогона.
@@ -345,6 +316,10 @@ def main() -> int:
         dry_run=args.dry_run,
     )
 
+    # Метки работодателей по деньгам: считаются после того, как все вакансии
+    # прогона попали в наблюдения, иначе доли считались бы по половине данных.
+    market_company.refresh(conn, market_store.companies(conn))
+
     rows = db.pending_cards(conn, profile.min_score, options.limit)
     log.info("новых вакансий: %s, к отправке: %s", new_count, len(rows))
 
@@ -353,9 +328,14 @@ def main() -> int:
     signals: dict[str, list[str]] = {}
     for row in rows:
         lines: list[str] = []
+        if row["market_label"]:
+            lines.append(market.row_line(row))
         saved = dossier.load(conn, row["company"]) if row["company"] else None
         if saved is not None:
             lines += dossier.row_to_lines(saved)
+        money = market_store.load_company(conn, row["company"]) if row["company"] else None
+        if money is not None:
+            lines += market_company.row_lines(money)
         lines += detector.load_lines(conn, row["key"])
         # Контакт в карточке: без него владелец не видит, есть ли вообще вход
         # мимо HR-воронки.

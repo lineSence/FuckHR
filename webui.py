@@ -50,6 +50,8 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import jobs
+import llm
+import profile_form
 import settings
 from ui_companies import (
     apply_cleanup,
@@ -75,6 +77,7 @@ from ui_core import (
     text_field,
 )
 import bench
+import ui_bench
 from ui_forms import (
     bench_models,
     profile_summary,
@@ -87,6 +90,8 @@ from ui_forms import (
     search_settings_form,
     search_updates,
 )
+import intake
+import ui_intake
 from ui_resume import render_resume, save_resume
 from ui_views import (
     contact_rows,
@@ -130,6 +135,25 @@ class Handler(BaseHTTPRequestHandler):
         raw = self.rfile.read(length).decode("utf-8")
         return urllib.parse.parse_qs(raw, keep_blank_values=True)
 
+    def _profile_page(
+        self,
+        conn: object,
+        plan: object = None,
+        note: str = "",
+        saved: int | None = None,
+        problems: tuple[str, ...] = (),
+        resume_note: str = "",
+    ) -> str:
+        """Одна страница из трёх частей: разговор, критерии поиска, резюме."""
+        return (
+            "<h2>Разговор о поиске</h2>"
+            + ui_intake.render_intake(conn, self.profile_path, plan, note)
+            + "<h2>Критерии поиска</h2>"
+            + render_profile(self.profile_path, saved=saved, problems=problems)
+            + "<h2>Резюме</h2>"
+            + render_resume(conn, self.profile_path, saved=resume_note)
+        )
+
     def do_GET(self) -> None:  # noqa: N802
         parsed = urllib.parse.urlparse(self.path)
         params = urllib.parse.parse_qs(parsed.query)
@@ -148,9 +172,6 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/settings":
                 self._send(page("Настройки", render_settings()))
-                return
-            if parsed.path == "/profile":
-                self._send(page("Профиль", render_profile(self.profile_path)))
                 return
 
             conn = open_db()
@@ -189,15 +210,24 @@ class Handler(BaseHTTPRequestHandler):
                     self._send(page("Очистка", render_cleanup(conn)))
                 elif parsed.path == "/contacts":
                     self._redirect("/companies")
+                elif parsed.path == "/profile":
+                    self._send(page("Профиль и резюме", self._profile_page(conn)))
                 elif parsed.path == "/resume":
-                    self._send(
-                        page("Резюме", render_resume(conn, self.profile_path))
-                    )
+                    # Раздел один: резюме и критерии поиска — это один разговор.
+                    self._redirect("/profile")
                 elif parsed.path == "/search":
                     body = render_search(conn, one("q"), one("company"))
                     self._send(page("Проверка поиска", body))
                 elif parsed.path == "/llm":
-                    self._send(page("Модель", render_llm(conn, one("probe") == "1")))
+                    # Пока идёт сравнение, страница обновляет себя сама: результат
+                    # появляется на месте формы, уходить в лог не нужно.
+                    self._send(
+                        page(
+                            "Модель",
+                            render_llm(conn, one("probe") == "1"),
+                            ui_bench.refresh_seconds(),
+                        )
+                    )
                 else:
                     self._send(page("Не найдено", "<p>Такой страницы нет.</p>"), 404)
             finally:
@@ -227,7 +257,8 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == "/bench":
                 # Единственная задача с аргументами из формы: имена моделей
                 # проходят через bench_models, дальше argv собирает jobs.TASKS.
-                models = bench_models((form.get("models") or [""])[0])
+                # Имена приходят и чекбоксами, и строкой: склеиваем и чистим.
+                models = bench_models(",".join(form.get("models") or []))
                 stages = [s for s in (form.get("stage") or []) if s in bench.STAGES]
                 repeat = max(1, min(5, settings.as_int((form.get("repeat") or ["1"])[0], 1)))
                 if not models:
@@ -248,12 +279,41 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     job = jobs.runner.start("bench", extra)
                 except (KeyError, RuntimeError) as exc:
-                    body, refresh = render_run(
-                        None, "<div class=warn>{}</div>".format(esc(exc))
-                    )
-                    self._send(page("Запуск", body, refresh))
+                    conn = open_db()
+                    try:
+                        note = "<div class=warn>{}</div>".format(esc(exc))
+                        self._send(page("Модель", render_llm(conn) + note))
+                    finally:
+                        conn.close()
                     return
-                self._redirect("/?job={}".format(job.id))
+                self._redirect("/llm")
+                return
+
+            if parsed.path == "/llm/apply":
+                # Из браузера приходят имя ключа и имя модели: ключ сверяется
+                # с закрытым списком LLM_PROXY_MODEL_*, имя — с bench_models.
+                updates = {}
+                for key in form.get("apply") or []:
+                    if key not in ui_bench.ENV_KEYS:
+                        continue
+                    names = bench_models((form.get("model:" + key) or [""])[0])
+                    if names:
+                        updates[key] = names[0]
+                saved = settings.save(updates) if updates else []
+                if saved:
+                    note = "<div class=ok>Записано в .env: {}</div>".format(
+                        esc(", ".join(saved))
+                    )
+                else:
+                    note = (
+                        "<div class=warn>Ничего не изменилось: либо профили не "
+                        "отмечены, либо там уже стоят эти модели.</div>"
+                    )
+                conn = open_db()
+                try:
+                    self._send(page("Модель", note + render_llm(conn)))
+                finally:
+                    conn.close()
                 return
 
             if parsed.path == "/stop":
@@ -288,8 +348,8 @@ class Handler(BaseHTTPRequestHandler):
                 conn = open_db()
                 try:
                     saved = save_resume(conn, flat, self.profile_path)
-                    body = render_resume(conn, self.profile_path, saved=saved)
-                    self._send(page("Резюме", body))
+                    body = self._profile_page(conn, resume_note=saved)
+                    self._send(page("Профиль и резюме", body))
                 finally:
                     conn.close()
                 return
@@ -314,12 +374,79 @@ class Handler(BaseHTTPRequestHandler):
 
             if parsed.path == "/profile":
                 count, problems = save_profile(self.profile_path, form)
-                self._send(
-                    page(
-                        "Профиль",
-                        render_profile(self.profile_path, saved=count, problems=problems),
+                conn = open_db()
+                try:
+                    body = self._profile_page(
+                        conn, saved=count, problems=tuple(problems)
                     )
-                )
+                    self._send(page("Профиль и резюме", body))
+                finally:
+                    conn.close()
+                return
+
+            if parsed.path == "/intake":
+                # Реплика владельца: один вызов модели, ответ показывается
+                # предложением с галочками. Ничего не применяется само.
+                conn = open_db()
+                try:
+                    if (form.get("action") or [""])[0] == "clear":
+                        intake.clear(conn)
+                        body = self._profile_page(
+                            conn, note="<div class=ok>Разговор очищен.</div>"
+                        )
+                        self._send(page("Профиль и резюме", body))
+                        return
+                    said, dialogue = ui_intake.compose(
+                        form.get("question") or [],
+                        form.get("answer") or [],
+                        (form.get("text") or [""])[0],
+                    )
+                    if not said:
+                        body = self._profile_page(
+                            conn,
+                            note="<div class=warn>Пустое сообщение.</div>",
+                        )
+                        self._send(page("Профиль и резюме", body))
+                        return
+                    intake.log_message(conn, "owner", said)
+                    gateway = (
+                        llm.Gateway.from_env(conn)
+                        if settings.flag("LLM_ENABLED")
+                        else None
+                    )
+                    plan = intake.ask(
+                        gateway,
+                        intake.owner_words(conn),
+                        profile_form.load(self.profile_path),
+                        context=dialogue,
+                    )
+                    reply = plan.summary or (
+                        "\n".join(plan.questions) if plan.questions else "Ответа нет."
+                    )
+                    intake.log_message(conn, "ai", reply)
+                    intake.save_plan(conn, plan)
+                    self._send(
+                        page("Профиль и резюме", self._profile_page(conn, plan))
+                    )
+                finally:
+                    conn.close()
+                return
+
+            if parsed.path == "/intake/apply":
+                conn = open_db()
+                try:
+                    note = ui_intake.apply_plan(
+                        conn,
+                        self.profile_path,
+                        (form.get("plan") or [""])[0],
+                        form.get("apply") or [],
+                    )
+                    body = self._profile_page(
+                        conn, note="<div class=ok>{}</div>".format(esc(note))
+                    )
+                    self._send(page("Профиль и резюме", body))
+                finally:
+                    conn.close()
                 return
 
             if parsed.path == "/vacancy":

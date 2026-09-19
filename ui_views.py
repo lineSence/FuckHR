@@ -21,6 +21,8 @@ import db
 import detector
 import jobs
 import llm
+import market
+import market_rules
 import outreach
 import settings
 import websearch
@@ -441,6 +443,15 @@ def render_vacancies(
     )
 
 
+MARKET_CLASS = {
+    market_rules.BELOW: "danger",
+    market_rules.IN_MARKET: "ok",
+    market_rules.ABOVE: "warn",
+    market_rules.NO_SALARY: "muted",
+    market_rules.UNKNOWN: "muted",
+}
+
+
 def render_vacancy(conn: sqlite3.Connection, key: str, with_draft: bool) -> str:
     row = vacancy_one(conn, key)
     if row is None:
@@ -456,6 +467,18 @@ def render_vacancy(conn: sqlite3.Connection, key: str, with_draft: bool) -> str:
             url=esc(row["url"]),
         )
     ]
+
+    market_line = market.row_line(row)
+    if market_line:
+        parts.append(
+            '<h2>Рынок</h2><div class="{cls}">{line}</div>'
+            "<p class=muted>Медиана считается по нашим наблюдениям с hh.ru за окно, "
+            "а не по рынку труда целиком. Срез и число вакансий — на странице компании."
+            "</p>".format(
+                cls=MARKET_CLASS.get(str(row["market_label"] or ""), "muted"),
+                line=esc(market_line),
+            )
+        )
 
     if row["score_reasons"]:
         parts.append(
