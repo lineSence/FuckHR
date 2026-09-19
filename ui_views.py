@@ -1,4 +1,6 @@
-"""Страницы: запуск, настройки, вакансии, одна вакансия, контакты.
+"""Страницы: настройки, вакансии, одна вакансия, контакты.
+
+Страница запуска живёт в ui_run.py и реэкспортируется отсюда.
 
 Ни одна функция здесь не знает про HTTP: на вход — соединение с базой и параметры,
 на выход — готовый HTML. За счёт этого страницы проверяются тестами без сервера.
@@ -10,7 +12,6 @@
 from __future__ import annotations
 
 import sqlite3
-import time
 import urllib.parse
 from typing import Sequence
 
@@ -19,7 +20,6 @@ import contact_finds
 import contacts
 import db
 import detector
-import jobs
 import llm
 import aitext
 import market
@@ -28,139 +28,11 @@ import outreach
 import settings
 import websearch
 from ui_core import esc, sort_head, sort_pick, table
-
-
-# ———— запуск ————
-
-
-def progress_block(job: jobs.Job) -> str:
-    """Полоска загрузки.
-
-    Если в логах нашёлся счётчик вида «[3/30]» — показываем реальный процент.
-    Если не нашёлся — неопределённая полоска без цифр: выдуманные проценты хуже,
-    чем честное «шаги неизвестны» [CORE-019].
-    """
-    pair = job.progress
-    if pair is None:
-        if not job.running:
-            return ""
-        bar = "<progress></progress>"
-        label = "шаги неизвестны, смотри лог"
-    else:
-        done, total = pair
-        bar = '<progress value="{}" max="{}"></progress>'.format(done, total)
-        label = "{} из {} · {}%".format(done, total, job.percent)
-    return "<div class=bar>{bar}<span class=muted>{label}</span></div>".format(
-        bar=bar, label=esc(label)
-    )
-
-
-def render_run(active_id: int | None = None, note: str = "") -> tuple[str, int]:
-    """Главная страница: кнопки, полоска и живой лог.
-
-    Вторым значением идёт интервал автообновления: пока задача идёт, страница
-    обновляет себя каждые две секунды. Мета-обновление вместо JavaScript — чтобы
-    не тащить фронтенд в проект из десяти файлов.
-    """
-    parts = [note] if note else []
-
-    buttons = []
-    for key, title, hint in jobs.task_list():
-        buttons.append(
-            (
-                '<form method=post action="/run">'
-                '<input type=hidden name=task value="{key}">'
-                '<button title="{hint}">{title}</button></form>'
-            ).format(key=esc(key), hint=esc(hint), title=esc(title))
-        )
-    parts.append("<div class=tasks>{}</div>".format("".join(buttons)))
-
-    notes = settings.missing_required()
-    if notes:
-        items = "".join("<li>{}</li>".format(esc(item)) for item in notes)
-        parts.append(
-            "<div class=warn><b>Перед запуском стоит знать:</b><ul>{}</ul>"
-            '<a href="/settings">Открыть настройки</a></div>'.format(items)
-        )
-
-    collect = settings.collect_options()
-    outreach_opts = settings.outreach_options()
-    prefilter = settings.prefilter_options()
-    detector_opts = settings.detector_options()
-    parts.append(
-        (
-            "<p class=muted>Сейчас так: сбор {limit} вакансий, предфильтр {prefilter}, "
-            "детектор брехни {detector}, письма от скора {min_score:.0f} "
-            "до {letters} штук, модель {llm_state}. "
-            '<a href="/settings">Изменить</a></p>'
-        ).format(
-            limit=collect.limit,
-            prefilter=(
-                "от {:.0f}".format(prefilter.min_score)
-                if prefilter.enabled
-                else "выключен"
-            ),
-            detector="включён" if detector_opts.enabled else "выключен",
-            min_score=outreach_opts.min_score,
-            letters=outreach_opts.limit,
-            llm_state="включена" if collect.use_llm else "выключена",
-        )
-    )
-
-    job = jobs.runner.get(active_id) if active_id else jobs.runner.last()
-    if job is None:
-        parts.append("<p class=muted>Запусков ещё не было.</p>")
-        return "".join(parts), 0
-
-    parts.append(
-        (
-            "<h2>{title}</h2>"
-            "<p class=muted>Состояние: {status} · длится {duration:.0f} с · "
-            "строк в логе: {lines}</p>"
-        ).format(
-            title=esc(job.title),
-            status=esc(job.status),
-            duration=job.duration,
-            lines=len(job.lines),
-        )
-    )
-    parts.append(progress_block(job))
-
-    if job.running:
-        parts.append(
-            (
-                '<form method=post action="/stop">'
-                '<input type=hidden name=job value="{}">'
-                "<button class=secondary>Остановить</button></form>"
-            ).format(job.id)
-        )
-
-    parts.append(
-        "<pre class=console>{}</pre>".format(
-            esc("\n".join(job.tail(400)) or "ждём вывод…")
-        )
-    )
-    parts.append(
-        "<p class=muted>Тот же вывод идёт в терминал, где запущен webui.py, и в файл "
-        "внутри data/jobs.</p>"
-    )
-
-    history = [item for item in jobs.runner.history() if item.id != job.id]
-    if history:
-        rows = []
-        for item in history[:8]:
-            rows.append(
-                [
-                    '<a href="/?job={}">{}</a>'.format(item.id, esc(item.title)),
-                    esc(item.status),
-                    "{:.0f} с".format(item.duration),
-                    esc(time.strftime("%H:%M:%S", time.localtime(item.started_at))),
-                ]
-            )
-        parts.append("<h2>Прошлые запуски</h2>")
-        parts.append(table(["Задача", "Итог", "Длительность", "Начало"], rows))
-
-    return "".join(parts), 2 if job.running else 0
+from ui_run import (  # noqa: F401 — реэкспорт: страница запуска живёт в ui_run.py
+    loop_form,
+    progress_block,
+    render_run,
+)
 
 
 # ———— настройки ————

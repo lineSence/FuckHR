@@ -57,7 +57,6 @@ import company_score_rules
 import company_score_store
 import conditions
 import contact_finds
-import contacts
 import db
 import detector
 import detector_llm
@@ -66,7 +65,6 @@ import llm
 import llm_batch
 import aitext
 import aitext_rules
-import market
 import market_company
 import market_store
 import llm_tasks
@@ -76,6 +74,8 @@ import websearch
 from collector import collect  # noqa: F401 — реэкспорт: сбор живёт в collector.py
 from hh import Vacancy, enrich
 from hh_html import BlockedError, HHHtmlClient
+import run_cards
+import run_loop
 from run_setup import build_gateway, notify_if_broken, setup_logging
 from research import (  # noqa: F401 — реэкспорт для старых вызовов
     MAX_RESEARCH_WORKERS,
@@ -88,6 +88,11 @@ from score import Profile, evaluate
 log = logging.getLogger("fuckhr")
 
 
+# Потолок карточек, когда лимит сбора снят (RUN_LIMIT=0). Ноль здесь означал бы
+# «не брать ничего», а вываливать в Telegram всю базу разом тоже незачем.
+CARD_LIMIT = 200
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="FuckHR: один прогон сбора. Настройки — в webui.py"
@@ -97,6 +102,23 @@ def main() -> int:
     args = parser.parse_args()
 
     load_dotenv()
+    loop = settings.loop_options()
+    if not loop.enabled:
+        return run_once(args)
+    # Логи поднимаем до первого круга: иначе строки про цикл уходят в никуда,
+    # а run_once настраивает их только у себя внутри.
+    setup_logging(Path(settings.get("LOG_PATH", "data/fuckhr.log")), args.verbose)
+    log.info(
+        "режим цикла: %s, пауза %.0f с",
+        "{} циклов".format(loop.cycles) if loop.cycles else "до ручной остановки",
+        loop.pause,
+    )
+    return run_loop.run_cycles(lambda: run_once(args), loop.cycles, loop.pause)
+
+
+def run_once(args: argparse.Namespace) -> int:
+    """Один прогон целиком. Настройки перечитываются каждый цикл: владелец
+    может поправить их в интерфейсе, не дожидаясь конца круга."""
     options = settings.collect_options()
     prefilter = settings.prefilter_options()
     detector_opts = settings.detector_options()
@@ -364,36 +386,10 @@ def main() -> int:
             unknown,
         )
 
-    rows = db.pending_cards(conn, profile.min_score, options.limit)
+    rows = db.pending_cards(conn, profile.min_score, options.limit or CARD_LIMIT)
     log.info("новых вакансий: %s, к отправке: %s", new_count, len(rows))
 
-    # Строки под карточкой: сначала работодатель, потом утверждения вакансии.
-    # Порядок не косметика: красные флаги компании отменяют смысл читать дальше.
-    signals: dict[str, list[str]] = {}
-    for row in rows:
-        lines: list[str] = []
-        if row["market_label"]:
-            lines.append(market.row_line(row))
-        ai_line = aitext.row_line(row)
-        if ai_line:
-            lines.append(ai_line)
-        if score_opts.enabled:
-            lines += company_score_store.row_lines(
-                company_score_store.load(conn, row["company"])
-            )
-        saved = dossier.load(conn, row["company"]) if row["company"] else None
-        if saved is not None:
-            lines += dossier.row_to_lines(saved)
-        money = market_store.load_company(conn, row["company"]) if row["company"] else None
-        if money is not None:
-            lines += market_company.row_lines(money)
-        lines += detector.load_lines(conn, row["key"])
-        # Контакт в карточке: без него владелец не видит, есть ли вообще вход
-        # мимо HR-воронки.
-        find = contact_finds.load(conn, row["key"], row["company"])
-        if find is not None:
-            lines += contacts.format_contact_lines(find, limit=1)
-        signals[row["key"]] = lines
+    signals = run_cards.card_lines(conn, rows, score_opts.enabled)
 
     if args.dry_run:
         for row in rows:

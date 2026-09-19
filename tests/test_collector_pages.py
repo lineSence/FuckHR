@@ -74,3 +74,17 @@ def test_набрали_лимит_без_уведомления(monkeypatch, ca
         _seen, passed = collector.collect(client, profile(monkeypatch), 100, options)
     assert len(passed) >= 100
     assert not any("кончились" in rec.message for rec in caplog.records)
+def test_нулевой_лимит_означает_до_конца_выдачи(monkeypatch) -> None:
+    # Лимит 0 читается как «без ограничения»: обход идёт, пока страницы не кончатся.
+    client = PagedClient(total=137)
+    options = settings.PrefilterOptions(enabled=False, min_score=0.0, fuzzy=88)
+    seen, passed = collector.collect(client, profile(monkeypatch), 0, options)
+    assert len(seen) == len(passed) == 137
+
+
+def test_без_лимита_карточки_не_обнуляются() -> None:
+    # RUN_LIMIT=0 не должен превращаться в «не отправлять ни одной карточки»:
+    # в run.py на этот случай есть свой потолок.
+    import run
+
+    assert run.CARD_LIMIT > 0

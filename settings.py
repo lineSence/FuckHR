@@ -200,6 +200,19 @@ class CollectOptions:
 
 
 @dataclass(frozen=True)
+class LoopOptions:
+    """Режим цикла: повторять сбор по кругу.
+
+    cycles = 0 означает «пока не остановят вручную»: лимит циклов и лимит
+    вакансий читаются одинаково, ноль — это отсутствие границы.
+    """
+
+    enabled: bool
+    cycles: int
+    pause: float
+
+
+@dataclass(frozen=True)
 class OutreachOptions:
     """Всё, что раньше было флагами outreach.py."""
 
@@ -271,6 +284,14 @@ def collect_options() -> CollectOptions:
         profile=get("RUN_PROFILE", "profile.yaml"),
         details=flag("RUN_DETAILS"),
         use_llm=flag("LLM_ENABLED"),
+    )
+
+
+def loop_options() -> LoopOptions:
+    return LoopOptions(
+        enabled=flag("RUN_LOOP_ENABLED"),
+        cycles=max(0, as_int(os.getenv("RUN_LOOP_CYCLES"), 0)),
+        pause=max(0.0, as_float(os.getenv("RUN_LOOP_PAUSE"), 300.0)),
     )
 
 
@@ -420,6 +441,7 @@ __all__ = (
     "get",
     "groups",
     "load",
+    "loop_options",
     "mask",
     "missing_required",
     "outreach_options",

@@ -91,6 +91,7 @@ from ui_forms import (
     search_updates,
 )
 import intake
+import ui_run
 import ui_intake
 from ui_resume import render_resume, save_resume
 from ui_views import (
@@ -316,9 +317,15 @@ class Handler(BaseHTTPRequestHandler):
                     conn.close()
                 return
 
+            if parsed.path == "/loop":
+                ui_run.save_loop(form)
+                self._redirect("/")
+                return
+
             if parsed.path == "/stop":
                 job_id = settings.as_int((form.get("job") or [""])[0], 0)
-                jobs.runner.stop(job_id)
+                # soft — прогон дописывает текущий цикл и выходит сам.
+                ui_run.stop(job_id, bool(form.get("soft")))
                 self._redirect("/?job={}".format(job_id))
                 return
 
