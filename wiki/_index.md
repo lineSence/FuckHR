@@ -28,6 +28,7 @@
 - `wiki/architecture/sources-and-outreach.md` — источники контактов и поисковый API этапа писем.
 - `wiki/architecture/runtime-windows.md` — запуск по расписанию на Windows (ADR-014).
 - `wiki/architecture/hh-html-scraping.md` — разбор HTML hh.ru и его fallback-стратегии (ADR-015).
+- `wiki/architecture/company-score.md` — общая оценка работодателя: оси, улики, вето (ADR-018, замысел).
 
 ## workflows
 

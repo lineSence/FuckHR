@@ -62,6 +62,12 @@ triggers:
       - wiki/architecture/pipeline.md
       - wiki/rules/hr-signal-detection.md
 
+  - id: company-score
+    keywords: [оценка работодателя, общая оценка, скоринг компании, светофор компании, красные флаги, закономерности, улика, вето, покрытие данных]
+    load:
+      - wiki/architecture/company-score.md
+      - wiki/rules/hr-signal-detection.md
+
   - id: fake-reviews
     keywords: [накрутка, заказные отзывы, фейковые отзывы, fake_score, шингл, дубли отзывов, всплеск отзывов, метка компании]
     load:
