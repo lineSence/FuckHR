@@ -21,7 +21,9 @@ from typing import Sequence
 
 import yaml
 
-import bench
+import bench  # noqa: F401 — STAGES нужен вызывающим
+import ui_bench
+from ui_bench import render_bench_form  # реэкспорт: имя осталось прежним
 import contacts
 import jobs
 import llm
@@ -214,12 +216,15 @@ def render_llm(conn: sqlite3.Connection, probe: bool = False) -> str:
         "<span class=muted>(один запрос к /v1/models)</span></p>"
     )
 
+    known: list[str] = []
     if probe:
         try:
-            names = gateway.models()
-            if names:
-                items = "".join("<li>{}</li>".format(esc(name)) for name in names)
-                parts.append("<h2>Модели на прокси</h2><ul>{}</ul>".format(items))
+            known = gateway.models()
+            if known:
+                parts.append(
+                    "<div class=ok>Прокси знает {} моделей — они ниже чекбоксами "
+                    "в форме сравнения.</div>".format(len(known))
+                )
             else:
                 parts.append(
                     "<div class=warn>Прокси не отдал список моделей. Чаще всего это "
@@ -232,57 +237,8 @@ def render_llm(conn: sqlite3.Connection, probe: bool = False) -> str:
         "<p class=muted>Живой вызов на выдуманном тексте — задача «Проверка модели» "
         'на <a href="/">странице запуска</a>.</p>'
     )
-    parts.append(render_bench_form())
+    parts.append(render_bench_form(known=known))
     return "".join(parts)
-
-
-def render_bench_form(note: str = "") -> str:
-    """Форма сравнения моделей.
-
-    Имена моделей приходят из браузера, поэтому в команду они попадают только
-    после проверки bench_models(): argv собирается из закрытого списка задач,
-    а не из строки формы.
-    """
-    stages = "".join(
-        '<label><input type=checkbox name=stage value="{s}" checked> {s}</label>'.format(
-            s=esc(stage)
-        )
-        for stage in bench.STAGES
-    )
-    last = jobs.runner.last("bench")
-    report = ""
-    if last is not None:
-        # Отчёт печатается в stdout задачи, поэтому показываем хвост её лога:
-        # держать вторую копию результата в базе незачем [CORE-025].
-        tail = "\n".join(last.tail(120)).strip()
-        report = (
-            "<h3>Последний прогон</h3>"
-            "<p class=muted>{status} · {models} · "
-            '<a href="/?job={id}">полный лог</a></p>{body}'
-        ).format(
-            status=esc(last.status),
-            models=esc(" ".join(last.argv[1:]) or "без аргументов"),
-            id=last.id,
-            body="<pre>{}</pre>".format(esc(tail)) if tail else "",
-        )
-    return (
-        "<h2>Сравнение моделей</h2>"
-        "<p class=muted>Одни и те же задачи пайплайна на нескольких моделях. "
-        "Оценка считается правилами: дословная цитата, никаких новых чисел, "
-        "адресат из списка. Половина кейсов — ловушки.</p>"
-        "{note}"
-        '<form method=post action="/bench">'
-        '<div class=field><label>Модели через запятую</label>'
-        '<input type=text name=models placeholder="qwen2.5-7b, gpt-4o-mini">'
-        "<div class=hint>Имена как в config.yaml прокси. Список живых имён — "
-        "по ссылке «Спросить список моделей» выше.</div></div>"
-        '<div class=field><label>Этапы</label><div class=checks>{stages}</div></div>'
-        '<div class=field><label>Прогонов на кейс</label>'
-        '<input type=number name=repeat value="1" min="1" max="5">'
-        "<div class=hint>Больше одного нужно, когда модели отвечают нестабильно: "
-        "каждый прогон — это реальные вызовы и время.</div></div>"
-        "<button>Сравнить</button></form>{report}"
-    ).format(note=note, stages=stages, report=report)
 
 
 def bench_models(raw: str) -> list[str]:

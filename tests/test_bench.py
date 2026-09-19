@@ -134,3 +134,38 @@ def test_форма_сравнения_показывает_все_этапы() 
     html = ui_forms.render_bench_form()
     assert all(stage in html for stage in bench.STAGES)
     assert 'action="/bench"' in html
+
+
+def test_отчёт_показывает_таблицу_а_не_лог(tmp_path) -> None:
+    """Результат сравнения читается глазами: баллы в таблице, а не в логе."""
+    import ui_bench
+
+    rows = [
+        bench.Row("быстрая", "extract", "к1", 1.0, "", 0.5),
+        bench.Row("медленная", "extract", "к1", 0.2, "выдумала вилку", 4.0),
+    ]
+    path = tmp_path / "last.json"
+    bench.save_report(str(path), rows, ["быстрая", "медленная"], bench_cases.CASES, 1, "proxy")
+
+    report = ui_bench.load_report(path)
+    assert report is not None
+    html = ui_bench.render_report(report)
+    assert "<table>" in html and "Лучше всех" in html
+    assert "быстрая" in html and "выдумала вилку" in html
+    assert 'class="danger">0.20' in html
+
+
+def test_битый_отчёт_не_роняет_страницу(tmp_path) -> None:
+    import ui_bench
+
+    path = tmp_path / "last.json"
+    path.write_text("{не json", encoding="utf-8")
+    assert ui_bench.load_report(path) is None
+    assert ui_bench.load_report(tmp_path / "нет-такого.json") is None
+
+
+def test_прогресс_печатается_счётчиком() -> None:
+    """Полоску загрузки интерфейс берёт из строк вида «[3/30]»."""
+    import jobs
+
+    assert jobs.parse_progress("[3/30] быстрая · к1 · 1.00 за 0.4 с") == (3, 30)

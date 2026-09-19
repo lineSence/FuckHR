@@ -25,6 +25,7 @@ import os
 import sys
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Sequence
 
 import bench_cases
@@ -35,6 +36,9 @@ from bench_cases import CASES, Case
 log = logging.getLogger("bench")
 
 STAGES = ("extract", "company", "contacts", "draft")
+
+# Отчёт последнего прогона: его читает страница «Модель» (ui_bench).
+REPORT_PATH = Path(__file__).resolve().parent / "data" / "bench" / "last.json"
 
 
 @dataclass(frozen=True)
@@ -98,6 +102,7 @@ def run_model(
     route: str = llm.ROUTE_PROXY,
     repeat: int = 1,
     gateway: Any = None,
+    on_row: Any = None,
 ) -> list[Row]:
     """Прогон всех кейсов. Падение модели — ноль по кейсу, а не конец бенчмарка."""
     gw = gateway or gateway_for(model, route)
@@ -121,6 +126,8 @@ def run_model(
                     seconds=round(time.monotonic() - started, 2),
                 )
             )
+            if on_row is not None:
+                on_row(rows[-1])
     return rows
 
 
@@ -181,13 +188,41 @@ def render(rows: Sequence[Row]) -> str:
     return "\n".join(lines)
 
 
+def save_report(
+    path: str,
+    rows: Sequence[Row],
+    models: Sequence[str],
+    cases: Sequence[Case],
+    repeat: int,
+    route: str,
+) -> None:
+    """Отчёт для страницы «Модель»: строки плюс параметры прогона."""
+    report = {
+        "finished_at": time.time(),
+        "models": list(models),
+        "stages": sorted({c.stage for c in cases}),
+        "repeat": repeat,
+        "route": route,
+        "rows": [row.__dict__ for row in rows],
+    }
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Сравнение моделей на задачах пайплайна")
     parser.add_argument("--models", required=True, help="имена моделей через запятую")
     parser.add_argument("--route", default=llm.ROUTE_PROXY, choices=[llm.ROUTE_PROXY, llm.ROUTE_LOCAL])
     parser.add_argument("--stages", default="", help="этапы через запятую")
     parser.add_argument("--repeat", type=int, default=1, help="прогонов на кейс")
-    parser.add_argument("--json", default="", help="куда сложить сырые строки")
+    parser.add_argument(
+        "--json",
+        default=str(REPORT_PATH),
+        help="куда сложить отчёт (его читает страница «Модель»)",
+    )
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -204,17 +239,31 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("нет кейсов под такие этапы: {}".format(args.stages))
         return 2
 
+    models = [m.strip() for m in args.models.split(",") if m.strip()]
+    # Счётчик печатается в формате «[3/30]»: интерфейс вычитывает прогресс из
+    # логов задачи, отдельного протокола между процессами нет.
+    total = len(models) * len(cases) * max(1, args.repeat)
+    state = {"done": 0}
+
+    def tick(row: Row) -> None:
+        state["done"] += 1
+        print(
+            "[{}/{}] {} · {} · {:.2f} за {:.1f} с".format(
+                state["done"], total, row.model, row.case, row.score, row.seconds
+            ),
+            flush=True,
+        )
+
     rows: list[Row] = []
-    for model in [m.strip() for m in args.models.split(",") if m.strip()]:
+    for model in models:
         print("гоняю {} ({} кейсов × {})".format(model, len(cases), args.repeat))
-        rows.extend(run_model(model, cases, args.route, args.repeat))
+        rows.extend(run_model(model, cases, args.route, args.repeat, on_row=tick))
 
     print()
     print(render(rows))
     if args.json:
-        with open(args.json, "w", encoding="utf-8") as fh:
-            json.dump([row.__dict__ for row in rows], fh, ensure_ascii=False, indent=2)
-        print("\nсырые строки: {}".format(args.json))
+        save_report(args.json, rows, models, cases, args.repeat, args.route)
+        print("\nотчёт: {}".format(args.json))
     return 0
 
 
@@ -222,4 +271,15 @@ if __name__ == "__main__":
     sys.exit(main())
 
 
-__all__ = ("Row", "by_stage", "gateway_for", "main", "render", "run_case", "run_model", "winners")
+__all__ = (
+    "REPORT_PATH",
+    "Row",
+    "by_stage",
+    "gateway_for",
+    "main",
+    "render",
+    "run_case",
+    "run_model",
+    "save_report",
+    "winners",
+)

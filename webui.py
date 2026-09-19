@@ -75,6 +75,7 @@ from ui_core import (
     text_field,
 )
 import bench
+import ui_bench
 from ui_forms import (
     bench_models,
     profile_summary,
@@ -197,7 +198,15 @@ class Handler(BaseHTTPRequestHandler):
                     body = render_search(conn, one("q"), one("company"))
                     self._send(page("Проверка поиска", body))
                 elif parsed.path == "/llm":
-                    self._send(page("Модель", render_llm(conn, one("probe") == "1")))
+                    # Пока идёт сравнение, страница обновляет себя сама: результат
+                    # появляется на месте формы, уходить в лог не нужно.
+                    self._send(
+                        page(
+                            "Модель",
+                            render_llm(conn, one("probe") == "1"),
+                            ui_bench.refresh_seconds(),
+                        )
+                    )
                 else:
                     self._send(page("Не найдено", "<p>Такой страницы нет.</p>"), 404)
             finally:
@@ -227,7 +236,8 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == "/bench":
                 # Единственная задача с аргументами из формы: имена моделей
                 # проходят через bench_models, дальше argv собирает jobs.TASKS.
-                models = bench_models((form.get("models") or [""])[0])
+                # Имена приходят и чекбоксами, и строкой: склеиваем и чистим.
+                models = bench_models(",".join(form.get("models") or []))
                 stages = [s for s in (form.get("stage") or []) if s in bench.STAGES]
                 repeat = max(1, min(5, settings.as_int((form.get("repeat") or ["1"])[0], 1)))
                 if not models:
@@ -248,12 +258,14 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     job = jobs.runner.start("bench", extra)
                 except (KeyError, RuntimeError) as exc:
-                    body, refresh = render_run(
-                        None, "<div class=warn>{}</div>".format(esc(exc))
-                    )
-                    self._send(page("Запуск", body, refresh))
+                    conn = open_db()
+                    try:
+                        note = "<div class=warn>{}</div>".format(esc(exc))
+                        self._send(page("Модель", render_llm(conn) + note))
+                    finally:
+                        conn.close()
                     return
-                self._redirect("/?job={}".format(job.id))
+                self._redirect("/llm")
                 return
 
             if parsed.path == "/stop":
