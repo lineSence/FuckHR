@@ -31,6 +31,7 @@ MIN_TRACKED = 2
 # Столько дней в выдаче подряд считаем признаком вечной вакансии.
 LONG_RUNNING_DAYS = 90
 # Порог перепубликаций берём у детектора, чтобы карточка и досье не спорили.
+# Пороги берутся у детектора: одна истина на оба места [DOC-002].
 REPUBLISH_ALARM = detector.REPUBLISH_ALARM
 
 
@@ -88,9 +89,9 @@ def collect(conn: sqlite3.Connection, company: str, months: int = 8) -> CompanyS
         if hist.snapshots == 0:
             continue
         days_tracked = max(days_tracked, hist.days_tracked)
-        if hist.days_tracked >= detector.MIN_DAYS_TRACKED:
+        if hist.days_tracked >= detector.LIMITS.min_days:
             tracked += 1
-        if hist.republished >= REPUBLISH_ALARM:
+        if hist.republished >= detector.LIMITS.republish_alarm:
             republished += 1
         if hist.active and hist.days_tracked >= LONG_RUNNING_DAYS:
             long_running += 1
@@ -118,14 +119,14 @@ def facts(signals: CompanySignals) -> list[str]:
     if not signals.enough:
         return [
             f"истории публикаций мало: вакансий в базе {signals.vacancies}, "
-            f"с историей от {detector.MIN_DAYS_TRACKED} дн. — {signals.tracked}"
+            f"с историей от {detector.LIMITS.min_days} дн. — {signals.tracked}"
         ]
     out = [
         f"вакансий в базе: {signals.vacancies}, наблюдаем до {signals.days_tracked} дн."
     ]
     if signals.republished:
         out.append(
-            f"публиковались заново {REPUBLISH_ALARM}+ раз: "
+            f"публиковались заново {detector.LIMITS.republish_alarm}+ раз: "
             f"{signals.republished} из {signals.tracked}"
         )
     if signals.long_running:

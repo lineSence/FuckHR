@@ -87,13 +87,14 @@ def _haystack(vacancy: Any) -> str:
     return " ".join(p for p in parts if p).lower()
 
 
-def _matches(term: str, haystack: str) -> bool:
+def _matches(term: str, haystack: str, fuzzy: int = FUZZY_THRESHOLD) -> bool:
     if term in haystack:
         return True
-    return fuzz.partial_ratio(term, haystack) >= FUZZY_THRESHOLD
+    return fuzz.partial_ratio(term, haystack) >= fuzzy
 
 
-def evaluate(vacancy: Any, profile: Profile) -> Verdict:
+def evaluate(vacancy: Any, profile: Profile, fuzzy: int = FUZZY_THRESHOLD) -> Verdict:
+    """Скор вакансии. fuzzy — порог нечёткого совпадения навыка из настроек."""
     haystack = _haystack(vacancy)
     reasons: list[str] = []
 
@@ -128,7 +129,7 @@ def evaluate(vacancy: Any, profile: Profile) -> Verdict:
 
     # 3. Навыки — основной вес.
     skills_weight = profile.weight("skills", 55)
-    matched = [s for s in profile.skills if _matches(s, haystack)]
+    matched = [s for s in profile.skills if _matches(s, haystack, fuzzy)]
     if profile.skills:
         skills_points = skills_weight * len(matched) / len(profile.skills)
     else:
@@ -137,7 +138,7 @@ def evaluate(vacancy: Any, profile: Profile) -> Verdict:
         reasons.append("стек: " + ", ".join(matched[:6]))
 
     bonus_weight = profile.weight("nice_to_have", 10)
-    bonus_matched = [s for s in profile.nice_to_have if _matches(s, haystack)]
+    bonus_matched = [s for s in profile.nice_to_have if _matches(s, haystack, fuzzy)]
     bonus_points = (
         bonus_weight * len(bonus_matched) / len(profile.nice_to_have)
         if profile.nice_to_have

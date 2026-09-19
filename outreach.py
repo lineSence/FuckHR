@@ -349,7 +349,7 @@ def precondition(conn: sqlite3.Connection, row: sqlite3.Row) -> str | None:
         return "нет досье на компанию"
     if card["risk"] == RISK_RED:
         return "досье красное: в такую компанию напрямую не пишем"
-    if detector.load(conn, row["key"]) is None:
+    if settings.detector_options().enabled and detector.load(conn, row["key"]) is None:
         return "детектор HR-брехни по вакансии ещё не прогонялся"
     return None
 

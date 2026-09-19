@@ -44,6 +44,36 @@ REPUBLISH_ALARM = 3
 # Вилка шире этого множителя означает, что вилки фактически нет.
 WIDE_BAND_RATIO = 2.0
 
+
+@dataclass(frozen=True)
+class Limits:
+    """Пороги детектора. Правятся в настройках, значения по умолчанию — выше.
+
+    Вынесены из констант в объект, чтобы владелец мог сдвинуть границу
+    «достаточно ли истории», не трогая код. Занижать их — превращать догадку
+    в утверждение, поэтому значения видны в интерфейсе с прямым об этом
+    предупреждением [CORE-019].
+    """
+
+    min_days: int = MIN_DAYS_TRACKED
+    republish_alarm: int = REPUBLISH_ALARM
+    wide_band: float = WIDE_BAND_RATIO
+
+
+LIMITS = Limits()
+
+
+def configure(limits: Limits) -> None:
+    """Ставит пороги на весь процесс. Зовётся один раз при старте прогона."""
+    global LIMITS
+    LIMITS = limits
+    log.info(
+        "детектор: история от %s дн., тревога с %s перепубликаций, вилка шире %g×",
+        limits.min_days,
+        limits.republish_alarm,
+        limits.wide_band,
+    )
+
 NOT_SUPPORTED = "not_supported"
 SUPPORTED = "supported"
 NO_DATA = "insufficient_data"
@@ -300,7 +330,7 @@ def _confidence(hist: History) -> str:
     """Уверенность зависит от длины и качества истории, а не от тона вакансии."""
     if hist.days_tracked >= 60 and hist.dated_snapshots >= 3:
         return "высокая"
-    if hist.days_tracked >= MIN_DAYS_TRACKED:
+    if hist.days_tracked >= LIMITS.min_days:
         return "средняя"
     return "низкая"
 
@@ -313,7 +343,7 @@ def _history_source(hist: History) -> str:
 
 
 def _check_stable_team(claim: Claim, hist: History) -> Finding:
-    if hist.days_tracked < MIN_DAYS_TRACKED:
+    if hist.days_tracked < LIMITS.min_days:
         return Finding(
             kind=claim.key,
             claimed=claim.quote,
@@ -322,7 +352,7 @@ def _check_stable_team(claim: Claim, hist: History) -> Finding:
             confidence="низкая",
             sources=("vacancy_snapshots",),
         )
-    if hist.republished >= REPUBLISH_ALARM:
+    if hist.republished >= LIMITS.republish_alarm:
         return Finding(
             kind=claim.key,
             claimed=claim.quote,
@@ -404,12 +434,12 @@ def _facts(vacancy: Any, text: str, hist: History) -> list[Finding]:
     salary_from = _field(vacancy, "salary_from")
     salary_to = _field(vacancy, "salary_to")
 
-    if salary_from and salary_to and salary_to >= salary_from * WIDE_BAND_RATIO:
+    if salary_from and salary_to and salary_to >= salary_from * LIMITS.wide_band:
         out.append(
             Finding(
                 kind="salary_band_wide",
                 claimed="",
-                found=f"вилка {salary_from}–{salary_to}: разброс больше {WIDE_BAND_RATIO:g}×",
+                found=f"вилка {salary_from}–{salary_to}: разброс больше {LIMITS.wide_band:g}×",
                 verdict=NOT_SUPPORTED,
                 confidence="высокая",
                 sources=("поля вакансии",),

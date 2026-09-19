@@ -51,6 +51,8 @@ class Field:
 
 
 GROUP_RUN = "Запуск"
+GROUP_PREFILTER = "Предфильтр"
+GROUP_DETECTOR = "Детектор брехни"
 GROUP_SOURCE = "Источник вакансий"
 GROUP_TELEGRAM = "Telegram"
 GROUP_LLM = "Модель"
@@ -114,6 +116,76 @@ FIELDS: tuple[Field, ...] = (
         TEXT,
         "profile.yaml",
         "Запросы, навыки, порог скоринга и факты о себе.",
+    ),
+    Field(
+        "PREFILTER_ENABLED",
+        "Отсеивать вакансии до загрузки описания",
+        GROUP_PREFILTER,
+        BOOL,
+        "1",
+        "Предфильтр считает черновой скор по выдаче и экономит запросы к hh.ru. "
+        "Выключенный — собираем всё подряд, включая явный мусор.",
+    ),
+    Field(
+        "PREFILTER_MIN_SCORE",
+        "Черновой скор, ниже которого не открываем вакансию",
+        GROUP_PREFILTER,
+        FLOAT,
+        "0",
+        "0 — отсекать только по стоп-словам и вилке. Скор на выдаче занижен: "
+        "описания ещё нет, и стек виден не весь.",
+    ),
+    Field(
+        "PREFILTER_FUZZY",
+        "Порог нечёткого совпадения навыка, %",
+        GROUP_PREFILTER,
+        INT,
+        "88",
+        "Ниже — «постгрес» и «postgresql» считаются одним навыком чаще, но растёт "
+        "число ложных совпадений.",
+    ),
+    Field(
+        "DETECTOR_ENABLED",
+        "Проверять утверждения вакансии",
+        GROUP_DETECTOR,
+        BOOL,
+        "1",
+        "Сверяет обещания вакансии с историей публикаций. Выключенный — карточки "
+        "без HR-флагов, слепки истории всё равно пишутся.",
+    ),
+    Field(
+        "DETECTOR_MIN_DAYS",
+        "Сколько дней истории нужно для вывода",
+        GROUP_DETECTOR,
+        INT,
+        "30",
+        "Короче — вердикт «недостаточно данных» [HRD-004]. Занижать значит выдавать "
+        "догадки за наблюдения.",
+    ),
+    Field(
+        "DETECTOR_REPUBLISH_ALARM",
+        "Перепубликаций, после которых «стабильная команда» не верится",
+        GROUP_DETECTOR,
+        INT,
+        "3",
+        "Сколько раз вакансия возвращалась в выдачу за период наблюдения.",
+    ),
+    Field(
+        "DETECTOR_WIDE_BAND",
+        "Во сколько раз вилка считается фиктивной",
+        GROUP_DETECTOR,
+        FLOAT,
+        "2.0",
+        "Верхняя граница больше нижней во столько раз — вилки фактически нет.",
+    ),
+    Field(
+        "DETECTOR_LLM_CLAIMS",
+        "Пускать модель на подсказку утверждений",
+        GROUP_DETECTOR,
+        BOOL,
+        "1",
+        "Модель только показывает цитату, вердикт у таких пунктов всегда "
+        "«недостаточно данных» [CORE-019]. Работает, только если модель включена.",
     ),
     Field(
         "HH_TOKEN",
@@ -369,12 +441,50 @@ class OutreachOptions:
     use_llm: bool
 
 
+@dataclass(frozen=True)
+class PrefilterOptions:
+    """Отсев до загрузки описания: что считается мусором на выдаче."""
+
+    enabled: bool
+    min_score: float
+    fuzzy: int
+
+
+@dataclass(frozen=True)
+class DetectorOptions:
+    """Пороги детектора HR-брехни. Ниже порогов вывод — догадка, а не факт."""
+
+    enabled: bool
+    min_days: int
+    republish_alarm: int
+    wide_band: float
+    use_llm_claims: bool
+
+
 def collect_options() -> CollectOptions:
     return CollectOptions(
         limit=as_int(os.getenv("RUN_LIMIT"), 30),
         profile=get("RUN_PROFILE", "profile.yaml"),
         details=flag("RUN_DETAILS"),
         use_llm=flag("LLM_ENABLED"),
+    )
+
+
+def prefilter_options() -> PrefilterOptions:
+    return PrefilterOptions(
+        enabled=flag("PREFILTER_ENABLED"),
+        min_score=as_float(os.getenv("PREFILTER_MIN_SCORE"), 0.0),
+        fuzzy=max(50, min(100, as_int(os.getenv("PREFILTER_FUZZY"), 88))),
+    )
+
+
+def detector_options() -> DetectorOptions:
+    return DetectorOptions(
+        enabled=flag("DETECTOR_ENABLED"),
+        min_days=max(1, as_int(os.getenv("DETECTOR_MIN_DAYS"), 30)),
+        republish_alarm=max(2, as_int(os.getenv("DETECTOR_REPUBLISH_ALARM"), 3)),
+        wide_band=max(1.1, as_float(os.getenv("DETECTOR_WIDE_BAND"), 2.0)),
+        use_llm_claims=flag("DETECTOR_LLM_CLAIMS") and flag("LLM_ENABLED"),
     )
 
 
@@ -448,6 +558,8 @@ def form_updates(
 __all__ = (
     "BOOL",
     "CollectOptions",
+    "DetectorOptions",
+    "PrefilterOptions",
     "ENV_PATH",
     "FIELDS",
     "FIELD_BY_KEY",
@@ -461,6 +573,7 @@ __all__ = (
     "as_float",
     "as_int",
     "collect_options",
+    "detector_options",
     "flag",
     "form_updates",
     "get",
@@ -470,6 +583,7 @@ __all__ = (
     "missing_required",
     "outreach_options",
     "parse_env",
+    "prefilter_options",
     "render_env",
     "save",
 )
