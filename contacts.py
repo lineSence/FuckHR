@@ -71,9 +71,9 @@ from contacts_rules import (  # noqa: F401
     GITHUB_RE,
     HR_MAILBOXES,
     LEAD_RANKS,
-    LEAD_ROLE_HINTS,
     NAME_RE,
     lead_roles,
+    role_subject,
     PHONE_RE,
     ROLE_RANKS,
     TELEGRAM_NICK_RE,
@@ -137,14 +137,23 @@ def translit(word: str) -> str:
     return "".join(TRANSLIT.get(ch, ch if ch.isascii() else "") for ch in word.lower())
 
 
-def role_rank(title: str | None) -> tuple[int, str | None]:
-    """Сопоставляет должность с приоритетом из [OUT-001]."""
+def role_rank(title: str | None, subject: str = "") -> tuple[int, str | None]:
+    """Сопоставляет должность с приоритетом из [OUT-001].
+
+    subject — предмет вакансии (contacts_rules.role_subject). Должность, которая
+    совпала с ним, но не является руководящей, — это коллега на той же роли:
+    ранг 4. Списка специальностей здесь нет намеренно, иначе для любой отрасли
+    вне списка ранжирование не работало бы.
+    """
     if not title:
         return 99, None
     low = title.lower()
     for rank, label, needles in ROLE_RANKS:
         if any(n in low for n in needles):
             return rank, label
+    words = [w for w in subject.lower().split() if len(w) > 2]
+    if words and any(w in low for w in words):
+        return 4, "коллега на той же роли"
     return 99, None
 
 
@@ -295,8 +304,8 @@ def extract_channels(text: str, source_url: str | None = None) -> tuple[tuple[Ca
 def lead_rank(sentence: str) -> tuple[int, str | None]:
     """Должность руководителя в предложении или (99, None).
 
-    Отдельно от role_rank: там ранг 4 получают слова «python» и «разработчик»,
-    и по ним предложение «Наша команда Python: Иван Петров» выглядело
+    Отдельно от role_rank: там ранг 4 получает совпадение с предметом вакансии,
+    и по нему предложение «Наша команда Python: Иван Петров» выглядело
     руководительским.
     """
     low = (sentence or "").lower()
