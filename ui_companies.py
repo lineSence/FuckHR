@@ -18,6 +18,8 @@ import json
 import sqlite3
 
 import company_signals
+import contact_finds
+import contacts
 import dossier
 import maintenance
 from ui_core import esc, table
@@ -124,6 +126,41 @@ def render_signals(conn: sqlite3.Connection, name: str) -> str:
     )
 
 
+def render_contacts_for(conn: sqlite3.Connection, name: str) -> str:
+    """Каналы, найденные по вакансиям этого работодателя."""
+    rows = contact_finds.for_company(conn, name)
+    if not rows:
+        return (
+            "<p class=muted>Рабочих каналов по этому работодателю пока не нашлось. "
+            "Они ищутся при общем сборе, после досье.</p>"
+        )
+    body = []
+    for row in rows:
+        source = "—"
+        if row["source_url"]:
+            source = '<a href="{url}" target=_blank rel=noreferrer>источник</a>'.format(
+                url=esc(row["source_url"])
+            )
+        body.append(
+            [
+                '<a href="/vacancy?key={key}">вакансия</a>'.format(
+                    key=esc(str(row["key"]))
+                ),
+                esc(row["person"] or "—"),
+                esc(row["role"] or "—"),
+                "<span class=pill>{}</span>{}".format(
+                    esc(row["channel_kind"]), esc(row["channel_value"])
+                ),
+                esc(contacts.CONFIDENCE_RU.get(str(row["confidence"]), row["confidence"]))
+                + (" · угадан" if row["guessed"] else ""),
+                source,
+            ]
+        )
+    return table(
+        ("Откуда", "Человек", "Роль", "Канал", "Уверенность", "Источник"), body
+    )
+
+
 def render_company(conn: sqlite3.Connection, name: str) -> str:
     name = (name or "").strip()
     if not name:
@@ -196,14 +233,16 @@ def render_company(conn: sqlite3.Connection, name: str) -> str:
     return (
         "<h2>{company}</h2>{head}{summary}"
         "<h2>История публикаций</h2>{signals}"
+        "<h2>Контакты</h2>{contacts}"
         "<h2>Закономерности</h2>{patterns}"
         "<h2>Источники</h2>{reviews}"
-        '<p><a href="/companies">К списку компаний</a></p>'
+        '<p><a href="/companies">К компаниям и контактам</a></p>'
     ).format(
         company=esc(name),
         head=head,
         summary=summary,
         signals=render_signals(conn, name),
+        contacts=render_contacts_for(conn, name),
         patterns=patterns_block,
         reviews=reviews_block,
     )

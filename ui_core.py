@@ -41,6 +41,8 @@ th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid #ececef;
 th { font-weight: 600; font-size: 13px; color: #6b6b70; }
 .score { font-variant-numeric: tabular-nums; font-weight: 600; }
 .muted { color: #6b6b70; }
+form.inline { display: inline; }
+form.inline button { padding: 4px 10px; font-size: 13px; }
 .warn { background: #fff6e5; border: 1px solid #f0d9a8; padding: 10px 12px;
         border-radius: 6px; margin: 12px 0; }
 .danger { background: #fdecec; border: 1px solid #f0b9b9; padding: 10px 12px;
@@ -77,8 +79,7 @@ button.secondary { background: #e9ebef; color: #1d1d1f; }
 NAV_ITEMS = (
     ("/", "Запуск"),
     ("/vacancies", "Вакансии"),
-    ("/companies", "Компании"),
-    ("/contacts", "Контакты"),
+    ("/companies", "Компании и контакты"),
     ("/search", "Поиск"),
     ("/llm", "Модель"),
     ("/resume", "Резюме"),

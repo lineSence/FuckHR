@@ -15,6 +15,7 @@ import urllib.parse
 from typing import Sequence
 
 import conditions
+import contact_finds
 import contacts
 import db
 import detector
@@ -273,6 +274,61 @@ def contact_rows(conn: sqlite3.Connection, limit: int = 100) -> list[sqlite3.Row
     ).fetchall()
 
 
+def draft_button(key: str, label: str = "Подготовить письмо") -> str:
+    """Кнопка подготовки письма. POST, потому что шаг ходит в поиск и модель."""
+    return (
+        '<form method=post action="/vacancy" class=inline>'
+        '<input type=hidden name=key value="{key}">'
+        '<button type=submit>{label}</button></form>'
+    ).format(key=esc(key), label=esc(label))
+
+
+def contacts_block(conn: sqlite3.Connection, key: str, company: str | None) -> str:
+    """Найденные каналы по вакансии. Ничего не запускает: показывает собранное."""
+    find = contact_finds.load(conn, key, company)
+    if find is None:
+        return (
+            "<h2>Контакты</h2><p class=muted>Контакты по этой вакансии ещё не искали: "
+            'они собираются вместе с вакансиями на <a href="/">сборе</a>, '
+            "после досье на компанию.</p>"
+        )
+    if not find.candidates:
+        lines = "".join("<li>{}</li>".format(esc(text)) for text in find.dropped[:5])
+        return (
+            "<h2>Контакты</h2><p class=muted>Рабочего канала не нашлось — остаётся "
+            "отклик через площадку.</p>" + ("<ul>{}</ul>".format(lines) if lines else "")
+        )
+    body = []
+    for cand in find.candidates:
+        source = "—"
+        if cand.source_url:
+            source = '<a href="{url}" target=_blank rel=noreferrer>источник</a>'.format(
+                url=esc(cand.source_url)
+            )
+        body.append(
+            [
+                esc(cand.person or "—"),
+                esc(cand.role or "—"),
+                "<span class=pill>{}</span>{}".format(
+                    esc(cand.channel_kind), esc(cand.channel_value)
+                ),
+                esc(contacts.CONFIDENCE_RU.get(cand.confidence, cand.confidence))
+                + (" · угадан" if cand.guessed else ""),
+                source,
+            ]
+        )
+    dropped = ""
+    if find.dropped:
+        dropped = "<p class=muted>Отброшено: {}</p>".format(
+            esc("; ".join(find.dropped[:3]))
+        )
+    return (
+        "<h2>Контакты</h2>"
+        + table(["Человек", "Роль", "Канал", "Уверенность", "Откуда"], body)
+        + dropped
+    )
+
+
 def render_vacancies(conn: sqlite3.Connection, min_score: float, limit: int) -> str:
     rows = vacancy_rows(conn, min_score, limit)
     stats = db.stats(conn)
@@ -321,12 +377,15 @@ def render_vacancies(conn: sqlite3.Connection, min_score: float, limit: int) -> 
                 esc(row["company"]),
                 esc((row["published_at"] or "")[:10]),
                 "✓" if row["notified_at"] else "",
+                draft_button(row["key"] or "", "Письмо"),
             ]
         )
     return (
         form
         + summary
-        + table(["Скор", "Вакансия", "Компания", "Опубликована", "В TG"], body)
+        + table(
+            ["Скор", "Вакансия", "Компания", "Опубликована", "В TG", "Письмо"], body
+        )
     )
 
 
@@ -369,6 +428,8 @@ def render_vacancy(conn: sqlite3.Connection, key: str, with_draft: bool) -> str:
             "<h2>HR-флаги</h2><pre>{}</pre>".format(esc("\n".join(signal_lines)))
         )
 
+    parts.append(contacts_block(conn, key, row["company"]))
+
     if with_draft:
         skip_precondition = outreach.precondition(conn, row)
     if with_draft and skip_precondition:
@@ -410,13 +471,10 @@ def render_vacancy(conn: sqlite3.Connection, key: str, with_draft: bool) -> str:
                 )
     else:
         parts.append(
-            (
-                '<form method=post action="/vacancy">'
-                '<input type=hidden name=key value="{}">'
-                '<button type=submit>Собрать черновик и найти контакт</button> '
-                '<span class=muted>(дёргает внешний поиск и модель, '
-                'ничего не отправляет)</span></form>'
-            ).format(esc(key))
+            "<h2>Письмо</h2>"
+            + draft_button(key)
+            + "<p class=muted>Собирает черновик по найденным контактам: может дёрнуть "
+            "модель, ничего не отправляет.</p>"
         )
 
     parts.append("<h2>Описание</h2><pre>{}</pre>".format(esc(row["description"])))
@@ -424,14 +482,23 @@ def render_vacancy(conn: sqlite3.Connection, key: str, with_draft: bool) -> str:
 
 
 def render_contacts(conn: sqlite3.Connection) -> str:
+    """Лог аутрича: что уже ушло в работу. Находки сборщика — в карточке вакансии."""
+    contacts.ensure_schema(conn)
     rows = contact_rows(conn)
     direct, total = contacts.coverage(conn)
-    header = "<p class=muted>Прямых контактов {} из {}.</p>".format(direct, total)
+    found_direct, found_total = contact_finds.coverage(conn)
+    header = (
+        "<h2>Контакты</h2>"
+        "<p class=muted>Каналы найдены у {found_direct} из {found_total} вакансий "
+        "(ищутся при общем сборе). В работе: {direct} из {total}.</p>"
+    ).format(
+        found_direct=found_direct, found_total=found_total, direct=direct, total=total
+    )
 
     if not rows:
         return header + (
-            "<div class=warn>Лог контактов пуст. Он заполняется задачей "
-            '«Подготовка писем» на <a href="/">странице запуска</a>.</div>'
+            "<div class=warn>В работу ещё ничего не брали. Письмо готовится кнопкой "
+            '«Письмо» рядом с вакансией на <a href="/vacancies">странице вакансий</a>.</div>'
         )
 
     body = []

@@ -165,13 +165,20 @@ class Handler(BaseHTTPRequestHandler):
                     body = render_vacancy(conn, one("key"), with_draft=False)
                     self._send(page("Вакансия", body))
                 elif parsed.path == "/companies":
-                    self._send(page("Компании", render_companies(conn)))
+                    # Компании и контакты — один раздел: канал без работодателя
+                    # ничего не значит, а работодатель без канала — не вход.
+                    self._send(
+                        page(
+                            "Компании и контакты",
+                            render_companies(conn) + render_contacts(conn),
+                        )
+                    )
                 elif parsed.path == "/company":
                     self._send(page("Досье", render_company(conn, one("name"))))
                 elif parsed.path == "/cleanup":
                     self._send(page("Очистка", render_cleanup(conn)))
                 elif parsed.path == "/contacts":
-                    self._send(page("Контакты", render_contacts(conn)))
+                    self._redirect("/companies")
                 elif parsed.path == "/resume":
                     self._send(
                         page("Резюме", render_resume(conn, self.profile_path))
