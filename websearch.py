@@ -54,6 +54,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Callable, Sequence
 
+import contacts_rules
+
 log = logging.getLogger(__name__)
 
 CACHE_SCHEMA = """
@@ -190,14 +192,17 @@ def _digest(provider: str, query: str, limit: int, variant: str = "") -> str:
 
 
 def contact_queries(company: str, roles: Sequence[str] = ()) -> list[str]:
-    """Запросы под поиск нанимающего менеджера. Только компания и роль."""
+    """Запросы под поиск нанимающего менеджера. Только компания и роль.
+
+    Роли приходят от вызывающего: их выводит contacts_rules.lead_roles из
+    названия вакансии. Без этого на «Оператора 1С» уходил «тимлид backend».
+    """
     company = (company or "").strip()
     if not company:
         return []
-    roles = tuple(roles) or ("руководитель разработки", "тимлид backend")
-    queries = [f"{company} команда разработки сайт"]
+    roles = tuple(roles) or contacts_rules.DEFAULT_LEAD_ROLES
+    queries = [f"{company} официальный сайт команда контакты"]
     queries += [f"{company} {role}" for role in roles]
-    queries.append(f"{company} инженерный блог habr")
     return queries
 
 

@@ -161,7 +161,7 @@ def follow_up_cards(
 
 
 def company_hits(
-    provider: websearch.SearchProvider, company: str | None
+    provider: websearch.SearchProvider, company: str | None, title: str | None = None
 ) -> list[websearch.Hit]:
     """Сырая выдача по компании. Пусто — тоже нормально.
 
@@ -170,7 +170,8 @@ def company_hits(
     """
     if not company or not provider.enabled:
         return []
-    return list(provider.search_many(websearch.contact_queries(company), limit=5))
+    roles = contacts.lead_roles(title)
+    return list(provider.search_many(websearch.contact_queries(company, roles), limit=5))
 
 
 def pages_from_hits(hits: Sequence[websearch.Hit]) -> list[tuple[str, str]]:
@@ -190,7 +191,7 @@ def find_contacts(
     """
     company = row["company"]
     text = "\n".join(str(row[field] or "") for field in ("title", "description"))
-    hits = company_hits(provider, company)
+    hits = company_hits(provider, company, row["title"])
     pages = pages_from_hits(hits)
     site_url = next((contacts.domain_of(url) for url, _ in pages if contacts.domain_of(url)), None)
     discovery = contacts.discover(
@@ -286,7 +287,7 @@ def process_row(
     # модель в сеть не ходит и свои знания о компании не вспоминает.
     brief = None
     if gateway is not None and not hits:
-        hits = company_hits(provider, company)
+        hits = company_hits(provider, company, row["title"])
     if gateway is not None and hits:
         brief = llm_tasks.company_brief(gateway, company or "", hits)
 

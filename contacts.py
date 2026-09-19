@@ -63,6 +63,7 @@ REPEAT_AFTER_DAYS = 90  # [OUT-007]: тот же человек — не ран�
 from contacts_rules import (  # noqa: F401
     BANNED_CHANNEL_HOSTS,
     CONFIDENCE_RU,
+    DEFAULT_LEAD_ROLES,
     EMAIL_RE,
     EMAIL_TEMPLATES,
     GENERIC_MAILBOXES,
@@ -70,7 +71,9 @@ from contacts_rules import (  # noqa: F401
     GITHUB_RE,
     HR_MAILBOXES,
     LEAD_RANKS,
+    LEAD_ROLE_HINTS,
     NAME_RE,
+    lead_roles,
     PHONE_RE,
     ROLE_RANKS,
     TELEGRAM_NICK_RE,

@@ -6,6 +6,7 @@ import sqlite3
 
 import pytest
 
+import contacts_rules
 import websearch
 
 
@@ -63,6 +64,21 @@ def test_в_запрос_уходит_только_компания_и_роль(
     for query in queries:
         assert "Ромашка" in query
         assert "@" not in query
+
+
+def test_роль_в_запросе_идёт_от_вакансии() -> None:
+    # Зашитый «тимлид backend» уходил и на вакансии «Оператор 1С» — лимит
+    # SEARCH_MAX_CALLS тратился на посторонних людей.
+    roles = contacts_rules.lead_roles("Оператор 1С")
+    queries = websearch.contact_queries("АКМЕ", roles)
+    assert any("1С" in query for query in queries)
+    assert not any("backend" in query.lower() for query in queries)
+    assert not any("habr" in query.lower() for query in queries)
+
+
+def test_без_подсказки_роль_общая() -> None:
+    queries = websearch.contact_queries("АКМЕ", contacts_rules.lead_roles("Курьер"))
+    assert queries[1] == "АКМЕ руководитель отдела"
 
 
 def test_неизвестный_провайдер_ошибка() -> None:

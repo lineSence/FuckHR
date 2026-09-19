@@ -179,16 +179,16 @@ def review_queries(company: str) -> list[str]:
     return queries
 
 
-def dossier_queries(company: str) -> list[str]:
+def dossier_queries(company: str, roles: Sequence[str] = ()) -> list[str]:
     """Всё, что нужно по компании за один проход: отзывы и контактные страницы."""
-    return review_queries(company) + contacts_queries(company)
+    return review_queries(company) + contacts_queries(company, roles)
 
 
-def contacts_queries(company: str) -> list[str]:
+def contacts_queries(company: str, roles: Sequence[str] = ()) -> list[str]:
     """Обёртка над websearch.contact_queries — чтобы не тянуть импорт в вызывающий код."""
     import websearch
 
-    return websearch.contact_queries(company)
+    return websearch.contact_queries(company, roles)
 
 
 def site_of(url: str) -> str:
