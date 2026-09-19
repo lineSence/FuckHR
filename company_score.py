@@ -24,12 +24,14 @@ from datetime import datetime, timezone
 
 import company_score_rules as R
 import company_signals
+import deepresearch_store
 import detector
 import dossier_rules
 import dossier_store
 import fake_rules
 import fake_store
 import market_store
+import settings
 
 log = logging.getLogger(__name__)
 
@@ -394,6 +396,33 @@ def _vacancy_evidence(conn: sqlite3.Connection, company: str) -> list[Evidence]:
     return out
 
 
+def _deep_evidence(conn: sqlite3.Connection, company: str) -> list[Evidence]:
+    """Находки глубокого ресёрча (ADR-019).
+
+    По умолчанию не участвуют в оценке: суд и реестр — сильная улика, но
+    привязка страницы к конторе делается по названию, и ошибка здесь красит
+    невиновного. Включается настройкой DEEP_IN_SCORE, как и COMPANY_SCORE_IN_SCORE.
+    """
+    if not settings.flag("DEEP_IN_SCORE"):
+        return []
+    try:
+        rows = deepresearch_store.evidence(conn, company)
+    except sqlite3.Error:  # старая база без таблиц ресёрча [CORE-017]
+        return []
+    return [
+        Evidence(
+            code=code,
+            axis=axis,
+            polarity=polarity,
+            weight=weight,
+            trust=trust,
+            text=text,
+            observed_at=observed_at or None,
+        )
+        for code, axis, polarity, weight, trust, text, observed_at in rows
+    ]
+
+
 def _cell(row: sqlite3.Row, name: str) -> object:
     try:
         return row[name]
@@ -478,6 +507,7 @@ def evaluate(conn: sqlite3.Connection, company: str) -> CompanyScore:
         + _market_evidence(conn, company)
         + _signals_evidence(signals)
         + _vacancy_evidence(conn, company)
+        + _deep_evidence(conn, company)
     )
     evidence += _combo_evidence(evidence)
     scoring = [e for e in evidence if e.weight > 0]

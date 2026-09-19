@@ -68,6 +68,12 @@ triggers:
       - wiki/architecture/company-score.md
       - docs/company-score.md
 
+  - id: deep-research
+    keywords: [глубокий ресёрч, ресерч компании, реестр, егрюл, инн, суд, арбитраж, банкротство, приставы, исполнительное производство, новости о компании]
+    load:
+      - wiki/architecture/deep-research.md
+      - docs/deep-research.md
+
   - id: fake-reviews
     keywords: [накрутка, заказные отзывы, фейковые отзывы, fake_score, шингл, дубли отзывов, всплеск отзывов, метка компании]
     load:

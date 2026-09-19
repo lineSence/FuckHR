@@ -107,6 +107,7 @@ dossier.build(company)
 | `reviewitems.py` | страница → отдельные отзывы: дата, оценка, плюсы, минусы |
 | `fake_reviews.py`, `fake_rules.py`, `fake_company.py`, `fake_store.py`, `fake_llm.py` | детекция накрученных отзывов: сигналы, пороги, метка компании, хранение, сигнал модели |
 | `company_score.py`, `company_score_rules.py`, `company_score_store.py` | общая оценка работодателя: оси, улики, вето (`docs/company-score.md`) |
+| `deepresearch.py`, `deepresearch_rules.py`, `deepresearch_store.py`, `research_deep.py`, `ui_research.py` | глубокий ресёрч по компании: реестр, суды, долги, новости (`docs/deep-research.md`) |
 | `market.py`, `market_rules.py`, `market_store.py`, `market_company.py` | рынок зарплат: разбор вилки и среза, пороги, хранение и срезы, метка работодателя (`docs/market-salary.md`) |
 | `aitext.py`, `aitext_rules.py`, `aitext_llm.py` | признаки сгенерированного текста в вакансиях и отзывах (`docs/ai-text.md`) |
 | `resume.py` | резюме: блоки, подтверждение, экспорт, стаж, противоречия (без модели) |
@@ -172,6 +173,9 @@ dossier.build(company)
 «Остановить» убивает процесс сразу, «Остановить после цикла» кладёт `data/stop.flag`
 и даёт кругу дописать карточки. Упавший круг не обрывает остальные ([CORE-017]), но
 после ошибки пауза не меньше минуты.
+
+Глубокий ресёрч (`docs/deep-research.md`, ADR-019) в прогон не входит: это отдельная задача
+`research-deep`, которую владелец запускает кнопкой на странице компании.
 
 `RUN_LIMIT=0` означает сбор без ограничения — до конца выдачи по всем запросам профиля.
 Карточек за такой прогон всё равно уходит не больше `run.CARD_LIMIT`.

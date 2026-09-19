@@ -29,6 +29,7 @@
 - `wiki/architecture/runtime-windows.md` — запуск по расписанию на Windows (ADR-014).
 - `wiki/architecture/hh-html-scraping.md` — разбор HTML hh.ru и его fallback-стратегии (ADR-015).
 - `wiki/architecture/company-score.md` — общая оценка работодателя: оси, улики, вето (ADR-018, замысел).
+- `wiki/architecture/deep-research.md` — глубокий ресёрч по компании: источники, капча, потолок по времени (ADR-019, замысел).
 
 ## workflows
 

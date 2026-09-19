@@ -249,6 +249,34 @@ def render_llm(conn: sqlite3.Connection, probe: bool = False) -> str:
     return "".join(parts)
 
 
+def start_bench(form: dict) -> str:
+    """Запускает сравнение моделей из формы страницы «Модель».
+
+    Пустая строка — задача пошла. Иначе это готовый кусок страницы с
+    объяснением: единственная задача с аргументами из браузера, и объяснять
+    отказ надо на месте, а не кодом ответа.
+    """
+    # Имена приходят и чекбоксами, и строкой: склеиваем и чистим. В argv[0]
+    # из браузера не попадает ничего — команда берётся из jobs.TASKS.
+    models = bench_models(",".join(form.get("models") or []))
+    stages = [s for s in (form.get("stage") or []) if s in bench.STAGES]
+    repeat = max(1, min(5, settings.as_int((form.get("repeat") or ["1"])[0], 1)))
+    if not models:
+        note = (
+            "<div class=warn>Не разобрал ни одного имени модели. "
+            "Пиши их через запятую, как в config.yaml прокси.</div>"
+        )
+        return render_bench_form(note)
+    extra = ["--models", ",".join(models), "--repeat", str(repeat)]
+    if stages:
+        extra += ["--stages", ",".join(stages)]
+    try:
+        jobs.runner.start("bench", extra)
+    except (KeyError, RuntimeError) as exc:
+        return "<div class=warn>{}</div>".format(esc(exc))
+    return ""
+
+
 def bench_models(raw: str) -> list[str]:
     """Имена моделей из формы. Всё подозрительное молча выбрасывается.
 
@@ -318,6 +346,7 @@ __all__ = (
     "LIST_HINTS",
     "profile_summary",
     "bench_models",
+    "start_bench",
     "render_bench_form",
     "render_llm",
     "render_profile",

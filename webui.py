@@ -76,12 +76,10 @@ from ui_core import (
     table,
     text_field,
 )
-import bench
 import ui_bench
 from ui_forms import (
     bench_models,
     profile_summary,
-    render_bench_form,
     render_llm,
     render_profile,
     render_search,
@@ -89,12 +87,15 @@ from ui_forms import (
     save_profile,
     search_settings_form,
     search_updates,
+    start_bench,
 )
 import intake
+import ui_research
 import ui_run
 import ui_intake
 from ui_resume import render_resume, save_resume
 from ui_views import (
+    vacancy_rows,
     contact_rows,
     progress_block,
     render_contacts,
@@ -103,7 +104,6 @@ from ui_views import (
     render_vacancies,
     render_vacancy,
     vacancy_one,
-    vacancy_rows,
 )
 
 log = logging.getLogger("webui")
@@ -205,7 +205,7 @@ class Handler(BaseHTTPRequestHandler):
                 elif parsed.path == "/company":
                     body = render_company(
                         conn, one("name"), one("jsort"), one("ksort")
-                    )
+                    ) + ui_research.render_research(conn, one("name"))
                     self._send(page("Досье", body))
                 elif parsed.path == "/cleanup":
                     self._send(page("Очистка", render_cleanup(conn)))
@@ -256,33 +256,10 @@ class Handler(BaseHTTPRequestHandler):
                 return
 
             if parsed.path == "/bench":
-                # Единственная задача с аргументами из формы: имена моделей
-                # проходят через bench_models, дальше argv собирает jobs.TASKS.
-                # Имена приходят и чекбоксами, и строкой: склеиваем и чистим.
-                models = bench_models(",".join(form.get("models") or []))
-                stages = [s for s in (form.get("stage") or []) if s in bench.STAGES]
-                repeat = max(1, min(5, settings.as_int((form.get("repeat") or ["1"])[0], 1)))
-                if not models:
+                note = start_bench(form)
+                if note:
                     conn = open_db()
                     try:
-                        note = (
-                            "<div class=warn>Не разобрал ни одного имени модели. "
-                            "Пиши их через запятую, как в config.yaml прокси.</div>"
-                        )
-                        body = render_llm(conn) + render_bench_form(note)
-                        self._send(page("Модель", body))
-                    finally:
-                        conn.close()
-                    return
-                extra = ["--models", ",".join(models), "--repeat", str(repeat)]
-                if stages:
-                    extra += ["--stages", ",".join(stages)]
-                try:
-                    job = jobs.runner.start("bench", extra)
-                except (KeyError, RuntimeError) as exc:
-                    conn = open_db()
-                    try:
-                        note = "<div class=warn>{}</div>".format(esc(exc))
                         self._send(page("Модель", render_llm(conn) + note))
                     finally:
                         conn.close()
@@ -315,6 +292,20 @@ class Handler(BaseHTTPRequestHandler):
                     self._send(page("Модель", note + render_llm(conn)))
                 finally:
                     conn.close()
+                return
+
+            if parsed.path == "/research":
+                # Глубокий ресёрч по одной компании (ADR-019). Название из
+                # браузера сверяется со своей базой внутри ui_research.
+                conn = open_db()
+                try:
+                    problem = ui_research.handle(conn, form)
+                finally:
+                    conn.close()
+                if problem:
+                    self._send(page("Досье", problem))
+                    return
+                self._redirect("/?job={}".format(jobs.runner.last().id))
                 return
 
             if parsed.path == "/loop":
