@@ -41,6 +41,11 @@ th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid #ececef;
 th { font-weight: 600; font-size: 13px; color: #6b6b70; }
 .score { font-variant-numeric: tabular-nums; font-weight: 600; }
 .muted { color: #6b6b70; }
+details { border: 1px solid #e3e3e6; border-radius: 6px; padding: 8px 12px;
+          margin: 10px 0; }
+details[open] { padding-bottom: 14px; }
+summary { cursor: pointer; font-weight: 600; font-size: 15px; }
+summary .muted { font-weight: 400; }
 form.inline { display: inline; }
 form.inline button { padding: 4px 10px; font-size: 13px; }
 .warn { background: #fff6e5; border: 1px solid #f0d9a8; padding: 10px 12px;
@@ -143,6 +148,17 @@ def table(headers: Sequence[str], rows: Sequence[Sequence[str]]) -> str:
     return "<table><tr>{}</tr>{}</table>".format(head, body)
 
 
+def details(title: str, note: str, body: str, open_: bool = False) -> str:
+    """Сворачиваемый блок. По умолчанию закрыт: карточка должна читаться сверху.
+
+    Экранируется только заголовок: тело собирают вызывающие, у них уже HTML.
+    """
+    tail = ' <span class=muted>{}</span>'.format(esc(note)) if note else ""
+    return (
+        "<details{op}><summary>{title}{tail}</summary>{body}</details>"
+    ).format(op=" open" if open_ else "", title=esc(title), tail=tail, body=body)
+
+
 def hint_block(hint: str) -> str:
     return "<div class=hint>{}</div>".format(esc(hint)) if hint else ""
 
@@ -205,6 +221,7 @@ __all__ = (
     "area_field",
     "checkbox_field",
     "db_path",
+    "details",
     "esc",
     "hint_block",
     "number_field",

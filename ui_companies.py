@@ -16,13 +16,15 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import urllib.parse
 
 import company_signals
 import contact_finds
 import contacts
 import dossier
 import maintenance
-from ui_core import esc, table
+from ui_core import details, esc, table
+from ui_views import draft_button
 
 RISK_CLASS = {
     dossier.RISK_RED: "danger",
@@ -161,7 +163,44 @@ def render_contacts_for(conn: sqlite3.Connection, name: str) -> str:
     )
 
 
+def render_vacancies_for(conn: sqlite3.Connection, name: str) -> str:
+    """Вакансии этого работодателя, свежие сверху.
+
+    Список тот же, что на странице вакансий, но без фильтра по скорингу: в
+    карточке важно видеть всё, что компания публиковала, включая слабые
+    позиции — они и есть материал для выводов о работодателе.
+    """
+    rows = company_signals.vacancy_rows(conn, name)
+    if not rows:
+        return (
+            "<p class=muted>Вакансий этого работодателя в базе нет. Они попадают сюда "
+            'при сборе — смотри <a href="/">сбор</a>.</p>'
+        )
+    rows = sorted(rows, key=lambda r: str(r["published_at"] or ""), reverse=True)
+    body = []
+    for row in rows:
+        link = '<a href="/vacancy?key={key}">{title}</a>'.format(
+            key=urllib.parse.quote(str(row["key"] or "")), title=esc(row["title"])
+        )
+        body.append(
+            [
+                "<span class=score>{:.0f}</span>".format(float(row["score"] or 0)),
+                link,
+                esc(str(row["published_at"] or "")[:10]),
+                "✓" if row["notified_at"] else "",
+                draft_button(str(row["key"] or ""), "Письмо"),
+            ]
+        )
+    return table(("Скор", "Вакансия", "Опубликована", "В TG", "Письмо"), body)
+
+
 def render_company(conn: sqlite3.Connection, name: str) -> str:
+    """Карточка работодателя: сначала компания, ниже её вакансии, в конце контакты.
+
+    Блоки свёрнуты по умолчанию: порядок чтения здесь и есть смысл страницы —
+    сперва решаем, стоит ли иметь дело с компанией, и только потом ищем, кому
+    писать [OUT-002]. Развёрнутая простыня этот порядок ломает.
+    """
     name = (name or "").strip()
     if not name:
         return "<div class=warn>Компания не указана.</div>"
@@ -188,7 +227,7 @@ def render_company(conn: sqlite3.Connection, name: str) -> str:
     summary = ""
     if row["summary"]:
         summary = (
-            "<h2>Сводка</h2><pre>{text}</pre>"
+            "<h3>Сводка</h3><pre>{text}</pre>"
             "<p class=muted>Собрала: {by}. Флаги и цифры считаются правилами, модель на них "
             "не влияет.</p>"
         ).format(text=esc(row["summary"]), by=esc(row["summary_by"] or "правила"))
@@ -230,21 +269,39 @@ def render_company(conn: sqlite3.Connection, name: str) -> str:
             ("Площадка", "Источник", "Тон", "Оценка", "Фрагмент"), review_rows
         )
 
+    about = (
+        "{summary}"
+        "<h3>История публикаций</h3>{signals}"
+        "<h3>Закономерности</h3>{patterns}"
+        "<h3>Источники</h3>{reviews}"
+    ).format(
+        summary=summary,
+        signals=render_signals(conn, name),
+        patterns=patterns_block,
+        reviews=reviews_block,
+    )
+
+    vacancies = company_signals.vacancy_rows(conn, name)
+    found = contact_finds.for_company(conn, name)
+
     return (
-        "<h2>{company}</h2>{head}{summary}"
-        "<h2>История публикаций</h2>{signals}"
-        "<h2>Контакты</h2>{contacts}"
-        "<h2>Закономерности</h2>{patterns}"
-        "<h2>Источники</h2>{reviews}"
+        "<h2>{company}</h2>{head}"
+        "{about}{jobs}{contacts}"
         '<p><a href="/companies">К компаниям и контактам</a></p>'
     ).format(
         company=esc(name),
         head=head,
-        summary=summary,
-        signals=render_signals(conn, name),
-        contacts=render_contacts_for(conn, name),
-        patterns=patterns_block,
-        reviews=reviews_block,
+        about=details("О компании", "отзывов: {}".format(row["review_count"]), about),
+        jobs=details(
+            "Вакансии компании",
+            "в базе: {}".format(len(vacancies)),
+            render_vacancies_for(conn, name),
+        ),
+        contacts=details(
+            "Контакты",
+            "найдено: {}".format(len(found)),
+            render_contacts_for(conn, name),
+        ),
     )
 
 
@@ -339,4 +396,5 @@ __all__ = (
     "render_companies",
     "render_company",
     "render_signals",
+    "render_vacancies_for",
 )

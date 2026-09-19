@@ -15,6 +15,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timezone
 
+import company_key
 import contacts
 
 SCHEMA = """
@@ -102,15 +103,17 @@ def load(conn: sqlite3.Connection, key: str, company: str | None = None) -> cont
 
 
 def for_company(conn: sqlite3.Connection, company: str, limit: int = 20) -> list[sqlite3.Row]:
-    """Находки по всем вакансиям работодателя — для карточки компании."""
+    """Находки по всем вакансиям работодателя — для карточки компании.
+
+    Название сводится через company_key: «ООО «Ромашка»» и «Ромашка» — один
+    работодатель, иначе половина каналов не попадёт в его карточку.
+    """
     ensure_schema(conn)
-    return conn.execute(
-        """
-        SELECT * FROM contact_finds WHERE company = ?
-        ORDER BY role_rank, found_at DESC LIMIT ?
-        """,
-        (company, limit),
+    rows = conn.execute(
+        "SELECT * FROM contact_finds ORDER BY role_rank, found_at DESC"
     ).fetchall()
+    same = [r for r in rows if r["company"] and company_key.same(r["company"], company)]
+    return same[:limit]
 
 
 def coverage(conn: sqlite3.Connection) -> tuple[int, int]:

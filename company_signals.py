@@ -66,8 +66,7 @@ def vacancy_rows(conn: sqlite3.Connection, company: str) -> list[sqlite3.Row]:
         return []
     rows = conn.execute(
         """
-        SELECT key, company, salary_from, salary_to
-        FROM vacancies
+        SELECT * FROM vacancies
         WHERE company IS NOT NULL AND company <> ''
         """
     ).fetchall()
