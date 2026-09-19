@@ -308,6 +308,9 @@ class HHHtmlClient:
         self.pages_fetched = 0
         self.fallback_pages = 0
         self.empty_pages = 0
+        # Дошли ли до конца выдачи в последнем search: по нему прогон
+        # отличает «вакансии кончились» от «упёрлись в свой потолок».
+        self.exhausted = False
         self.blocked = False
         self.failures: list[str] = []
         self._cookie = cookie
@@ -386,10 +389,20 @@ class HHHtmlClient:
         area: int | Sequence[int] | None = None,
         period: int = 7,
         per_page: int = 50,
-        max_pages: int = 3,
+        max_pages: int = 0,
         extra: dict[str, Any] | None = None,
     ) -> Iterator[Vacancy]:
-        for page in range(max_pages):
+        """max_pages=0 — идти до конца выдачи.
+
+        Потолка страниц по умолчанию нет: при лимите в тысячу вакансий три
+        страницы отдавали половину. Обход всё равно конечен — hh.ru отдаёт
+        пустую страницу, а при зацикливании выдачи страница приходит без единого
+        нового id, и это тоже конец.
+        """
+        seen_ids: set[str] = set()
+        self.exhausted = False
+        page = 0
+        while not max_pages or page < max_pages:
             params: dict[str, Any] = {
                 "text": text,
                 "search_period": period,
@@ -415,14 +428,25 @@ class HHHtmlClient:
                 vacancies = parse_cards_fallback(body)
 
             vacancies = [v for v in vacancies if v.external_id and v.title]
+            fresh = [v for v in vacancies if v.external_id not in seen_ids]
+            seen_ids.update(v.external_id for v in fresh)
             log.info("страница %s: вакансий %s", page, len(vacancies))
-            yield from vacancies
+            yield from fresh
             if not vacancies:
                 if page == 0:
                     # Пустая первая страница по широкому запросу — повод посмотреть глазами.
                     self.empty_pages += 1
                     self._dump(body, "empty-search")
+                self.exhausted = True
                 break
+            if not fresh:
+                # hh.ru после последней страницы повторяет предыдущую.
+                log.info("выдача пошла по кругу на странице %s, дальше нечего брать", page)
+                self.exhausted = True
+                break
+            page += 1
+        else:
+            self.exhausted = False
 
     def vacancy(self, vacancy_id: str) -> dict[str, Any]:
         """Карточка вакансии со страницы: описание и навыки полностью."""

@@ -39,6 +39,7 @@ def collect(
     prefilter = prefilter or settings.prefilter_options()
     seen: dict[str, Vacancy] = {}
     passed: dict[str, Vacancy] = {}
+    stopped_by_limit = False
     queries = [q for q in profile.queries if q.get("text")]
     for index, query in enumerate(queries, start=1):
         if limit and len(passed) >= limit:
@@ -50,7 +51,7 @@ def collect(
             text=text,
             area=query.get("area") or profile.areas or None,
             period=int(query.get("period", 7)),
-            max_pages=int(query.get("max_pages", 3)),
+            max_pages=int(query.get("max_pages") or 0),
             extra=query.get("extra"),
         )
         try:
@@ -74,6 +75,7 @@ def collect(
                     continue
                 passed.setdefault(draft.key, draft)
                 if limit and len(passed) >= limit:
+                    stopped_by_limit = True
                     log.info(
                         "собрали %s вакансий при лимите %s, больше страниц не запрашиваем",
                         len(passed),
@@ -84,4 +86,15 @@ def collect(
             # Генератор закрываем явно: иначе он доживает до сборки мусора и не
             # очевидно когда отпустит соединение.
             pages.close()
+    # Лимит не набран, а страницы кончились — это не сбой сбора, а конец
+    # выдачи: ниже по прогону число вакансий объяснять больше нечем.
+    if limit and not stopped_by_limit and len(passed) < limit:
+        log.warning(
+            "вакансии в выдаче кончились: найдено %s из лимита %s "
+            "(увидели всего %s). Больше по этим запросам hh.ru не отдаёт — "
+            "расширь срок, географию или добавь запрос.",
+            len(passed),
+            limit,
+            len(seen),
+        )
     return seen, passed

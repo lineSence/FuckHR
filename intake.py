@@ -341,7 +341,7 @@ def apply_profile(data: dict[str, Any], patch: Mapping[str, Any]) -> list[str]:
     for text in patch.get("queries", []):
         if text in texts:
             continue
-        queries.append({"text": text, "area": 113, "period": 7, "max_pages": 3})
+        queries.append({"text": text, "area": 113, "period": 7, "max_pages": 0})
         added += 1
     if added:
         data["queries"] = queries

@@ -300,11 +300,16 @@ class HHClient:
         area: int | Sequence[int] | None = None,
         period: int = 7,
         per_page: int = 100,
-        max_pages: int = 5,
+        max_pages: int = 0,
         extra: dict[str, Any] | None = None,
     ) -> Iterator[dict]:
-        """Постраничный поиск. Отдаёт сырые items — без описания и навыков."""
-        for page in range(max_pages):
+        """Постраничный поиск. Отдаёт сырые items — без описания и навыков.
+
+        max_pages=0 — до конца выдачи: API сам сообщает число страниц.
+        """
+        self.exhausted = False
+        page = 0
+        while not max_pages or page < max_pages:
             params: dict[str, Any] = {
                 "text": text,
                 "period": period,
@@ -320,7 +325,9 @@ class HHClient:
             items = payload.get("items", [])
             yield from items
             if page + 1 >= payload.get("pages", 0) or not items:
+                self.exhausted = True
                 break
+            page += 1
 
     def vacancy(self, vacancy_id: str) -> dict:
         return self._get("/vacancies/" + str(vacancy_id))
