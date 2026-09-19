@@ -157,3 +157,80 @@ def test_карточка_без_контакта_говорит_об_этом_�
     assert "Сопроводительное" in card
     # Никаких «Контакт: …» у вакансии без найденного человека быть не должно.
     assert "Контакт:" not in card
+
+
+# --- Предусловие этапа [OUT-002] ---------------------------------------------
+
+
+def _with_dossier(conn: sqlite3.Connection, company: str, risk: str) -> None:
+    import dossier_store
+
+    dossier_store.ensure_schema(conn)
+    conn.execute(
+        "INSERT OR REPLACE INTO company_dossier (company, risk, updated_at) VALUES (?, ?, ?)",
+        (company, risk, "2026-09-18T00:00:00+00:00"),
+    )
+    conn.commit()
+
+
+def _with_detector(conn: sqlite3.Connection, key: str) -> None:
+    import detector
+
+    detector.ensure_schema(conn)
+    detector.store(conn, detector.Report(key=key))
+
+
+def test_без_досье_письмо_не_готовится(conn: sqlite3.Connection) -> None:
+    import detector
+
+    detector.ensure_schema(conn)
+    assert outreach.precondition(conn, _row()) == "нет досье на компанию"
+
+
+def test_красное_досье_закрывает_прямой_контакт(conn: sqlite3.Connection) -> None:
+    _with_dossier(conn, "АКМЕ", "red")
+    _with_detector(conn, "hh:1")
+    assert "красное" in (outreach.precondition(conn, _row()) or "")
+
+
+def test_досье_и_детектор_открывают_этап(conn: sqlite3.Connection) -> None:
+    _with_dossier(conn, "АКМЕ", "yellow")
+    _with_detector(conn, "hh:1")
+    assert outreach.precondition(conn, _row()) is None
+
+
+def test_выборка_пропускает_вакансии_без_досье(conn: sqlite3.Connection, make_vacancy) -> None:
+    import db
+
+    db.upsert_vacancy(conn, make_vacancy(external_id="1", company="АКМЕ"), 80.0, [])
+    key = conn.execute("SELECT key FROM vacancies").fetchone()["key"]
+    assert outreach.top_rows(conn, 50.0, 5) == []
+
+    _with_dossier(conn, "АКМЕ", "yellow")
+    _with_detector(conn, key)
+    assert [row["key"] for row in outreach.top_rows(conn, 50.0, 5)] == [key]
+
+
+def test_follow_up_готовится_один_раз(conn: sqlite3.Connection, make_vacancy) -> None:
+    import datetime as dt
+
+    import db
+
+    db.upsert_vacancy(conn, make_vacancy(external_id="1", company="АКМЕ"), 80.0, [])
+    key = conn.execute("SELECT key FROM vacancies").fetchone()["key"]
+    contacts.ensure_schema(conn)
+    contact_id = contacts.store(
+        conn, key, "АКМЕ", contacts.Candidate(channel_kind="email", channel_value="lead@acme.ru")
+    )
+    contacts.set_status(conn, contact_id, contacts.SENT)
+    old = (
+        dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=outreach.FOLLOW_UP_DAYS + 1)
+    ).replace(microsecond=0).isoformat()
+    conn.execute("UPDATE contacts SET updated_at = ? WHERE id = ?", (old, contact_id))
+    conn.commit()
+
+    cards = outreach.follow_up_cards(conn, ("факт",))
+    assert len(cards) == 1
+    assert "Follow-up" in cards[0][0]
+    # Третьего сообщения не будет [OUT-004].
+    assert outreach.follow_up_cards(conn, ("факт",)) == []

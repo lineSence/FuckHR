@@ -29,9 +29,18 @@ from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramNetworkError
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
+import contacts
 import db
 
 log = logging.getLogger(__name__)
+
+# Кнопки карточки контакта [OUT-006]: меняют только статус в базе.
+CONTACT_ACTIONS = {
+    "sent": ("sent_manually", "Отметил: отправлено"),
+    "other": ("skipped", "Поищу другой контакт в следующем прогоне"),
+    "skip": ("skipped", "Пропустил"),
+    "block": ("blocked", "Больше не пишем этой компании"),
+}
 
 EXPERIENCE_RU = {
     "noExperience": "без опыта",
@@ -92,6 +101,26 @@ def keyboard(key: str) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="👍 Интересно", callback_data=f"fb:good:{key}"),
                 InlineKeyboardButton(text="👎 Мимо", callback_data=f"fb:bad:{key}"),
             ]
+        ]
+    )
+
+
+def contact_keyboard(contact_id: int) -> InlineKeyboardMarkup:
+    """Статусы из [OUT-007]. Отправку система не видит, её отмечает владелец."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Отправил", callback_data=f"ct:sent:{contact_id}"),
+                InlineKeyboardButton(
+                    text="🔁 Другой контакт", callback_data=f"ct:other:{contact_id}"
+                ),
+            ],
+            [
+                InlineKeyboardButton(text="⏭ Пропустить", callback_data=f"ct:skip:{contact_id}"),
+                InlineKeyboardButton(
+                    text="🚫 Не писать", callback_data=f"ct:block:{contact_id}"
+                ),
+            ],
         ]
     )
 
@@ -189,12 +218,38 @@ async def send_alert(token: str, chat_id: str | int, text: str) -> bool:
         await bot.session.close()
 
 
+async def send_contact_card(
+    token: str, chat_id: str | int, text: str, contact_id: int | None = None
+) -> bool:
+    """Карточка контакта с кнопками статуса.
+
+    Без contact_id (dry-run или follow-up) уходит как обычное сообщение:
+    менять статус нечему. parse_mode снят — в тексте письма живут < и &.
+    """
+    bot = _bot(token)
+    try:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            parse_mode=None,
+            disable_web_page_preview=True,
+            reply_markup=contact_keyboard(contact_id) if contact_id else None,
+        )
+        return True
+    except Exception:  # noqa: BLE001 — одна карточка не должна рвать прогон
+        log.exception("не удалось отправить карточку контакта")
+        return False
+    finally:
+        await bot.session.close()
+
+
 async def run_polling(token: str, db_path: str) -> None:
     """Собирает нажатия кнопок в vacancies.feedback."""
     bot = _bot(token)
     dp = Dispatcher()
     conn = db.connect(db_path)
     db.init_schema(conn)
+    contacts.ensure_schema(conn)
 
     @dp.callback_query(F.data.startswith("fb:"))
     async def on_feedback(call: CallbackQuery) -> None:
@@ -212,6 +267,26 @@ async def run_polling(token: str, db_path: str) -> None:
             await call.answer("Карточка не найдена в базе", show_alert=True)
             return
         await call.answer("Записал" if value == "good" else "Понятно")
+
+    @dp.callback_query(F.data.startswith("ct:"))
+    async def on_contact(call: CallbackQuery) -> None:
+        """[OUT-007]: статус контакта меняет владелец, система его не угадывает."""
+        data = call.data or ""
+        try:
+            _, action, raw_id = data.split(":", 2)
+            contact_id = int(raw_id)
+        except ValueError:
+            log.error("непонятный callback_data: %r", data)
+            await call.answer("Не разобрал кнопку", show_alert=True)
+            return
+        known = CONTACT_ACTIONS.get(action)
+        if known is None:
+            await call.answer("Не моя кнопка")
+            return
+        status, reply = known
+        contacts.set_status(conn, contact_id, status)
+        log.info("контакт %s -> %s", contact_id, status)
+        await call.answer(reply)
 
     @dp.callback_query()
     async def on_unknown_callback(call: CallbackQuery) -> None:

@@ -42,7 +42,6 @@ import logging
 import os
 import sqlite3
 import sys
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -52,39 +51,31 @@ import conditions
 import contacts
 import db
 import detector
+import dossier_store
 import llm
 import llm_tasks
 import resume
 import settings
 import websearch
+from dossier_rules import RISK_RED
+# Текст письма и карточки живут в outreach_draft.py [CORE-024]; имена
+# реэкспортируются, чтобы вызовы и тесты не переписывались.
+from outreach_draft import (  # noqa: F401
+    APPLY_CHANNEL,
+    MAX_LETTER_CHARS,
+    NO_CONTACT_NOTE,
+    NO_FACTS_HINT,
+    Draft,
+    apply_candidate,
+    build_draft,
+    build_follow_up,
+    format_card,
+)
 
 log = logging.getLogger("outreach")
 
-MAX_LETTER_CHARS = 1200  # из справочника contact-discovery, §5
 FOLLOW_UP_DAYS = 6  # [OUT-004]: один follow-up через 5–7 дней
 
-NO_FACTS_HINT = (
-    "[заполни блок facts в profile.yaml — без фактов о себе письмо отправлять не стоит]"
-)
-
-# Канал «отклик на площадке»: не контакт человека, а признанное отсутствие контакта.
-APPLY_CHANNEL = "apply"
-NO_CONTACT_NOTE = (
-    "Прямого контакта нет — отклик через площадку, письмо ниже как сопроводительное"
-)
-
-
-@dataclass(frozen=True)
-class Draft:
-    """Готовый черновик. Ничего, чего нет в данных, в нём оказаться не может."""
-
-    subject: str
-    body: str
-    kind: str = "first"
-
-    @property
-    def text(self) -> str:
-        return f"Тема: {self.subject}\n\n{self.body}"
 
 
 def load_facts(profile_path: str | Path = "profile.yaml") -> tuple[str, ...]:
@@ -130,116 +121,42 @@ def collect_facts(
     return load_facts(profile_path)
 
 
-def apply_candidate(row: sqlite3.Row) -> contacts.Candidate:
-    """Заглушка вместо контакта: ссылка на вакансию и явная пометка в notes.
+def follow_up_cards(
+    conn: sqlite3.Connection, facts: Sequence[str], dry_run: bool = False
+) -> list[tuple[str, int | None]]:
+    """Карточки follow-up для писем, отправленных больше FOLLOW_UP_DAYS назад.
 
-    Нужна, чтобы отсутствие контакта было записано в лог контактов как факт, а не
-    исчезало из истории. role_rank остаётся худшим: такая «находка» никогда не
-    должна опережать живого человека при ранжировании [OUT-001].
+    Берутся только контакты со статусом sent_manually: факт отправки ставит
+    владелец кнопкой [OUT-006], напоминать о неотправленном письме незачем.
     """
-    return contacts.Candidate(
-        channel_kind=APPLY_CHANNEL,
-        channel_value=row["url"] or "",
-        role="отклик на площадке",
-        role_rank=99,
-        source_url=row["url"] or None,
-        confidence="low",
-        notes="прямого контакта не нашлось",
-    )
-
-
-def _role_address(candidate: contacts.Candidate) -> str:
-    if candidate.person:
-        return candidate.person.split()[0]
-    if candidate.channel_kind == APPLY_CHANNEL:
-        return "Здравствуйте"
-    if candidate.role_rank >= 7:
-        return "коллеги"
-    return "здравствуйте"
-
-
-def build_draft(
-    row: sqlite3.Row,
-    candidate: contacts.Candidate,
-    facts: Sequence[str] = (),
-    reason: str | None = None,
-) -> Draft:
-    """Собирает письмо по структуре из справочника: задача → факты → шаг → выход.
-
-    Никакой «увлечённости миссией» и никаких достижений, которых нет в резюме
-    или profile.yaml.
-    """
-    title = (row["title"] or "ваша вакансия").strip()
-    generic = candidate.channel_kind == APPLY_CHANNEL
-
-    lines = [f"{_role_address(candidate)}, пишу про вакансию «{title}»."]
-    lines.append(
-        "Могу закрывать задачи по этому стеку без разгона: "
-        + (facts[0] if facts else NO_FACTS_HINT)
-    )
-    if len(facts) > 1:
-        lines.append(facts[1])
-    if reason:
-        lines.append(f"Повод писать именно вам: {reason}")
-    lines.append(
-        "Если задача актуальна — готов на 20 минут разговора или пришлю код по близкой задаче."
-    )
-    if generic:
-        # Просить переадресации у отклика бессмысленно: его читает не тот, кто наймёт.
-        lines.append(
-            "Если удобнее обсудить голосом — напишите, в какое время созвониться."
+    out: list[tuple[str, int | None]] = []
+    for contact in contacts.due_follow_ups(conn, FOLLOW_UP_DAYS):
+        row = conn.execute(
+            "SELECT * FROM vacancies WHERE key = ?", (contact["key"],)
+        ).fetchone()
+        if row is None:
+            continue
+        candidate = contacts.Candidate(
+            channel_kind=contact["channel_kind"],
+            channel_value=contact["channel_value"],
+            person=contact["person"],
+            role=contact["role"],
+            role_rank=int(contact["role_rank"] or 99),
+            source_url=contact["source_url"],
         )
-    else:
-        lines.append("Если найм в эту команду — не ваша зона, подскажите, кто её ведёт.")
-
-    body = "\n\n".join(lines)
-    if len(body) > MAX_LETTER_CHARS:
-        body = body[: MAX_LETTER_CHARS - 1].rstrip() + "…"
-    subject = (
-        f"{title} — сопроводительное" if generic else f"{title} — напрямую, без HR-воронки"
-    )
-    return Draft(subject=subject, body=body)
-
-
-def build_follow_up(row: sqlite3.Row, draft: Draft) -> Draft:
-    """Единственный разрешённый второй контакт. Третьего не будет [OUT-004]."""
-    title = (row["title"] or "вакансию").strip()
-    body = (
-        f"Добрый день. Писал неделю назад про «{title}» — поднимаю ветку один раз.\n\n"
-        "Если задача закрыта или неактуальна — ответ не нужен, больше не потревожу."
-    )
-    return Draft(subject=f"Re: {draft.subject}", body=body, kind="follow_up")
-
-
-def format_card(
-    row: sqlite3.Row,
-    discovery: contacts.Discovery,
-    draft: Draft | None,
-    signal_lines: Sequence[str] = (),
-    condition_lines: Sequence[str] = (),
-) -> str:
-    """Карточка из справочника, §4. Плайн-текст: уходит без parse_mode."""
-    parts = [
-        f"Вакансия: {row['title']}, {row['company'] or 'компания не указана'}",
-        f"Скоринг: {row['score']:.0f}/100",
-    ]
-    if condition_lines:
-        parts.append("Условия:\n" + "\n".join(condition_lines))
-    if signal_lines:
-        parts.append("HR-флаги:\n" + "\n".join(signal_lines))
-
-    generic = any(c.channel_kind == APPLY_CHANNEL for c in discovery.candidates)
-    if generic:
-        parts.append(NO_CONTACT_NOTE)
-    else:
-        parts.extend(contacts.format_contact_lines(discovery))
-    for reason in discovery.dropped[:3]:
-        parts.append(f"Отброшено: {reason}")
-    if draft is not None:
-        label = "Сопроводительное" if generic else "Черновик письма"
-        parts.append(f"{label} (отправляешь сам):\n" + draft.text)
-    parts.append(f"Ссылка: {row['url']}")
-    return "\n\n".join(parts)
+        follow = build_follow_up(row, build_draft(row, candidate, facts))
+        out.append(
+            (
+                "Follow-up (второй и последний) по вакансии "
+                f"{row['title']}, {contact['company'] or 'компания не указана'}\n\n"
+                f"Канал: {candidate.channel_kind} {candidate.channel_value}\n\n"
+                f"{follow.text}\n\nСсылка: {row['url']}",
+                None,
+            )
+        )
+        if not dry_run:
+            contacts.mark_follow_up(conn, int(contact["id"]))
+    return out
 
 
 def company_hits(
@@ -253,13 +170,6 @@ def company_hits(
     if not company or not provider.enabled:
         return []
     return list(provider.search_many(websearch.contact_queries(company), limit=5))
-
-
-def company_pages(
-    provider: websearch.SearchProvider, company: str | None
-) -> list[tuple[str, str]]:
-    """Страницы-кандидаты в виде, который ждёт contacts.discover."""
-    return pages_from_hits(company_hits(provider, company))
 
 
 def pages_from_hits(hits: Sequence[websearch.Hit]) -> list[tuple[str, str]]:
@@ -311,6 +221,7 @@ def process_row(
         company_pages=pages,
         site_url=site_url,
         check_mx=check_mx,
+        vacancy_url=row["url"],
     )
 
     # Этап company. Справка собирается только из уже полученных сниппетов:
@@ -364,17 +275,50 @@ def process_row(
     return discovery, draft, None
 
 
+def precondition(conn: sqlite3.Connection, row: sqlite3.Row) -> str | None:
+    """Причина, по которой письмо готовить рано, или None [OUT-002].
+
+    Досье и вердикт детектора — предусловие этапа, а не украшение карточки:
+    стучаться напрямую в компанию, помеченную как токсичная, бессмысленно.
+    """
+    company = row["company"]
+    if not company:
+        return "компания не указана: досье строить не по чему"
+    card = dossier_store.load(conn, company)
+    if card is None:
+        return "нет досье на компанию"
+    if card["risk"] == RISK_RED:
+        return "досье красное: в такую компанию напрямую не пишем"
+    if detector.load(conn, row["key"]) is None:
+        return "детектор HR-брехни по вакансии ещё не прогонялся"
+    return None
+
+
 def top_rows(conn: sqlite3.Connection, min_score: float, limit: int) -> list[sqlite3.Row]:
-    """Цель — 5 хороших входов, а не 500 писем [CORE-018]."""
-    return conn.execute(
+    """Цель — 5 хороших входов, а не 500 писем [CORE-018].
+
+    Скор — только первый фильтр. Вакансия без досье или с красным досье в
+    выборку не попадает [OUT-002], поэтому строк берётся с запасом.
+    """
+    rows = conn.execute(
         """
         SELECT * FROM vacancies
         WHERE score >= ?
         ORDER BY score DESC, last_seen_at DESC
         LIMIT ?
         """,
-        (min_score, limit),
+        (min_score, max(limit * 5, limit)),
     ).fetchall()
+    out: list[sqlite3.Row] = []
+    for row in rows:
+        reason = precondition(conn, row)
+        if reason:
+            log.info("%s: пропуск — %s", row["key"], reason)
+            continue
+        out.append(row)
+        if len(out) >= limit:
+            break
+    return out
 
 
 def setup_logging(verbose: bool = False) -> None:
@@ -451,7 +395,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         log.info("нет вакансий со скором >= %s", options.min_score)
         return 0
 
-    cards: list[str] = []
+    cards: list[tuple[str, int | None]] = []
     prepared = 0
     generic_cards = 0
     for row in rows:
@@ -471,20 +415,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         best = discovery.candidates[0]
         if best.channel_kind == APPLY_CHANNEL:
             generic_cards += 1
+        contact_id = None
         if not args.dry_run:
-            contacts.store(conn, row["key"], row["company"], best)
+            contact_id = contacts.store(conn, row["key"], row["company"], best)
         cards.append(
-            format_card(
-                row,
-                discovery,
-                draft,
-                detector.load_lines(conn, row["key"]),
-                conditions.lines(conn, row["key"]),
+            (
+                format_card(
+                    row,
+                    discovery,
+                    draft,
+                    detector.load_lines(conn, row["key"]),
+                    conditions.lines(conn, row["key"]),
+                ),
+                contact_id,
             )
         )
         prepared += 1
 
-    for card in cards:
+    cards.extend(follow_up_cards(conn, facts, args.dry_run))
+
+    for card, _ in cards:
         print(card)
         print("-" * 40)
 
@@ -493,8 +443,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if cards and not args.dry_run and token and chat_id:
         import bot as tg
 
-        for card in cards:
-            asyncio.run(tg.send_alert(token, chat_id, card))
+        for card, contact_id in cards:
+            # Кнопки статуса [OUT-006]: без них контакт навсегда остаётся в drafted.
+            asyncio.run(tg.send_contact_card(token, chat_id, card, contact_id))
 
     direct, total = contacts.coverage(conn)
     log.info(
