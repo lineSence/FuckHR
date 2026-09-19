@@ -10,8 +10,8 @@ triggers:
       - wiki/references/llm-providers.md
       - wiki/architecture/model-routing.md
 
-  - id: litellm
-    keywords: [litellm, фолбэк, fallback, ротация, прокси, circuit breaker, cooldown]
+  - id: llm-gateway
+    keywords: [шлюз, gateway, фолбэк, fallback, ротация, прокси, circuit breaker, cooldown]
     load:
       - wiki/architecture/model-routing.md
       - wiki/rules/llm-usage.md
@@ -26,6 +26,7 @@ triggers:
     load:
       - wiki/rules/outreach.md
       - wiki/references/contact-discovery.md
+      - wiki/architecture/sources-and-outreach.md
       - wiki/rules/legal.md
 
   - id: contact-discovery
@@ -33,6 +34,21 @@ triggers:
     load:
       - wiki/references/contact-discovery.md
       - wiki/rules/outreach.md
+
+  - id: tech-stack
+    keywords: [стек, зависимости, библиотека, альтернатива, выбор технологии]
+    load:
+      - wiki/architecture/tech-stack.md
+
+  - id: runtime-windows
+    keywords: [расписание, планировщик, task scheduler, автозапуск, windows, служба]
+    load:
+      - wiki/architecture/runtime-windows.md
+
+  - id: hh-html
+    keywords: [html hh, разбор страницы, селектор, вёрстка hh, fallback разбора, 403]
+    load:
+      - wiki/architecture/hh-html-scraping.md
 
   - id: scraping-sources
     keywords: [hh.ru, hh, джобборд, карьерная страница, greenhouse, lever, ashby, скрейпинг, парсер, капча, open api]

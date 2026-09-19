@@ -1,0 +1,3 @@
+# Только для разработки. В проде (Task Scheduler) не нужно.
+-r requirements.txt
+pytest>=8.2

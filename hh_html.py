@@ -7,6 +7,10 @@
 один жёсткий путь. Сначала извлекается любой найденный JSON состояния, потом по нему
 идёт обход в поисках объектов, похожих на вакансию, и только затем — резервный разбор
 разметки. При редизайне шанс выжить выше, а диагностика понятнее (probe_hh.py).
+
+Когда разбор всё-таки ломается, сырая страница падает в data/failures/. Без неё
+починка парсера превращается в гадание: к следующему запуску hh.ru уже отдаст
+другую верстку, и воспроизвести сбой нечем.
 """
 
 from __future__ import annotations
@@ -17,16 +21,20 @@ import logging
 import random
 import re
 import time
-from typing import Any, Iterator, Sequence
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Iterable, Iterator, Sequence
 
 import httpx
 
-from hh import Vacancy, strip_html
+from hh import Vacancy, normalize_published_at, strip_html
 
 log = logging.getLogger(__name__)
 
 SEARCH_URL = "https://hh.ru/search/vacancy"
 VACANCY_PREFIX = "https://hh.ru/vacancy/"
+FAILURE_DIR = "data/failures"
+FAILURE_KEEP = 5
 
 # Обычные браузерные заголовки. Без Accept-Language hh.ru охотнее показывает капчу.
 BROWSER_HEADERS = {
@@ -56,6 +64,12 @@ STATE_PATTERNS = (
 
 CAPTCHA_MARKERS = ("captcha", "подтвердите, что вы не робот", "вы не робот")
 
+# В сохраняемой странице могут оказаться сессионные токены. Файл лежит в data/
+# (она в .gitignore), но владелец может прислать его в issue — лучше вырезать сразу.
+SECRET_RE = re.compile(
+    r"(hhtoken|hhuid|_xsrf|xsrf|sessid|GMT|crypted_id)=([^;\"'\s<>]{6,})", re.IGNORECASE
+)
+
 
 class BlockedError(RuntimeError):
     """hh.ru показал капчу или забанил запросы."""
@@ -63,6 +77,45 @@ class BlockedError(RuntimeError):
 
 class ExtractionError(RuntimeError):
     """Страница пришла, но вакансии из неё достать не удалось."""
+
+
+def scrub(page: str, secrets: Iterable[str] = ()) -> str:
+    """Убирает из страницы наши cookie и похожие на токены значения."""
+    for secret in secrets:
+        if secret:
+            page = page.replace(secret, "***")
+    return SECRET_RE.sub(lambda m: f"{m.group(1)}=***", page)
+
+
+def prune_failures(directory: str | Path, keep: int = FAILURE_KEEP) -> list[Path]:
+    """Оставляет только `keep` самых свежих дампов: страница hh.ru — это ~1 МБ."""
+    files = sorted(Path(directory).glob("*.html"))
+    removed: list[Path] = []
+    for path in files[: max(0, len(files) - keep)]:
+        try:
+            path.unlink()
+            removed.append(path)
+        except OSError:
+            log.debug("не смог удалить старый дамп %s", path)
+    return removed
+
+
+def dump_failure(
+    page: str,
+    reason: str,
+    directory: str | Path = FAILURE_DIR,
+    secrets: Iterable[str] = (),
+    keep: int = FAILURE_KEEP,
+) -> Path:
+    """Кладёт сырую страницу на диск и возвращает путь к файлу."""
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    slug = re.sub(r"[^a-z0-9]+", "-", reason.lower()).strip("-")[:40] or "failure"
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
+    path = directory / f"{stamp}-{slug}.html"
+    path.write_text(scrub(page, secrets), encoding="utf-8", errors="replace")
+    prune_failures(directory, keep)
+    return path
 
 
 def extract_state(page: str) -> dict[str, Any]:
@@ -184,6 +237,17 @@ def node_to_vacancy(node: dict[str, Any]) -> Vacancy:
     gross = compensation.get("gross")
     currency = _first(compensation, "currencyCode", "currency", "code")
 
+    # Дата публикации приходит в десятке форматов — нормализация живёт в hh.py.
+    published_raw = _first(
+        node,
+        "publicationTime",
+        "publicationDate",
+        "creationTime",
+        "publishedAt",
+        "published_at",
+        "publicationTimeText",
+    )
+
     return Vacancy(
         source="hh.ru",
         external_id=vacancy_id,
@@ -201,7 +265,7 @@ def node_to_vacancy(node: dict[str, Any]) -> Vacancy:
         employment=_name_of(_first(node, "employment", "employmentForm")),
         skills=skills,
         description=" ".join(p for p in snippet_parts if p).strip(),
-        published_at=_name_of(_first(node, "publicationTime", "creationTime", "publishedAt")),
+        published_at=normalize_published_at(published_raw),
     )
 
 
@@ -225,7 +289,11 @@ def parse_cards_fallback(page: str) -> list[Vacancy]:
 
 
 class HHHtmlClient:
-    """Один поток, паузы с дрожанием, собственный backoff. Скромность дешевле бана."""
+    """Один поток, паузы с дрожанием, собственный backoff. Скромность дешевле бана.
+
+    Клиент сам считает признаки нездоровья (pages_fetched, fallback_pages, empty_pages,
+    blocked, failures) — по ним прогон решает, писать ли владельцу (canary.py).
+    """
 
     def __init__(
         self,
@@ -233,8 +301,16 @@ class HHHtmlClient:
         timeout: float = 30.0,
         cookie: str | None = None,
         proxy: str | None = None,
+        failure_dir: str | Path | None = FAILURE_DIR,
     ) -> None:
         self.pause = pause
+        self.failure_dir = failure_dir
+        self.pages_fetched = 0
+        self.fallback_pages = 0
+        self.empty_pages = 0
+        self.blocked = False
+        self.failures: list[str] = []
+        self._cookie = cookie
         headers = dict(BROWSER_HEADERS)
         if cookie:
             headers["Cookie"] = cookie
@@ -257,6 +333,23 @@ class HHHtmlClient:
     def _sleep(self) -> None:
         time.sleep(self.pause + random.uniform(0, 1.0))
 
+    def _dump(self, body: str, reason: str) -> None:
+        """Сохраняет страницу для разбора. Ошибка записи не должна рвать прогон."""
+        if not self.failure_dir:
+            return
+        try:
+            path = dump_failure(
+                body,
+                reason,
+                self.failure_dir,
+                secrets=[self._cookie] if self._cookie else [],
+            )
+        except OSError as exc:
+            log.warning("не смог сохранить страницу сбоя: %s", exc)
+            return
+        self.failures.append(str(path))
+        log.warning("сырая страница сохранена: %s (%s)", path, reason)
+
     def fetch(self, url: str, params: dict[str, Any] | None = None, attempts: int = 3) -> str:
         delay = 5.0
         for attempt in range(1, attempts + 1):
@@ -272,6 +365,8 @@ class HHHtmlClient:
                     attempts,
                 )
                 if attempt == attempts:
+                    self.blocked = True
+                    self._dump(body, f"blocked-{response.status_code}")
                     raise BlockedError(
                         "hh.ru требует капчу или блокирует запросы. Открой hh.ru в браузере, "
                         "пройди капчу и положи свежие cookie в HH_COOKIE, либо увеличь HH_PAUSE"
@@ -280,6 +375,7 @@ class HHHtmlClient:
                 delay *= 2
                 continue
             response.raise_for_status()
+            self.pages_fetched += 1
             self._sleep()
             return body
         raise RuntimeError("unreachable")
@@ -314,12 +410,18 @@ class HHHtmlClient:
                 vacancies = [node_to_vacancy(n) for n in nodes if _first(n, "vacancyId", "id")]
             except ExtractionError as exc:
                 log.warning("JSON состояния не найден (%s), иду по разметке", exc)
+                self.fallback_pages += 1
+                self._dump(body, "no-state")
                 vacancies = parse_cards_fallback(body)
 
             vacancies = [v for v in vacancies if v.external_id and v.title]
             log.info("страница %s: вакансий %s", page, len(vacancies))
             yield from vacancies
             if not vacancies:
+                if page == 0:
+                    # Пустая первая страница по широкому запросу — повод посмотреть глазами.
+                    self.empty_pages += 1
+                    self._dump(body, "empty-search")
                 break
 
     def vacancy(self, vacancy_id: str) -> dict[str, Any]:
@@ -328,6 +430,7 @@ class HHHtmlClient:
         try:
             state = extract_state(body)
         except ExtractionError:
+            self._dump(body, "vacancy-no-state")
             description = ""
             match = re.search(
                 r'data-qa="vacancy-description"[^>]*>(?P<html>.*?)</div>', body, re.DOTALL
@@ -364,4 +467,7 @@ class HHHtmlClient:
             "key_skills": [{"name": s} for s in skills],
             "schedule": {"name": _name_of(_first(best, "workSchedule", "schedule"))},
             "employer": {"name": _name_of(_first(best, "company", "employer"))},
+            "published_at": _first(
+                best, "publicationTime", "publicationDate", "creationTime", "publishedAt"
+            ),
         }
