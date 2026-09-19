@@ -465,7 +465,10 @@ def summarize(gateway: object | None, dossier: Dossier) -> tuple[str | None, str
 
     try:
         answer = gateway.complete(  # type: ignore[attr-defined]
-            "company",
+            # Этап «dossier», а не «company»: в отзывах встречаются имена
+            # сотрудников, и профиль этапа (LOCAL, PERSONAL_STAGES) должен
+            # решать, уходит ли это на внешний прокси [CORE-012].
+            "dossier",
             [{"role": "user", "content": prompt}],
         )
     except Exception as exc:  # noqa: BLE001 — досье важнее красивой сводки

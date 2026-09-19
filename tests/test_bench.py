@@ -245,3 +245,41 @@ def test_ловушка_про_вилку_ловит_число_а_не_поле
     bad = bench.run_case(_gateway({llm.FAST: invented}), case)
     score, note = bench_cases.check(case, bad)
     assert score == 0.0 and "200000" in note
+
+
+def test_кейсы_покрывают_все_этапы_с_вызовом_модели() -> None:
+    """Этап, который ходит в модель, должен быть в наборе: иначе его не сравнить.
+
+    score и embeddings вызова не делают: скоринг детерминированный [CORE-015],
+    а векторы — не текстовая задача, правилами их не оценить.
+    """
+    import llm
+
+    covered = {case.stage for case in bench_cases.CASES}
+    assert covered == set(bench.STAGES)
+    assert set(llm.STAGE_PROFILES) - covered == {"score", "embeddings"}
+
+
+def test_ловушка_разговора_ловит_догадки() -> None:
+    """Из «хочу что-то на Python» критерии не выводятся — их спрашивают."""
+    case = _case("intake: ничего не сказано (ловушка)")
+    guessed = json.dumps(
+        {"questions": [], "profile": {"salary_min_net": 300000}}, ensure_ascii=False
+    )
+    result = bench.run_case(_gateway({llm.SMART: guessed}), case)
+    score, note = bench_cases.check(case, result)
+    assert score == 0.0 and "наугад" in note
+
+    asked = json.dumps(
+        {"questions": ["Какая роль?"], "profile": {}}, ensure_ascii=False
+    )
+    good = bench.run_case(_gateway({llm.SMART: asked}), case)
+    assert bench_cases.check(case, good)[0] == 1.0
+
+
+def test_сводка_по_отзывам_не_дорисовывает_цифры() -> None:
+    case = _case("dossier: сводка по отзывам")
+    invented = "Задержки до 7 месяцев и текучка 80%."
+    result = bench.run_case(_gateway({llm.LOCAL: invented}), case)
+    score, note = bench_cases.check(case, result)
+    assert score == 0.0 and "дорисовала числа" in note

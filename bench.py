@@ -29,13 +29,28 @@ from pathlib import Path
 from typing import Any, Sequence
 
 import bench_cases
+import detector_llm
+import dossier as dossier_mod
+import intake
 import llm
 import llm_tasks
+import resume
+import resume_llm
 from bench_cases import CASES, Case
 
 log = logging.getLogger("bench")
 
-STAGES = ("extract", "company", "contacts", "draft")
+STAGES = (
+    "intake",
+    "extract",
+    "hr_filter",
+    "company",
+    "contacts",
+    "dossier",
+    "draft",
+    "resume_section",
+    "resume_tailor",
+)
 
 # Отчёт последнего прогона: его читает страница «Модель» (ui_bench).
 REPORT_PATH = Path(__file__).resolve().parent / "data" / "bench" / "last.json"
@@ -93,6 +108,37 @@ def run_case(gateway: Any, case: Case) -> Any:
     if case.stage == "draft":
         draft = bench_cases.Draft(body=case.payload["body"])
         return llm_tasks.polish_draft(gateway, draft, case.payload.get("facts", ()))
+    if case.stage == "intake":
+        return intake.ask(gateway, case.payload["text"], {})
+    if case.stage == "hr_filter":
+        return detector_llm.llm_claims(gateway, case.payload["text"])
+    if case.stage == "resume_section":
+        return resume_llm.draft_section(
+            gateway,
+            case.payload["section"],
+            case.payload["answer"],
+            case.payload.get("role_hint", ""),
+        )
+    if case.stage == "resume_tailor":
+        blocks = [
+            resume.Block(
+                id=number,
+                section=section,
+                position=number,
+                heading="",
+                body=body,
+                confirmed=True,
+            )
+            for number, (section, body) in enumerate(case.payload["blocks"], start=1)
+        ]
+        return resume_llm.pick_blocks(gateway, blocks, case.payload["vacancy"])
+    if case.stage == "dossier":
+        reviews = tuple(
+            dossier_mod.Review(url="https://example/{}".format(i), site=site, body=body)
+            for i, (site, body) in enumerate(case.payload["reviews"])
+        )
+        card = dossier_mod.Dossier(company=case.payload["company"], reviews=reviews)
+        return dossier_mod.summarize(gateway, card)[0]
     raise ValueError("неизвестный этап: {}".format(case.stage))
 
 

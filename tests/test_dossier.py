@@ -193,7 +193,9 @@ def test_модель_меняет_только_сводку():
     с_моделью = dossier.build("ООО Ромашка", StubProvider(hits), gateway=gateway)
     без_модели = dossier.build("ООО Ромашка", StubProvider(hits))
 
-    assert gateway.stages == ["company"]
+    # Этап свой: в отзывах встречаются имена сотрудников, и маршрут решает
+    # профиль этапа dossier (LOCAL, персональный), а не профиль справки о компании.
+    assert gateway.stages == ["dossier"]
     assert с_моделью.summary_by == "модель"
     assert без_модели.summary_by == "правила"
     # Риск и флаги считаются правилами — модель на них не влияет [CORE-015].
