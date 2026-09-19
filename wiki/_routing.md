@@ -78,6 +78,11 @@ triggers:
     load:
       - docs/ai-text.md
 
+  - id: review-quality
+    keywords: [легитимность отзыва, мусор на странице, скрейпинг отзовиков, разбор страницы, шаблон площадки, фикстуры вёрстки]
+    load:
+      - docs/review-quality.md
+
   - id: legal
     keywords: [152-фз, gdpr, tos, персональные данные, телефон, linkedin, юридика, osint, спам, отказ от рассылки]
     load:

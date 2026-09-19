@@ -42,6 +42,7 @@ X — читайте на …»). Досье собиралось из таки�
 
 from __future__ import annotations
 
+import hashlib
 import html as html_mod
 import json
 import logging
@@ -54,6 +55,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable, Sequence
+from urllib.parse import urlparse
 
 log = logging.getLogger(__name__)
 
@@ -121,6 +123,10 @@ class FetchUsage:
 
 
 MAX_FETCH_WORKERS = 8  # площадки отзывов не любят частых заходов
+
+# ВРЕМЕННО: потолки сбора образцов вёрстки (см. PageFetcher._dump_page).
+PAGE_DUMP_PER_SITE = 2
+PAGE_DUMP_CHARS = 400_000
 
 
 def fetch_workers() -> int:
@@ -241,6 +247,7 @@ class PageFetcher:
         pause: float = 1.0,
         transport: Callable[[str], str] | None = None,
         dump_path: str | None = None,
+        page_dump_dir: str | None = None,
     ) -> None:
         self.enabled = bool(enabled)
         self.conn = conn
@@ -251,6 +258,11 @@ class PageFetcher:
         self.pause = max(0.0, float(pause))
         self.transport = transport
         self.dump_path = (dump_path or "").strip() or None
+        # ВРЕМЕННО: сбор образцов вёрстки для golden-фикстур разбора.
+        # Удалить вместе с PAGE_DUMP_PER_SITE и _dump_page, как только фикстуры
+        # по всем площадкам из REVIEW_SITES лежат в tests/fixtures.
+        self.page_dump_dir = (page_dump_dir or "").strip() or None
+        self._dumped: dict[str, int] = {}
         self.usage = FetchUsage()
         # Отдельные отзывы прочитанных страниц: url → кортеж ReviewItem.
         self.items: dict[str, tuple[object, ...]] = {}
@@ -277,6 +289,7 @@ class PageFetcher:
             cache_days=int(number("REVIEW_FETCH_CACHE_DAYS", str(CACHE_DAYS))),
             pause=number("REVIEW_FETCH_PAUSE", "1.0"),
             dump_path=os.getenv("REVIEW_DUMP_PATH"),
+            page_dump_dir=os.getenv("REVIEW_PAGE_DUMP_DIR"),
         )
 
     def _cache_get(self, url: str) -> str | None:
@@ -329,6 +342,31 @@ class PageFetcher:
         except OSError as exc:
             log.warning("дамп отзывов не пишется (%s): %s", self.dump_path, exc)
 
+    def _dump_page(self, url: str, raw: str) -> None:
+        """ВРЕМЕННО: сохраняет сырой HTML страницы как образец вёрстки.
+
+        Нужно ровно на один заход: по паре страниц с каждой площадки, чтобы
+        собрать golden-фикстуры разбора. Файлы кладутся руками в тесты и
+        обезличиваются (имена и ники авторов вырезаются, [CORE-012]).
+        Сама функция удаляется вместе с REVIEW_PAGE_DUMP_DIR, как только
+        фикстуры на месте: постоянно копить чужие страницы незачем.
+        """
+        if not self.page_dump_dir or not raw:
+            return
+        host = urlparse(url).netloc.lower()
+        if self._dumped.get(host, 0) >= PAGE_DUMP_PER_SITE:
+            return
+        try:
+            folder = Path(self.page_dump_dir)
+            folder.mkdir(parents=True, exist_ok=True)
+            digest = hashlib.sha256(url.encode()).hexdigest()[:8]
+            name = "{}-{}.html".format(host or "page", digest)
+            (folder / name).write_text(raw[:PAGE_DUMP_CHARS], encoding="utf-8")
+            self._dumped[host] = self._dumped.get(host, 0) + 1
+            log.info("образец страницы сохранён: %s", name)
+        except OSError as exc:
+            log.warning("образец страницы не сохранён (%s): %s", url, exc)
+
     def _http_get(self, url: str) -> str:
         import httpx
 
@@ -374,6 +412,7 @@ class PageFetcher:
         if not text:
             log.info("на странице не нашлось текста отзывов: %s", url)
         self.items[url] = split_items(raw, url, text)
+        self._dump_page(url, raw)  # ВРЕМЕННО, см. _dump_page
         self._dump(url, text)
         self._cache_put(url, text)
         if self.pause and self.transport is None:

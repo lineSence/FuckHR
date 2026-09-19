@@ -37,6 +37,7 @@ dossier.build(company)
   → websearch.SearchProvider   поиск по сайтам отзывов (SearXNG / Tavily / Brave), кэш search_cache
   → reviewpage.PageFetcher     чтение самих страниц отзывов, кэш page_cache на 30 дней
   → reviewitems.split_page     страница → отдельные отзывы: дата, оценка, плюсы, минусы
+  → reviewlegit.filter_items   отсев не-отзывов: меню, реклама, отзывы клиентов
   → aitext.assess              признак сгенерированного текста (docs/ai-text.md)
   → fake_reviews.score_items   fake_score по сигналам накрутки, без модели
   → fake_company.evaluate      метка компании и средняя без заказных отзывов
@@ -99,6 +100,7 @@ dossier.build(company)
 | `reviewpage.py` | загрузка и очистка страниц отзывов, кэш страниц |
 | `dossier.py` | досье: сборка, риск, реэкспорт имён |
 | `dossier_text.py`, `dossier_summary.py` | разбор текста отзывов и сводка/строки карточки |
+| `reviewlegit.py`, `reviewlegit_rules.py`, `reviewlegit_store.py` | легитимность отзыва, шаблоны площадок, здоровье сбора (`docs/review-quality.md`) |
 | `reviewitems.py` | страница → отдельные отзывы: дата, оценка, плюсы, минусы |
 | `fake_reviews.py`, `fake_rules.py`, `fake_company.py`, `fake_store.py`, `fake_llm.py` | детекция накрученных отзывов: сигналы, пороги, метка компании, хранение, сигнал модели |
 | `market.py`, `market_rules.py`, `market_store.py`, `market_company.py` | рынок зарплат: разбор вилки и среза, пороги, хранение и срезы, метка работодателя (`docs/market-salary.md`) |
@@ -123,7 +125,7 @@ dossier.build(company)
 
 Один файл SQLite (`data/fuckhr.sqlite3`). Таблицы: `intake_log`, `vacancies`, `vacancy_snapshots`, `vacancy_conditions`,
 `hr_signals`, `company_dossier`, `company_reviews`, `contacts`, `resumes`, `resume_blocks`,
-`resume_versions`, `review_items`, `review_hashes`, `market_observations`, `market_stats`, `company_market`,
+`resume_versions`, `review_items`, `review_hashes`, `site_lines`, `site_health`, `market_observations`, `market_stats`, `company_market`,
 `search_cache`, `page_cache`, `llm_cache`.
 
 `review_hashes` — общая таблица хэшей на всю базу: она ловит фабрики отзывов, работающие сразу на

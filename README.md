@@ -92,6 +92,7 @@ hh.ru (HTML поиска, ADR-015) → score.py → db.py (SQLite)
 - [`docs/testing.md`](./docs/testing.md) — тесты
 - [`docs/detector.md`](./docs/detector.md) — детектор HR-брехни
 - [`docs/market-salary.md`](./docs/market-salary.md) — рынок зарплат и метки отклонений
+- [`docs/review-quality.md`](./docs/review-quality.md) — легитимность отзывов и проверка разбора
 - [`docs/ai-text.md`](./docs/ai-text.md) — признаки сгенерированного текста
 - [`docs/contacts.md`](./docs/contacts.md) — поиск контактов и письма
 - [`docs/knowledge-lifecycle.md`](./docs/knowledge-lifecycle.md) — как растут знания агента

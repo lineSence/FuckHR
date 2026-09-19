@@ -288,7 +288,8 @@ def test_полный_прогон_от_страницы_до_карточки(c
 
     блоки = "".join(
         '<div class="review-card"><time datetime="2026-03-0{}"></time>'
-        "<p>{} Вариант {}</p><p>Минусы: нет</p></div>".format(i + 1, КЛИШЕ, i)
+        "<p>Отзыв об ООО Ромашка. {} Вариант {}</p>"
+        "<p>Минусы: нет</p></div>".format(i + 1, КЛИШЕ, i)
         for i in range(6)
     )
     url = "https://dreamjob.ru/c/1"

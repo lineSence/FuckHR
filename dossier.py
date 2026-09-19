@@ -56,6 +56,8 @@ import contacts
 import fake_company
 import aitext_llm
 import fake_llm
+import reviewlegit
+import reviewlegit_store
 import fake_reviews
 import fake_rules
 import fake_store
@@ -337,7 +339,10 @@ def analyze(
 
 
 def items_from_reviews(
-    reviews: Sequence[Review], fetcher: object | None
+    reviews: Sequence[Review],
+    fetcher: object | None,
+    company: str = "",
+    conn: object | None = None,
 ) -> tuple[ReviewItem, ...]:
     """Собирает отдельные отзывы всех прочитанных страниц в один список.
 
@@ -349,9 +354,72 @@ def items_from_reviews(
     pages = getattr(fetcher, "items", None) or {}
     out: list[ReviewItem] = []
     for review in reviews:
-        for item in pages.get(review.url, ()):  # type: ignore[union-attr]
+        page_items = list(pages.get(review.url, ()))  # type: ignore[union-attr]
+        if not page_items:
+            continue
+        # Страница без названия нашей компании — чужая: поиск часто приводит на
+        # подборку «отзывы о работодателях города». Решение владельца —
+        # выбрасывать такую страницу целиком, а не понижать доверие.
+        haystack = " ".join(
+            [review.title, review.body] + [str(getattr(i, "text", "")) for i in page_items]
+        )
+        if company and not reviewlegit.company_on_page(haystack, company):
+            log.info("страница %s не про %s, пропускаю", review.url, company)
+            _note_site(conn, review.site, pages=1, dropped=len(page_items))
+            continue
+
+        marks = _boilerplate(conn, review.site)
+        kept, dropped = reviewlegit.filter_items(page_items, marks)
+        for item in kept:
             out.append(replace(item, index=len(out), site=review.site, url=review.url))
+        for item, check in dropped:
+            log.info("отброшен фрагмент со страницы %s: %s", review.url, check.why)
+        _remember_lines(conn, review.site, company, page_items)
+        _note_site(
+            conn,
+            review.site,
+            pages=1,
+            items=len(kept),
+            dropped=len(dropped),
+            no_date=sum(1 for i in kept if not getattr(i, "dated_at", None)),
+        )
     return tuple(out)
+
+
+def _boilerplate(conn: object | None, site: str) -> frozenset[str]:
+    """Шаблонные строки площадки. База недоступна — работаем без стоп-листа."""
+    if conn is None or not site:
+        return frozenset()
+    try:
+        return reviewlegit_store.boilerplate(conn, site)  # type: ignore[arg-type]
+    except Exception as exc:  # noqa: BLE001 — [CORE-017]
+        log.warning("стоп-лист площадки %s не прочитан: %s", site, exc)
+        return frozenset()
+
+
+def _remember_lines(
+    conn: object | None, site: str, company: str, items: Sequence[object]
+) -> None:
+    if conn is None or not site or not company:
+        return
+    try:
+        reviewlegit_store.remember(
+            conn,  # type: ignore[arg-type]
+            site,
+            company,
+            [reviewlegit.line_hash(str(getattr(i, "text", ""))) for i in items],
+        )
+    except Exception as exc:  # noqa: BLE001 — [CORE-017]
+        log.warning("строки площадки %s не записаны: %s", site, exc)
+
+
+def _note_site(conn: object | None, site: str, **counters: int) -> None:
+    if conn is None or not site:
+        return
+    try:
+        reviewlegit_store.note(conn, site, **counters)  # type: ignore[arg-type]
+    except Exception as exc:  # noqa: BLE001 — [CORE-017]
+        log.warning("итоги площадки %s не записаны: %s", site, exc)
 
 
 def score_reviews(
@@ -466,7 +534,7 @@ def build(
     if conn is None:
         conn = getattr(provider, "conn", None)
     reviews = reviews_from_hits(hits, fetcher=fetcher)
-    items = items_from_reviews(reviews, fetcher)
+    items = items_from_reviews(reviews, fetcher, company=company, conn=conn)
     verdicts = score_reviews(company, items, conn=conn, gateway=gateway)
     dossier = analyze(company, reviews, site_url=site_url, items=items, verdicts=verdicts)
     summary, by = summarize(gateway, dossier)

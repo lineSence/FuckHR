@@ -19,6 +19,7 @@
 
 | Шаг | Где |
 | --- | --- |
+| Отсев не-отзывов (меню, реклама, клиентские отзывы) | `reviewlegit`, `docs/review-quality.md` |
 | Страница → отдельные отзывы (дата, оценка, плюсы, минусы, ответ работодателя) | `reviewitems.split_page` |
 | Сигналы уровня отзыва и `fake_score` | `fake_reviews.score_items` |
 | Агрегаты и метка компании | `fake_company.evaluate` |

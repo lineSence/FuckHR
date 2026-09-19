@@ -22,6 +22,7 @@ import fake_rules
 import fake_store
 import market_rules
 import market_store
+import reviewlegit_store
 from ui_cleanup import CONFIRM_WORD, apply_cleanup, render_cleanup
 from ui_core import details, esc, sort_head, sort_pick, table
 from ui_views import draft_button
@@ -162,6 +163,14 @@ def render_companies(conn: sqlite3.Connection, sort: str = "updated") -> str:
         "<p class=muted>Досье: {total} · с красными флагами: {red} · без единого отзыва: "
         "{empty}</p>"
     ).format(total=total, red=red, empty=empty)
+    health = reviewlegit_store.health_line(reviewlegit_store.health(conn))
+    if health:
+        # Отброшенное показывается числом: поломку разбора иначе видно только
+        # по внезапно опустевшим досье.
+        summary += (
+            "<p class=muted>Сбор отзывов — {}. Выброшенное не отзывы: меню, "
+            "реклама, ответы работодателя и отзывы клиентов о товаре.</p>"
+        ).format(esc(health))
     hint = (
         "<p class=muted>Красный статус ставится только по повторяющимся жалобам или "
         "тяжёлым признакам вроде задержки зарплаты. Один злой отзыв — ещё не "
