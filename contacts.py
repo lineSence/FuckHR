@@ -19,6 +19,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Iterable, Sequence
 from urllib.parse import urlsplit
 
+import company_key
+
 log = logging.getLogger(__name__)
 
 SCHEMA = """
@@ -37,7 +39,8 @@ CREATE TABLE IF NOT EXISTS contacts (
     status TEXT NOT NULL DEFAULT 'drafted',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    notes TEXT
+    notes TEXT,
+    follow_up_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_contacts_key ON contacts(key);
 CREATE INDEX IF NOT EXISTS idx_contacts_person ON contacts(person, company);
@@ -55,63 +58,25 @@ STATUSES = (DRAFTED, SENT, REPLIED, BLOCKED, SKIPPED)
 
 REPEAT_AFTER_DAYS = 90  # [OUT-007]: тот же человек — не раньше трёх месяцев
 
-# Приоритет ролей из [OUT-001]: меньше rank — ближе к нанимающему менеджеру.
-ROLE_RANKS: tuple[tuple[int, str, tuple[str, ...]], ...] = (
-    (1, "руководитель направления", (
-        "руководитель разработки", "руководитель отдела", "руководитель направления",
-        "head of engineering", "head of development", "head of backend", "engineering manager",
-    )),
-    (2, "тимлид", ("тимлид", "тим-лид", "team lead", "teamlead", "tech lead", "ведущий разработчик")),
-    (3, "технический директор", ("cto", "технический директор", "vp of engineering")),
-    (4, "коллега на той же роли", (
-        "python", "backend", "бекенд", "разработчик", "developer", "engineer",
-    )),
-    (8, "рекрутер", ("рекрутер", "recruiter", "hrbp", "hr-менеджер", "talent")),
+# Таблицы и регулярки живут в contacts_rules.py [CORE-024]; имена
+# реэкспортируются, чтобы вызовы и тесты не переписывались.
+from contacts_rules import (  # noqa: F401
+    BANNED_CHANNEL_HOSTS,
+    CONFIDENCE_RU,
+    EMAIL_RE,
+    EMAIL_TEMPLATES,
+    GENERIC_MAILBOXES,
+    GITHUB_PROFILE,
+    GITHUB_RE,
+    HR_MAILBOXES,
+    LEAD_RANKS,
+    NAME_RE,
+    PHONE_RE,
+    ROLE_RANKS,
+    TELEGRAM_NICK_RE,
+    TELEGRAM_RE,
+    TRANSLIT,
 )
-
-# Адреса, по которым письмо упадёт ровно в ту воронку, которую обходим.
-HR_MAILBOXES = (
-    "hr", "job", "jobs", "vacancy", "vacancies", "career", "careers", "resume",
-    "cv", "recruit", "recruiting", "rabota", "personal",
-)
-GENERIC_MAILBOXES = ("info", "office", "mail", "contact", "contacts", "hello", "welcome")
-
-EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]{2,}", re.UNICODE)
-TELEGRAM_RE = re.compile(r"(?:t\.me/|telegram[:\s]+@?|@)([A-Za-z][A-Za-z0-9_]{4,31})")
-GITHUB_RE = re.compile(r"github\.com/([A-Za-z0-9][A-Za-z0-9-]{0,38})")
-# Телефоны не собираем вообще: личный мобильный запрещён [CORE-013], а
-# отличить личный от рабочего по цифрам нельзя.
-PHONE_RE = re.compile(r"(?:\+7|8)[\s(-]?\d{3}[\s)-]?\d{3}[\s-]?\d{2}[\s-]?\d{2}")
-
-BANNED_CHANNEL_HOSTS = (
-    "vk.com", "ok.ru", "instagram.com", "facebook.com", "tiktok.com", "twitter.com", "x.com",
-)
-
-NAME_RE = re.compile(r"\b([\u0410-\u042f\u0401][\u0430-\u044f\u0451]{2,})\s+([\u0410-\u042f\u0401][\u0430-\u044f\u0451]{2,})\b")
-
-TRANSLIT = {
-    "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e", "ж": "zh",
-    "з": "z", "и": "i", "й": "i", "к": "k", "л": "l", "м": "m", "н": "n", "о": "o",
-    "п": "p", "р": "r", "с": "s", "т": "t", "у": "u", "ф": "f", "х": "kh", "ц": "ts",
-    "ч": "ch", "ш": "sh", "щ": "shch", "ъ": "", "ы": "y", "ь": "", "э": "e",
-    "ю": "iu", "я": "ia",
-}
-
-EMAIL_TEMPLATES = (
-    "{first}.{last}@{domain}",
-    "{f}.{last}@{domain}",
-    "{first}@{domain}",
-    "{f}{last}@{domain}",
-    "{first}_{last}@{domain}",
-)
-
-GITHUB_PROFILE = "https://github.com/"
-
-CONFIDENCE_RU = {
-    "high": "высокая",
-    "medium": "средняя",
-    "low": "низкая",
-}
 
 
 @dataclass(frozen=True)
@@ -153,6 +118,10 @@ class Discovery:
 def ensure_schema(conn: sqlite3.Connection) -> None:
     """Создаёт таблицу контактов отдельно от основной схемы."""
     conn.executescript(SCHEMA)
+    # Миграция баз, созданных до follow-up: ронять прогон из-за неё нельзя.
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(contacts)")}
+    if "follow_up_at" not in columns:
+        conn.execute("ALTER TABLE contacts ADD COLUMN follow_up_at TEXT")
     conn.commit()
 
 
@@ -257,9 +226,15 @@ def extract_channels(text: str, source_url: str | None = None) -> tuple[tuple[Ca
     for match in PHONE_RE.finditer(text or ""):
         dropped.append(f"телефон {match.group(0)} пропущен: личные номера запрещены")
 
+    low = (text or "").lower()
     for host in BANNED_CHANNEL_HOSTS:
-        if host in (text or "").lower():
+        if host in low:
             dropped.append(f"ссылка на {host} пропущена: личные соцсети не канал")
+    if source_url and any(host in source_url.lower() for host in BANNED_CHANNEL_HOSTS):
+        # Личная соцсеть не источник рабочего контакта [CORE-013]: страница
+        # отбрасывается целиком, а не только ссылки в её тексте.
+        dropped.append(f"страница {source_url} пропущена: личные соцсети не канал")
+        return (), tuple(dropped)
 
     for email in EMAIL_RE.findall(text or ""):
         email = email.strip(".,;").lower()
@@ -278,7 +253,7 @@ def extract_channels(text: str, source_url: str | None = None) -> tuple[tuple[Ca
             )
         )
 
-    for nick in TELEGRAM_RE.findall(text or ""):
+    for nick in TELEGRAM_RE.findall(text or "") + TELEGRAM_NICK_RE.findall(text or ""):
         value = f"@{nick}"
         if value.lower() in seen:
             continue
@@ -314,17 +289,40 @@ def extract_channels(text: str, source_url: str | None = None) -> tuple[tuple[Ca
     return tuple(candidates), tuple(dropped)
 
 
-def extract_names(text: str, limit: int = 5) -> tuple[str, ...]:
-    """Имена рядом с должностью руководителя. Грубо, но проверяемо."""
-    out: list[str] = []
+def lead_rank(sentence: str) -> tuple[int, str | None]:
+    """Должность руководителя в предложении или (99, None).
+
+    Отдельно от role_rank: там ранг 4 получают слова «python» и «разработчик»,
+    и по ним предложение «Наша команда Python: Иван Петров» выглядело
+    руководительским.
+    """
+    low = (sentence or "").lower()
+    for rank, label, needles in LEAD_RANKS:
+        for needle in needles:
+            if re.search(rf"(?<![\w-]){re.escape(needle)}(?![\w-])", low):
+                return rank, label
+    return 99, None
+
+
+def extract_names(text: str, limit: int = 5) -> tuple[tuple[str, int, str], ...]:
+    """(имя, ранг, должность из текста) для предложений с реальной должностью.
+
+    Ранг берётся из найденной должности, а не из факта совпадения: иначе в
+    карточку уезжает утверждение о должности, которого в источнике нет
+    [LEG-004], [OUT-001].
+    """
+    out: list[tuple[str, int, str]] = []
+    seen: set[str] = set()
     for sentence in re.split(r"[\n.;!?]", text or ""):
-        rank, _ = role_rank(sentence)
-        if rank > 4:
+        rank, label = lead_rank(sentence)
+        if label is None:
             continue
         for first, last in NAME_RE.findall(sentence):
             name = f"{first} {last}"
-            if name not in out:
-                out.append(name)
+            if name in seen:
+                continue
+            seen.add(name)
+            out.append((name, rank, label))
             if len(out) >= limit:
                 return tuple(out)
     return tuple(out)
@@ -347,42 +345,56 @@ def discover(
     company_pages: Sequence[tuple[str, str]] = (),
     site_url: str | None = None,
     check_mx: bool = False,
+    vacancy_url: str | None = None,
 ) -> Discovery:
     """Детерминированный проход: сначала то, что уже есть в данных (ADR-011).
 
     company_pages — пары (url, текст) со страниц «Команда»/«О нас»/блога,
     если их собрал предыдущий шаг. Внешний поиск сюда не входит.
+
+    vacancy_url — публикация, из которой взят текст вакансии: контакт без
+    ссылки на источник не используется [LEG-004].
     """
     found: list[Candidate] = []
     dropped: list[str] = []
 
-    vacancy_channels, vacancy_dropped = extract_channels(vacancy_text)
+    vacancy_channels, vacancy_dropped = extract_channels(vacancy_text, source_url=vacancy_url)
     found.extend(vacancy_channels)
     dropped.extend(vacancy_dropped)
 
     domain = domain_of(site_url)
+    leads: list[tuple[str, int, str, str]] = []  # имя, ранг, должность, источник
     for url, text in company_pages:
         page_channels, page_dropped = extract_channels(text, source_url=url)
         found.extend(page_channels)
         dropped.extend(page_dropped)
         domain = domain or domain_of(url)
+        leads.extend((name, rank, label, url) for name, rank, label in extract_names(text))
 
-        for name in extract_names(text):
-            for email in guess_emails(name, domain or ""):
-                found.append(
-                    Candidate(
-                        channel_kind="email",
-                        channel_value=email,
-                        person=name,
-                        role="руководитель по странице команды",
-                        role_rank=2,
-                        source_url=url,
-                        confidence="low",
-                        guessed=True,
-                        notes="адрес выведен по шаблону, не подтверждён",
-                    )
+    # Один человек на компанию: письма нескольким сотрудникам запрещены
+    # [OUT-004], [CORE-022]. Берём самого близкого к найму.
+    if leads and domain:
+        name, rank, label, url = min(leads, key=lambda item: item[1])
+        for email in guess_emails(name, domain):
+            found.append(
+                Candidate(
+                    channel_kind="email",
+                    channel_value=email,
+                    person=name,
+                    role=f"{label} (со страницы команды)",
+                    role_rank=rank,
+                    source_url=url,
+                    confidence="low",
+                    guessed=True,
+                    notes="адрес выведен по шаблону, не подтверждён",
                 )
-                break  # один вариант на человека: перебор запрещён [OUT-008]
+            )
+            break  # один вариант на человека: перебор запрещён [OUT-008]
+        if len(leads) > 1:
+            dropped.append(
+                f"остальные имена со страниц команды ({len(leads) - 1}) пропущены: "
+                "одна компания — один адресат"
+            )
 
     if check_mx and domain:
         has_mx = domain_has_mx(domain)
@@ -391,6 +403,14 @@ def discover(
             found = [c for c in found if not (c.guessed and c.channel_value.endswith(f"@{domain}"))]
             if before != len(found):
                 dropped.append(f"у домена {domain} нет MX-записи, угаданные адреса отброшены")
+
+    # [LEG-004]: адрес без ссылки на публикацию не используется.
+    without_source = [c for c in found if not c.source_url]
+    for cand in without_source:
+        dropped.append(
+            f"{cand.channel_kind} {cand.channel_value} пропущен: нет ссылки на публикацию"
+        )
+    found = [c for c in found if c.source_url]
 
     return Discovery(
         key=key,
@@ -401,14 +421,20 @@ def discover(
 
 
 def is_blocked(conn: sqlite3.Connection, company: str | None, person: str | None = None) -> bool:
-    """Отказ и «не писать» окончательны [OUT-009]."""
+    """Отказ и «не писать» окончательны [OUT-009], [LEG-007].
+
+    Компании сравниваются через company_key: блок «Ромашка» обязан закрывать и
+    «ООО «Ромашка»». Строки читаются по индексу — модуль не должен зависеть от
+    того, выставил ли вызывающий row_factory.
+    """
     rows = conn.execute(
         "SELECT company, person FROM contacts WHERE status = ?", (BLOCKED,)
     ).fetchall()
     for row in rows:
-        if company and row["company"] and row["company"] == company:
+        blocked_company, blocked_person = row[0], row[1]
+        if company and blocked_company and company_key.same(company, blocked_company):
             return True
-        if person and row["person"] and row["person"] == person:
+        if person and blocked_person and person.strip().lower() == blocked_person.strip().lower():
             return True
     return False
 
@@ -449,10 +475,25 @@ def store(
     candidate: Candidate,
     status: str = DRAFTED,
 ) -> int:
-    """Пишет контакт в лог и возвращает id записи."""
+    """Пишет контакт в лог и возвращает id записи.
+
+    Повторный прогон по той же вакансии не плодит одинаковые строки: тот же
+    канал по тому же ключу обновляется, а не дублируется.
+    """
     if status not in STATUSES:
         raise ValueError(f"неизвестный статус: {status}")
     now = _now()
+    existing = conn.execute(
+        "SELECT id FROM contacts WHERE key = ? AND channel_value = ? LIMIT 1",
+        (key, candidate.channel_value),
+    ).fetchone()
+    if existing is not None:
+        contact_id = int(existing[0])
+        conn.execute(
+            "UPDATE contacts SET updated_at = ? WHERE id = ?", (now, contact_id)
+        )
+        conn.commit()
+        return contact_id
     cur = conn.execute(
         """
         INSERT INTO contacts
@@ -477,6 +518,34 @@ def set_status(conn: sqlite3.Connection, contact_id: int, status: str) -> None:
     conn.execute(
         "UPDATE contacts SET status = ?, updated_at = ? WHERE id = ?",
         (status, _now(), contact_id),
+    )
+    conn.commit()
+
+
+def due_follow_ups(
+    conn: sqlite3.Connection, days: int, now: datetime | None = None
+) -> list[sqlite3.Row]:
+    """Контакты, которым пора единственный follow-up [OUT-004].
+
+    Только те, где владелец отметил отправку кнопкой: система факта отправки
+    не видит, а напоминать о письме, которого не было, бессмысленно.
+    """
+    now = now or datetime.now(timezone.utc)
+    cutoff = (now - timedelta(days=days)).replace(microsecond=0).isoformat()
+    return conn.execute(
+        """
+        SELECT * FROM contacts
+        WHERE status = ? AND follow_up_at IS NULL AND updated_at <= ?
+        ORDER BY updated_at
+        """,
+        (SENT, cutoff),
+    ).fetchall()
+
+
+def mark_follow_up(conn: sqlite3.Connection, contact_id: int) -> None:
+    """Второй контакт отмечается сразу: третьего не будет [OUT-004]."""
+    conn.execute(
+        "UPDATE contacts SET follow_up_at = ? WHERE id = ?", (_now(), contact_id)
     )
     conn.commit()
 

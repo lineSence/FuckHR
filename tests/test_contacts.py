@@ -121,3 +121,101 @@ def test_отказ_закрывает_компанию_навсегда(conn: s
     )
     assert contacts.is_blocked(conn, "АКМЕ") is True
     assert contacts.is_blocked(conn, "Другая компания") is False
+
+
+def test_локальная_часть_адреса_не_telegram() -> None:
+    """Голая @ в регулярке делала «рабочий канал» из любого email [OUT-003]."""
+    found, _ = contacts.extract_channels(
+        "Пишите на ivan.petrov@romashka.ru", source_url="https://romashka.ru/team"
+    )
+    assert [(c.channel_kind, c.channel_value) for c in found] == [
+        ("email", "ivan.petrov@romashka.ru")
+    ]
+
+
+def test_telegram_берётся_только_из_опубликованного_канала() -> None:
+    found, _ = contacts.extract_channels(
+        "Канал t.me/acmelead, telegram: @teamhead, пишите @acmechat",
+        source_url="https://acme.ru/team",
+    )
+    nicks = {c.channel_value for c in found if c.channel_kind == "telegram"}
+    assert nicks == {"@acmelead", "@teamhead", "@acmechat"}
+
+
+def test_слова_стека_не_делают_человека_руководителем() -> None:
+    """Ранг 4 — это «python» и «разработчик», должности по ним не бывает."""
+    assert contacts.extract_names("Наша команда Python: Иван Петров и Мария Сидорова") == ()
+    leads = contacts.extract_names("Руководитель разработки — Иван Петров")
+    assert leads == (("Иван Петров", 1, "руководитель направления"),)
+
+
+def test_одна_компания_один_адресат() -> None:
+    page = "Руководитель разработки — Иван Петров\nТимлид Мария Сидорова"
+    discovery = contacts.discover(
+        key="hh:1",
+        company="АКМЕ",
+        vacancy_text="Ищем Python-разработчика",
+        company_pages=[("https://acme.ru/team", page)],
+    )
+    guessed = [c for c in discovery.candidates if c.guessed]
+    assert len(guessed) == 1
+    assert guessed[0].person == "Иван Петров"
+    assert guessed[0].role_rank == 1
+    assert any("один адресат" in d for d in discovery.dropped)
+
+
+def test_контакт_без_ссылки_на_публикацию_не_используется() -> None:
+    """[LEG-004]: адрес без источника не показывается как контакт."""
+    without = contacts.discover(key="hh:1", company="АКМЕ", vacancy_text="почта lead@acme.ru")
+    assert without.candidates == ()
+    assert any("нет ссылки на публикацию" in d for d in without.dropped)
+
+    with_source = contacts.discover(
+        key="hh:1",
+        company="АКМЕ",
+        vacancy_text="почта lead@acme.ru",
+        vacancy_url="https://hh.ru/vacancy/1",
+    )
+    assert with_source.candidates[0].source_url == "https://hh.ru/vacancy/1"
+
+
+def test_блок_закрывает_компанию_в_любом_написании(conn: sqlite3.Connection) -> None:
+    contacts.ensure_schema(conn)
+    contacts.store(
+        conn,
+        "hh:1",
+        "Ромашка",
+        contacts.Candidate(channel_kind="email", channel_value="a@romashka.ru"),
+        status=contacts.BLOCKED,
+    )
+    assert contacts.is_blocked(conn, 'ООО «Ромашка»') is True
+    assert contacts.is_blocked(conn, "Ландыш") is False
+
+
+def test_повторный_прогон_не_плодит_дубли(conn: sqlite3.Connection) -> None:
+    contacts.ensure_schema(conn)
+    candidate = contacts.Candidate(channel_kind="email", channel_value="lead@acme.ru")
+    first = contacts.store(conn, "hh:1", "АКМЕ", candidate)
+    second = contacts.store(conn, "hh:1", "АКМЕ", candidate)
+    assert first == second
+    assert len(contacts.load(conn, "hh:1")) == 1
+
+
+def test_follow_up_ждёт_отметки_владельца(conn: sqlite3.Connection) -> None:
+    """Напоминать о письме, которого не отправляли, незачем [OUT-006]."""
+    contacts.ensure_schema(conn)
+    contact_id = contacts.store(
+        conn,
+        "hh:1",
+        "АКМЕ",
+        contacts.Candidate(channel_kind="email", channel_value="lead@acme.ru"),
+    )
+    later = datetime.now(timezone.utc) + timedelta(days=30)
+    assert contacts.due_follow_ups(conn, 6, now=later) == []
+
+    contacts.set_status(conn, contact_id, contacts.SENT)
+    due = contacts.due_follow_ups(conn, 6, now=later)
+    assert [row["id"] for row in due] == [contact_id]
+
+    contacts.mark_follow_up(conn, contact_id)
+    assert contacts.due_follow_ups(conn, 6, now=later) == []
