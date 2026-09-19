@@ -71,6 +71,10 @@ button.secondary { background: #e9ebef; color: #1d1d1f; }
 .field { margin: 12px 0; }
 .field label { display: block; font-weight: 600; font-size: 14px; margin-bottom: 3px; }
 .field .hint { font-size: 13px; color: #6b6b70; margin-top: 3px; }
+/* В таблице те же классы означают метку, а не блок-предупреждение:
+   без этого padding и margin блока разносили строки и налезали друг на друга. */
+td .warn, td .danger, td .ok { display: inline-block; padding: 1px 8px; margin: 0;
+        border-radius: 99px; font-size: 13px; white-space: nowrap; }
 .pill { display: inline-block; padding: 1px 7px; border-radius: 99px; font-size: 12px;
         background: #eef1f5; margin-right: 6px; }
 .bar { display: flex; align-items: center; gap: 12px; margin: 10px 0; }
