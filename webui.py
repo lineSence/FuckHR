@@ -243,19 +243,8 @@ class Handler(BaseHTTPRequestHandler):
 
             if parsed.path == "/run":
                 task = (form.get("task") or [""])[0]
-                # ВРЕМЕННО: разовый режим сбора образцов вёрстки. Переменные
-                # задаются здесь, а не приходят из формы: из браузера в
-                # окружение процесса не должно попадать ничего своего.
-                env = {}
-                if (form.get("dump_pages") or [""])[0] == "1":
-                    env = {
-                        "REVIEW_PAGE_DUMP_DIR": "data/pages",
-                        # Кэш страниц живёт 30 дней: без этого заход не
-                        # состоится и сохранять будет нечего.
-                        "REVIEW_FETCH_CACHE_DAYS": "0",
-                    }
                 try:
-                    job = jobs.runner.start(task, env=env)
+                    job = jobs.runner.start(task)
                 except (KeyError, RuntimeError) as exc:
                     body, refresh = render_run(
                         None, "<div class=warn>{}</div>".format(esc(exc))

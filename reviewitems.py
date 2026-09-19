@@ -30,13 +30,31 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 
 import reviewpage
-from dossier_rules import RATING_RE, STARS_RE
+from dossier_rules import LONE_RATING_RE, RATING_RE, STARS_RE
 
 ITEM_MARK = "\x00ITEM\x00"
 DATE_MARK = "\x00DATE:{}\x00"
 
-# Блок с отзывом. Ищем по классу и id, потому что это единственное, что
-# переживает редизайн: сетка меняется, а слово review в классе остаётся.
+# Блок с отзывом. Ищем по классу и id: сетка меняется, а слово review в
+# разметке остаётся. Но искать подстроку недостаточно — на живых страницах
+# нашлось и review__text, и review__header (один отзыв резался на три куска),
+# и review-other-city-item (восемьсот ссылок на соседние города вытесняли
+# настоящие отзывы за потолок). Поэтому сначала пробуем строгие признаки
+# контейнера, и только если не вышло ничего — прежний широкий поиск [CORE-017].
+
+# id вида review4373235 или div_review_651760 — якорь на отзыв.
+ANCHOR_RE = re.compile(
+    r"<(?:div|li|article|section)\b[^>]*id=[\"'][a-z_]*review[_-]?\d+[\"'][^>]*>",
+    re.IGNORECASE,
+)
+# Класс-токен: review, company-reviews-list-item, otzyv-card. Служебные
+# review__text и review-other-city-item под это не подходят.
+CLASS_BLOCK_RE = re.compile(
+    r"<(?:div|li|article|section)\b[^>]*class=[\"'][^\"']*(?<![\w-])"
+    r"(?:[a-z]+-)*(?:review|reviews|otzyv|otziv|comment|feedback|opinion)"
+    r"(?:[-_](?:item|card|block|list[-_]item|wrap|wrapper))?(?![\w-])[^\"']*[\"'][^>]*>",
+    re.IGNORECASE,
+)
 BLOCK_RE = re.compile(
     r"<(?:div|li|article|section)\b[^>]*(?:class|id)=[\"'][^\"']*"
     r"(?:review|otzyv|otziv|comment|feedback|opinion)[^\"']*[\"'][^>]*>",
@@ -63,12 +81,25 @@ AGO_RE = re.compile(
 AGO_WORDS = {"сегодня": 0, "вчера": 1, "позавчера": 2}
 AGO_DAYS = {"день": 1, "дня": 1, "дней": 1, "недел": 7, "месяц": 30, "год": 365, "лет": 365}
 
-PROS_RE = re.compile(r"(?:^|[\s.;])(плюсы|достоинства|понравилось)\s*[:.\-—]?", re.IGNORECASE)
-CONS_RE = re.compile(r"(?:^|[\s.;])(минусы|недостатки|не понравилось)\s*[:.\-—]?", re.IGNORECASE)
+# Заголовки секций. Варианты взяты с живых страниц: dreamjob пишет «Что
+# нравится?», «правда сотрудников» — «Плюсы в работе» и «Отрицательные стороны».
+PROS_RE = re.compile(
+    r"(?:^|[\s.;])(плюсы в работе|плюсы|достоинства|положительные стороны|"
+    r"понравилось|что нравится)\s*[:.?\-—]?",
+    re.IGNORECASE,
+)
+CONS_RE = re.compile(
+    r"(?:^|[\s.;])(минусы в работе|минусы|недостатки|отрицательные стороны|"
+    r"не понравилось|что не нравится|что можно улучшить)\s*[:.?\-—]?",
+    re.IGNORECASE,
+)
 REPLY_RE = re.compile(r"ответ\s+(компании|работодателя|представителя)", re.IGNORECASE)
 
 MIN_ITEM_CHARS = 40  # короче — это подпись или кнопка, а не отзыв
 MAX_ITEMS_PER_PAGE = 60
+# Порядок попыток разбора: сначала якорь на id, потом класс-контейнер, потом
+# прежний широкий поиск. Побеждает первая, давшая хоть один отзыв.
+STRATEGIES = ("anchor", "class", "loose")
 
 
 @dataclass(frozen=True)
@@ -96,12 +127,12 @@ class ReviewItem:
         return self.date_precision in ("exact", "approx")
 
 
-def mark_blocks(html: str) -> str:
+def mark_blocks(html: str, pattern: "re.Pattern[str] | None" = None) -> str:
     """Расставляет в HTML метки границ отзывов и найденных дат."""
     text = TIME_RE.sub(
         lambda m: DATE_MARK.format("{}-{}-{}".format(*m.groups())), html or ""
     )
-    return BLOCK_RE.sub(lambda m: ITEM_MARK + m.group(0), text)
+    return (pattern or BLOCK_RE).sub(lambda m: ITEM_MARK + m.group(0), text)
 
 
 def parse_date(text: str, today: date | None = None) -> tuple[str | None, str]:
@@ -154,8 +185,10 @@ def _month_number(word: str) -> int | None:
 def _section(text: str, start_re: re.Pattern[str], stop_re: re.Pattern[str]) -> str:
     """Кусок текста от «Плюсы» до «Минусы», конца абзаца или конца текста.
 
-    Граница по переводу строки нужна для сигнала «минусы пустые»: без неё в
-    минусы затекает следующий абзац и «Минусы: нет» перестаёт быть пустым.
+    Граница по строке нужна для сигнала «минусы пустые»: без неё в минусы
+    затекает следующий абзац и «Минусы: нет» перестаёт быть пустым. Но берётся
+    не первая строка, а первая непустая: на живых страницах заголовок секции
+    («Что нравится?») стоит отдельным блоком, и после него идут пустые строки.
     """
     start = start_re.search(text)
     if not start:
@@ -164,7 +197,11 @@ def _section(text: str, start_re: re.Pattern[str], stop_re: re.Pattern[str]) -> 
     stop = stop_re.search(tail)
     if stop:
         tail = tail[: stop.start()]
-    return tail.split("\n", 1)[0].strip(" :;.-—")
+    for line in tail.split("\n"):
+        cleaned = line.strip(" :;.-—\t")
+        if cleaned:
+            return cleaned
+    return ""
 
 
 def _clean(chunk: str) -> str:
@@ -184,7 +221,7 @@ def extract_rating(text: str) -> float | None:
     и из отдельного отзыва. В dossier имя реэкспортируется [CORE-025].
     """
     text = text or ""
-    match = RATING_RE.search(text) or STARS_RE.search(text)
+    match = RATING_RE.search(text) or STARS_RE.search(text) or LONE_RATING_RE.search(text)
     if not match:
         return None
     raw = match.group(1).replace(",", ".")
@@ -204,18 +241,46 @@ def split_page(
 ) -> tuple[ReviewItem, ...]:
     """Страница → отдельные отзывы.
 
-    Разделителей не нашлось — страница считается одним отзывом: так работает
-    старое поведение, и досье не теряет текст [CORE-017].
+    Пробуются три способа найти границу отзыва, от точного к грубому
+    (STRATEGIES). Побеждает первый, давший хоть один отзыв: на живых страницах
+    широкий поиск резал один отзыв на заголовок, текст и кнопки. Не сработал
+    ни один — страница считается одним отзывом, и досье не теряет текст
+    [CORE-017].
     """
-    flat = reviewpage.strip_tags(mark_blocks(html or ""))
-    chunks = flat.split(ITEM_MARK)
-    if len(chunks) > 1:
-        chunks = chunks[1:]  # до первой метки лежит шапка сайта
-    chunks = [c for c in chunks if c.strip()]
+    html = html or ""
+    for pattern in (ANCHOR_RE, CLASS_BLOCK_RE, BLOCK_RE):
+        items = _split_with(html, pattern, url=url, site=site, today=today)
+        if items:
+            return items
+    # Границ не нашлось ни одним способом — страница считается одним отзывом.
+    whole = _split_item(
+        reviewpage.strip_tags(mark_blocks(html, ANCHOR_RE)),
+        url=url,
+        site=site,
+        index=0,
+        today=today,
+    )
+    return (whole,) if whole is not None else ()
+
+
+def _split_with(
+    html: str,
+    pattern: "re.Pattern[str]",
+    *,
+    url: str,
+    site: str,
+    today: date | None,
+) -> tuple[ReviewItem, ...]:
+    flat = reviewpage.strip_tags(mark_blocks(html, pattern))
+    if ITEM_MARK not in flat:
+        return ()  # этот способ границ не нашёл, пробуем следующий
+    chunks = flat.split(ITEM_MARK)[1:]  # до первой метки лежит шапка сайта
     items: list[ReviewItem] = []
     seen: set[str] = set()
-    for chunk in chunks[:MAX_ITEMS_PER_PAGE]:
-        item = _item(chunk, url=url, site=site, index=len(items), today=today)
+    for chunk in chunks:
+        if not chunk.strip():
+            continue
+        item = _split_item(chunk, url=url, site=site, index=len(items), today=today)
         if item is None:
             continue
         key = item.text.lower()
@@ -223,10 +288,14 @@ def split_page(
             continue
         seen.add(key)
         items.append(item)
+        # Потолок считается по принятым отзывам, а не по кускам разметки:
+        # иначе восемь сотен ссылок на соседние города съедают его целиком.
+        if len(items) >= MAX_ITEMS_PER_PAGE:
+            break
     return tuple(items)
 
 
-def _item(
+def _split_item(
     chunk: str, *, url: str, site: str, index: int, today: date | None
 ) -> ReviewItem | None:
     body = _clean(chunk)

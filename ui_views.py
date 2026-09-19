@@ -55,10 +55,6 @@ def progress_block(job: jobs.Job) -> str:
     )
 
 
-# ВРЕМЕННО: задачи, рядом с которыми показывается галочка сбора образцов.
-DUMP_TASKS = ("collect", "collect-dry")
-
-
 def render_run(active_id: int | None = None, note: str = "") -> tuple[str, int]:
     """Главная страница: кнопки, полоска и живой лог.
 
@@ -70,21 +66,12 @@ def render_run(active_id: int | None = None, note: str = "") -> tuple[str, int]:
 
     buttons = []
     for key, title, hint in jobs.task_list():
-        # ВРЕМЕННО: галочка сбора образцов вёрстки живёт у задач сбора, потому
-        # что образцы появляются только при живом заходе на отзовики. Удаляется
-        # вместе с PageFetcher._dump_page (docs/review-quality.md).
-        dump = (
-            '<label class=hint><input type=checkbox name=dump_pages value="1"> '
-            "сохранить образцы страниц отзывов</label>"
-            if key in DUMP_TASKS
-            else ""
-        )
         buttons.append(
             (
                 '<form method=post action="/run">'
                 '<input type=hidden name=task value="{key}">'
-                '<button title="{hint}">{title}</button>{dump}</form>'
-            ).format(key=esc(key), hint=esc(hint), title=esc(title), dump=dump)
+                '<button title="{hint}">{title}</button></form>'
+            ).format(key=esc(key), hint=esc(hint), title=esc(title))
         )
     parts.append("<div class=tasks>{}</div>".format("".join(buttons)))
 
