@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 
+import hh_pages
 import market
 import market_store
 import settings
@@ -36,6 +37,11 @@ def collect(
     поиска бросается недочитанным, и остальные страницы не запрашиваются. Каждая
     незапрошенная страница — это сэкономленные две-три секунды паузы и шаг от капчи.
 
+    Вторая причина не запрашивать страницу — она уже известна целиком (B-15,
+    пункт 4 в `docs/performance.md`). Выдача отсортирована по дате публикации,
+    поэтому после такой страницы идёт только то, что мы уже видели. Правило
+    работает при подключённой базе и снимается настройкой `HH_STOP_ON_KNOWN`.
+
     Зарплатные наблюдения снимаются здесь же, со всей выдачи и до предфильтра.
     Считать рынок по прошедшим профиль нельзя: порог владельца обрезает выборку
     снизу, и метки «ниже рынка» не существовало бы в принципе. Страница уже
@@ -46,6 +52,8 @@ def collect(
     умолчанию порог нулевой и отсев идёт только по стоп-словам и вилке.
     """
     prefilter = prefilter or settings.prefilter_options()
+    known_page = hh_pages.known_page_checker(conn)
+    stop_kwargs = {"known_page": known_page} if known_page is not None else {}
     observations: list[market.Observation] = []
     seen: dict[str, Vacancy] = {}
     passed: dict[str, Vacancy] = {}
@@ -63,6 +71,7 @@ def collect(
             period=int(query.get("period", 7)),
             max_pages=int(query.get("max_pages") or 0),
             extra=query.get("extra"),
+            **stop_kwargs,
         )
         try:
             for draft in pages:
