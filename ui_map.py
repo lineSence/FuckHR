@@ -3,6 +3,10 @@
 Список отвечает на вопрос «что есть», карта — на вопрос «сколько ехать». Это
 разные вопросы, поэтому карта — отдельный раздел, а не вкладка в списке.
 
+Здесь же кнопка сбора адресов: она нужна ровно тогда, когда видишь пустоту на
+карте, и там же написано, скольких точек не хватает. На странице запуска ей места
+нет: там то, что гоняется регулярно.
+
 Две честные оговорки, которые видны прямо на странице, а не только в документации:
 
 - вакансий без адреса (удалёнка, «адрес сообщим позже») на карте нет, и их
@@ -27,11 +31,12 @@ from typing import Any
 from urllib.parse import urlencode
 
 import geo
+import jobs
 from ui_core import esc, table
 
 # Строка уходит в Leaflet как есть: {s}/{z}/{x}/{y} подставляет он сам. Через
 # str.format этот адрес никогда не проходит, поэтому скобки не удваиваются.
-DEFAULT_TILES = "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+DEFAULT_TILES = "{{https://{s}}}.tile.openstreetmap.org/{z}/{x}/{y}.png"
 ATTRIBUTION = (
     'Данные &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
 )
@@ -40,6 +45,8 @@ LEAFLET_JS = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
 SCORE_STEPS = ((0.0, "любой"), (40.0, "от 40"), (60.0, "от 60"), (80.0, "от 80"))
 # Москва и обзорный масштаб: начальный вид до того, как приедут точки.
 CENTER = (55.75, 37.62)
+# Задача сбора адресов — та же, что и в CLI, с ключом --all внутри jobs.TASKS.
+BACKFILL_TASK = "geo-backfill"
 
 
 def tile_url() -> str:
@@ -171,6 +178,34 @@ def _filters(conn: sqlite3.Connection, chosen: dict[str, Any]) -> str:
     ).format(cities=cities, scores=scores, q=esc(chosen["q"]))
 
 
+def _backfill(blind: int) -> str:
+    """Кнопка сбора адресов рядом с тем, ради чего она нужна.
+
+    Берёт все недостающие адреса сразу, а не порцию: половинчатая карта хуже
+    долгой задачи. Сколько это займёт, написано честно и до нажатия.
+    """
+    if not blind:
+        return (
+            "<p class=muted>Адреса есть у всех вакансий, которые их сообщили.</p>"
+        )
+    busy = jobs.runner.active()
+    if busy is not None:
+        return (
+            '<p class=muted>Сейчас идёт задача «{}» — '
+            '<a href="/?job={}">смотреть лог</a>. Адреса можно собрать после неё.</p>'
+        ).format(esc(busy.title), busy.id)
+    # Грубая, но честная оценка: пауза между страницами порядка двух секунд.
+    minutes = max(1, int(round(blind * 2.5 / 60.0)))
+    return (
+        '<form method=post action="/map/geo" class=filters>'
+        "<label class=filt><button>Собрать все адреса</button></label>"
+        '<label class=filt><span class=muted>Осталось {blind} вакансий без точки. '
+        "Задача откроет каждую страницу на hh.ru с паузой — примерно {minutes} мин. "
+        "Можно остановить в любой момент, найденное останется.</span></label>"
+        "</form>"
+    ).format(blind=blind, minutes=minutes)
+
+
 def _list(found: list[dict[str, Any]]) -> str:
     """Те же точки текстом — работает без сети и читается с клавиатуры."""
     rows = [
@@ -188,44 +223,56 @@ def _list(found: list[dict[str, Any]]) -> str:
     return table(["Вакансия", "Компания", "Адрес", "Метро", "Скор"], rows)
 
 
-def render_map(conn: sqlite3.Connection, params: dict[str, Any]) -> str:
+def render_map(
+    conn: sqlite3.Connection, params: dict[str, Any], note: str = ""
+) -> str:
     geo.ensure_schema(conn)
     chosen = view(params)
     found = geo.points(conn, chosen["min"], chosen["area"], chosen["q"])
     mapped, total = geo.coverage(conn)
     blind = max(0, total - mapped)
 
-    note = "На карте {} точек из {} вакансий с адресом.".format(len(found), mapped)
-    if blind:
-        note += (
-            " Ещё {} вакансий без адреса — удалёнка или адрес не указан;"
-            " для старых записей помогает задача «Адреса для карты» на странице запуска."
-        ).format(blind)
+    line = "На карте {} точек из {} вакансий с адресом.".format(len(found), mapped)
 
     warn = ""
     if mapped == 0:
         warn = (
-            "<div class=warn>Ни у одной вакансии нет координат. Они появляются при сборе или"
-            " после задачи «Адреса для карты».</div>"
+            "<div class=warn>Ни у одной вакансии нет координат. Они появляются при сборе"
+            " или по кнопке «Собрать все адреса».</div>"
         )
 
     return (
         '<link rel=stylesheet href="{css}">'
         '<script src="{js}"></script>'
-        "{filters}{warn}"
-        '<p class=muted>{note}</p>'
+        "{note}{filters}{warn}{backfill}"
+        '<p class=muted>{line}</p>'
         '<div id=map style="height:560px;border:1px solid var(--line);border-radius:4px"></div>'
         "{script}"
         "<details id=maplist><summary>Список адресов <span class=muted>то же самое без карты</span></summary>{rows}</details>"
     ).format(
         css=LEAFLET_CSS,
         js=LEAFLET_JS,
+        note=note,
         filters=_filters(conn, chosen),
         warn=warn,
-        note=esc(note),
+        backfill=_backfill(blind),
+        line=esc(line),
         script=_script(chosen),
         rows=_list(found),
     )
+
+
+def start_backfill() -> tuple[int | None, str]:
+    """Запускает сбор всех недостающих адресов. (id задачи, сообщение).
+
+    Из браузера не приходит ни одного аргумента: команда целиком взята из
+    jobs.TASKS [CORE-023].
+    """
+    try:
+        job = jobs.runner.start(BACKFILL_TASK)
+    except (KeyError, RuntimeError) as exc:
+        return None, "<div class=warn>{}</div>".format(esc(exc))
+    return job.id, ""
 
 
 def link(conn: sqlite3.Connection, key: str) -> str:
@@ -261,6 +308,7 @@ def hint(conn: sqlite3.Connection) -> str:
 
 __all__ = (
     "ATTRIBUTION",
+    "BACKFILL_TASK",
     "CENTER",
     "DEFAULT_TILES",
     "SCORE_STEPS",
@@ -268,6 +316,7 @@ __all__ = (
     "link",
     "points_json",
     "render_map",
+    "start_backfill",
     "tile_url",
     "view",
 )
