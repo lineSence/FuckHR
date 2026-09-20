@@ -78,6 +78,17 @@ form.inline button { padding: 4px 10px; font-size: 12.5px }
 td .warn, td .danger, td .ok { display: inline-block; padding: 1px 8px; margin: 0;
         border: 0; border-radius: 3px; font-size: 12px; font-weight: 700;
         text-transform: uppercase; letter-spacing: .03em; white-space: nowrap }
+/* Фильтры: быстрые виды и активные условия — одинаковые «таблетки», разница
+   только в заливке. Так видно, что вид и фильтр — одна и та же сущность. */
+.chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0 }
+.chip { display: inline-block; padding: 3px 10px; border: 1px solid var(--line);
+        border-radius: 12px; background: #fff; color: var(--text);
+        font-size: 12.5px; text-decoration: none }
+.chip.on { background: #deebff; border-color: #4c9aff; color: var(--brand) }
+.chip a { text-decoration: none; color: inherit; font-weight: 700 }
+.filters { display: flex; gap: 10px 14px; flex-wrap: wrap; margin: 6px 0 10px }
+.filt { font-size: 12.5px; color: var(--muted) }
+.filt select, .filt input { margin-top: 2px }
 .pill { display: inline-block; padding: 2px 8px; margin-right: 6px; border-radius: 3px;
         background: #deebff; color: var(--brand); font-size: 12px; font-weight: 700;
         text-transform: uppercase }

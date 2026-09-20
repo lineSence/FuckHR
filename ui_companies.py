@@ -15,6 +15,8 @@ import sqlite3
 import urllib.parse
 
 import company_score_rules
+import filters
+import ui_filters
 import company_score_store
 import company_signals
 import contact_finds
@@ -76,19 +78,16 @@ RISK_ORDER = {
 }
 CONFIDENCE_ORDER = {"high": 0, "medium": 1, "low": 2}
 
-COMPANY_SORTS: dict[str, object] = {
-    "name": lambda r: str(r["company"] or "").lower(),
-    "risk": lambda r: -RISK_ORDER.get(str(r["risk"]), 0),
-    "reviews": lambda r: -int(r["review_count"] or 0),
-    "rating": lambda r: -float(r["avg_rating"] or 0),
-    "updated": lambda r: str(r["updated_at"] or ""),
-}
+# Сортировки компаний живут в filters.COMPANY_SORTS: как и у вакансий, это
+# теперь куски ORDER BY, а не ключи для sorted().
 COMPANY_COLUMNS = (
     ("name", "Компания"),
-    ("", "Оценка"),
-    ("risk", "Отзывы"),
+    ("level", "Оценка"),
+    ("", "Отзывы"),
     ("reviews", "Отзывов"),
-    ("rating", "Оценка"),
+    ("rating", "Оценка отзывов"),
+    ("openings", "Вакансий"),
+    ("", "Контакт"),
     ("", "Закономерности"),
     ("updated", "Обновлено"),
 )
@@ -130,23 +129,59 @@ def _sorted(rows: list, keys: dict, sort: str) -> list:
     return rows
 
 
+def filtered_companies(
+    conn: sqlite3.Connection, params: dict, limit: int = 200
+) -> tuple[list[sqlite3.Row], int, list[tuple[str, str]]]:
+    """(строки досье с оценкой и счётчиками, сколько всего подошло, фильтры).
+
+    Одним запросом, а не перебором в Python: считать «сколько у компании
+    вакансий» в цикле по двумстам досье — это двести запросов на открытие
+    страницы, и растёт это вместе с базой.
+    """
+    dossier.ensure_schema(conn)
+    company_score_store.ensure_schema(conn)
+    contacts.ensure_schema(conn)
+    where, args, active = filters.build_where(filters.COMPANY_FILTERS, params)
+    order = filters.order_by(
+        filters.COMPANY_SORTS, str(params.get("csort", "") or ""), "updated"
+    )
+    base = (
+        "FROM company_dossier d"
+        " LEFT JOIN company_score s ON s.company = d.company"
+        " WHERE {}".format(where)
+    )
+    total = conn.execute("SELECT COUNT(*) " + base, args).fetchone()[0]
+    rows = conn.execute(
+        "SELECT d.*, COALESCE(s.level, 'unknown') AS score_level,"
+        " (SELECT COUNT(*) FROM vacancies v WHERE v.company = d.company) AS openings,"
+        " (SELECT COUNT(*) FROM contacts c WHERE c.company = d.company"
+        "  AND COALESCE(c.guessed, 0) = 0) AS direct_contacts "
+        + base
+        + " ORDER BY {} LIMIT ?".format(order),
+        [*args, limit],
+    ).fetchall()
+    return rows, int(total or 0), active
+
+
 def company_rows(
-    conn: sqlite3.Connection, limit: int = 200, sort: str = "updated"
+    conn: sqlite3.Connection, limit: int = 200, sort: str = "updated", params: dict | None = None
 ) -> list[list[str]]:
-    sort = sort_pick(sort, tuple(COMPANY_SORTS), "updated")
-    scores = company_score_store.levels(conn)
-    rows: list[list[str]] = []
-    for row in _sorted(list(dossier.list_dossiers(conn, limit)), COMPANY_SORTS, sort):
+    """Готовые ячейки таблицы компаний."""
+    query = dict(params or {})
+    query.setdefault("csort", sort)
+    rows, _total, _active = filtered_companies(conn, query, limit)
+    out: list[list[str]] = []
+    for row in rows:
         company = str(row["company"])
-        level = scores.get(company, company_score_rules.LEVEL_UNKNOWN)
+        level = str(row["score_level"])
         red = _flags(row["red_flags"])
         rating = "—"
         if row["avg_rating"] is not None:
             rating = "{:.1f}".format(float(row["avg_rating"]))
-        rows.append(
+        out.append(
             [
                 '<a href="/company?name={link}">{name}</a>'.format(
-                    link=esc(company), name=esc(company)
+                    link=urllib.parse.quote(company), name=esc(company)
                 ),
                 '<span class="{cls}">{label}</span>'.format(
                     cls=SCORE_CLASS.get(level, "muted"),
@@ -158,27 +193,43 @@ def company_rows(
                 ),
                 esc(row["review_count"]),
                 esc(rating),
+                esc(row["openings"]),
+                "✓" if int(row["direct_contacts"] or 0) else "",
                 esc("; ".join(red[:3]) or "—"),
                 esc(str(row["updated_at"])[:10]),
             ]
         )
-    return rows
+    return out
 
 
-def render_companies(conn: sqlite3.Connection, sort: str = "updated") -> str:
-    sort = sort_pick(sort, tuple(COMPANY_SORTS), "updated")
+def render_companies(
+    conn: sqlite3.Connection, sort: str = "updated", params: dict | None = None
+) -> str:
+    """Список досье: те же быстрые виды и фильтры, что у вакансий."""
+    query = ui_filters.apply_preset(filters.COMPANY_PRESETS, dict(params or {}))
+    query.setdefault("csort", sort)
+    rows, found, active = filtered_companies(conn, query)
     total, red, empty = dossier.coverage(conn)
-    rows = company_rows(conn, sort=sort)
-    if not rows:
+
+    head = (
+        ui_filters.presets_line(filters.COMPANY_PRESETS, query, "/companies")
+        + ui_filters.chips(active, query, "/companies")
+        + ui_filters.form(filters.COMPANY_FILTERS, query, "/companies", len(active))
+        + ui_filters.sort_line(
+            filters.COMPANY_SORTS, query, "/companies", param="csort", default="updated"
+        )
+    )
+    if not rows and not active:
         return (
-            "<div class=warn>Досье пока нет. Они собираются автоматически при сканировании — "
-            "по тем компаниям, чьи вакансии прошли порог. Нужен настроенный поиск: "
-            "смотри страницу «Поиск».</div>"
+            head
+            + "<div class=warn>Досье пока нет. Они собираются автоматически при "
+            "сканировании — по тем компаниям, чьи вакансии прошли порог. Нужен "
+            'настроенный поиск: смотри страницу «Поиск».</div>'
         )
     summary = (
-        "<p class=muted>Досье: {total} · с красными флагами: {red} · без единого отзыва: "
-        "{empty}</p>"
-    ).format(total=total, red=red, empty=empty)
+        "<p class=muted>Досье: {total} · с красными флагами: {red} · без единого "
+        "отзыва: {empty} · под фильтр подошло: {found}</p>"
+    ).format(total=total, red=red, empty=empty, found=found)
     health = reviewlegit_store.health_line(reviewlegit_store.health(conn))
     if health:
         # Отброшенное показывается числом: поломку разбора иначе видно только
@@ -187,14 +238,26 @@ def render_companies(conn: sqlite3.Connection, sort: str = "updated") -> str:
             "<p class=muted>Сбор отзывов — {}. Выброшенное не отзывы: меню, "
             "реклама, ответы работодателя и отзывы клиентов о товаре.</p>"
         ).format(esc(health))
+    if not rows:
+        return head + summary + (
+            "<div class=warn>Под фильтр не попало ни одно досье.</div>"
+        )
     hint = (
         "<p class=muted>Красный статус ставится только по повторяющимся жалобам или "
         "тяжёлым признакам вроде задержки зарплаты. Один злой отзыв — ещё не "
         "закономерность.</p>"
     )
-    return summary + table(
-        sort_head(COMPANY_COLUMNS, "/companies", "csort", sort), rows, raw_head=True
-    ) + hint
+    base = "/companies?" + filters.query_string(query, drop="csort")
+    return (
+        head
+        + summary
+        + table(
+            sort_head(COMPANY_COLUMNS, base, "csort", query.get("csort", "updated")),
+            company_rows(conn, params=query),
+            raw_head=True,
+        )
+        + hint
+    )
 
 
 def render_signals(conn: sqlite3.Connection, name: str) -> str:

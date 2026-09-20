@@ -74,6 +74,11 @@ triggers:
       - wiki/architecture/embeddings.md
       - docs/embeddings.md
 
+  - id: filters
+    keywords: [фильтр, фильтрация, сортировка, отбор в списке, быстрый вид, пресет, найти вакансию в базе]
+    load:
+      - docs/filters.md
+
   - id: rebuild
     keywords: [пересчёт базы, пересчитать скор, обработать собранное, задним числом, бэкфилл, rebuild, применить новые правила]
     load:

@@ -169,6 +169,10 @@ class Handler(BaseHTTPRequestHandler):
         def one(name: str, default: str = "") -> str:
             return (params.get(name) or [default])[0]
 
+        def flat(values: dict) -> dict:
+            """Первое значение каждого параметра. Списки странице не нужны."""
+            return {key: (value or [""])[0] for key, value in values.items()}
+
         try:
             if parsed.path == "/favicon.ico":
                 self._send("", 404)
@@ -185,12 +189,14 @@ class Handler(BaseHTTPRequestHandler):
             conn = open_db()
             try:
                 if parsed.path == "/vacancies":
-                    min_score = settings.as_float(one("min_score", "0"), 0.0)
+                    # Параметры уходят страницей целиком: какие из них фильтры,
+                    # знает filters.py, а не маршрут. Неизвестные там молча
+                    # игнорируются, в SQL попадает только белый список.
                     limit = min(settings.as_int(one("limit", "50"), 50), 500)
                     self._send(
                         page(
                             "Вакансии",
-                            render_vacancies(conn, min_score, limit, one("sort")),
+                            render_vacancies(conn, 0.0, limit, "score", flat(params)),
                         )
                     )
                 elif parsed.path == "/vacancy":
@@ -205,7 +211,7 @@ class Handler(BaseHTTPRequestHandler):
                     self._send(
                         page(
                             "Компании и контакты",
-                            render_companies(conn, one("csort"))
+                            render_companies(conn, one("csort"), flat(params))
                             + render_contacts(conn, one("ksort")),
                         )
                     )

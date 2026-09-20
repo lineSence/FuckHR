@@ -21,7 +21,11 @@ import embeddings_tasks
 import contacts
 import db
 import detector
+import company_score_store
+import filters
+import injection_store
 import llm
+import ui_filters
 import aitext
 import market
 import market_rules
@@ -209,6 +213,36 @@ def vacancy_rows(
     ).fetchall()
 
 
+def filtered_vacancies(
+    conn: sqlite3.Connection, params: dict, limit: int
+) -> tuple[list[sqlite3.Row], int, list[tuple[str, str]]]:
+    """(строки, сколько всего подошло, активные фильтры).
+
+    Фильтр и сортировка уходят в SQL до LIMIT. Раньше страница брала первые N
+    по скору и сортировала уже их: «по зарплате» показывало самую денежную из
+    верхушки, а не из базы.
+    """
+    # Фильтры заглядывают в соседние таблицы (контакты, инъекции, сигналы,
+    # оценки компаний). На базе, собранной версией без них, страница не должна
+    # падать: CREATE IF NOT EXISTS дешевле, чем обработка «no such table».
+    contacts.ensure_schema(conn)
+    detector.ensure_schema(conn)
+    injection_store.ensure_schema(conn)
+    company_score_store.ensure_schema(conn)
+    where, args, active = filters.build_where(filters.VACANCY_FILTERS, params)
+    order = filters.order_by(
+        filters.VACANCY_SORTS, str(params.get("sort", "") or ""), "score"
+    )
+    total = conn.execute(
+        "SELECT COUNT(*) FROM vacancies v WHERE {}".format(where), args
+    ).fetchone()[0]
+    rows = conn.execute(
+        "SELECT v.* FROM vacancies v WHERE {} ORDER BY {} LIMIT ?".format(where, order),
+        [*args, limit],
+    ).fetchall()
+    return rows, int(total or 0), active
+
+
 def vacancy_one(conn: sqlite3.Connection, key: str) -> sqlite3.Row | None:
     return conn.execute("SELECT * FROM vacancies WHERE key = ?", (key,)).fetchone()
 
@@ -281,16 +315,14 @@ def contacts_block(conn: sqlite3.Connection, key: str, company: str | None) -> s
     )
 
 
-VACANCY_SORTS: dict[str, object] = {
-    "score": lambda r: -float(r["score"] or 0),
-    "title": lambda r: str(r["title"] or "").lower(),
-    "company": lambda r: str(r["company"] or "").lower(),
-    "published": lambda r: str(r["published_at"] or ""),
-}
+# Сортировки вакансий переехали в filters.VACANCY_SORTS: они стали кусками
+# ORDER BY, потому что сортировать урезанный LIMIT-ом срез — значит показывать
+# «самую денежную из верхушки по скору» и называть это «по зарплате».
 VACANCY_COLUMNS = (
     ("score", "Скор"),
     ("title", "Вакансия"),
     ("company", "Компания"),
+    ("salary", "Зарплата"),
     ("published", "Опубликована"),
     ("", "В TG"),
     ("", "Письмо"),
@@ -323,41 +355,58 @@ def sort_rows(rows: list, keys: dict, sort: str) -> list:
 
 
 def render_vacancies(
-    conn: sqlite3.Connection, min_score: float, limit: int, sort: str = "score"
+    conn: sqlite3.Connection,
+    min_score: float = 0.0,
+    limit: int = 50,
+    sort: str = "score",
+    params: dict | None = None,
 ) -> str:
-    sort = sort_pick(sort, tuple(VACANCY_SORTS), "score")
-    rows = sort_rows(list(vacancy_rows(conn, min_score, limit)), VACANCY_SORTS, sort)
+    """Список вакансий: быстрые виды, фильтры, сортировка.
+
+    Старые позиционные аргументы оставлены: их зовут тесты и прежние ссылки.
+    Всё остальное приходит словарём параметров адреса.
+    """
+    query = ui_filters.apply_preset(filters.VACANCY_PRESETS, dict(params or {}))
+    if min_score and "min_score" not in query:
+        query["min_score"] = str(min_score)
+    query.setdefault("sort", sort)
+    limit = max(1, min(1000, int(settings.as_int(query.get("limit", ""), limit) or limit)))
+    query["limit"] = str(limit)
+
+    rows, found, active = filtered_vacancies(conn, query, limit)
     stats = db.stats(conn)
     direct, total = contacts.coverage(conn)
-    with_conditions, scanned = conditions.coverage(conn)
 
-    form = (
-        '<form method=get action="/vacancies">'
-        'Скоринг от <input type=number step=1 name=min_score value="{min_score}" '
-        'style="width:90px"> '
-        'показать <input type=number step=10 name=limit value="{limit}" '
-        'style="width:90px"> '
-        "<button>Применить</button></form>"
-    ).format(min_score=int(min_score), limit=int(limit))
+    head = (
+        ui_filters.presets_line(filters.VACANCY_PRESETS, query, "/vacancies")
+        + ui_filters.chips(active, query, "/vacancies")
+        + ui_filters.form(
+            filters.VACANCY_FILTERS,
+            query,
+            "/vacancies",
+            len(active),
+            hidden={"sort": query.get("sort", ""), "limit": query.get("limit", "")},
+        )
+        + ui_filters.sort_line(filters.VACANCY_SORTS, query, "/vacancies")
+    )
 
     summary = (
-        "<p class=muted>В базе: {vacancies} вакансий. Разобраны условия: {conds} из "
-        "{scanned}. Прямых контактов: {direct} из {total}. Найдено по фильтру: {found}.</p>"
+        "<p class=muted>В базе {vacancies} вакансий · под фильтр подошло "
+        "{found} · показано {shown} · прямых контактов {direct} из {total}.</p>"
     ).format(
         vacancies=stats.get("vacancies", 0),
-        conds=with_conditions,
-        scanned=scanned,
+        found=found,
+        shown=len(rows),
         direct=direct,
         total=total,
-        found=len(rows),
     )
 
     if not rows:
         return (
-            form
+            head
             + summary
-            + "<div class=warn>Нет вакансий под фильтр. Если база пуста — сначала "
-            '<a href="/">сбор</a>.</div>'
+            + "<div class=warn>Под фильтр не попало ничего. Сними условия выше "
+            'или начни со <a href="/">сбора</a>, если база пуста.</div>'
         )
 
     body = []
@@ -371,17 +420,31 @@ def render_vacancies(
                 "<span class=score>{:.0f}</span>".format(score),
                 link,
                 esc(row["company"]),
+                _salary_cell(row),
                 esc((row["published_at"] or "")[:10]),
                 "✓" if row["notified_at"] else "",
                 draft_button(row["key"] or "", "Письмо"),
             ]
         )
-    base = "/vacancies?min_score={}&limit={}".format(int(min_score), int(limit))
+    base = "/vacancies?" + filters.query_string(query, drop="sort")
     return (
-        form
+        head
         + summary
-        + table(sort_head(VACANCY_COLUMNS, base, "sort", sort), body, raw_head=True)
+        + table(
+            sort_head(VACANCY_COLUMNS, base, "sort", query.get("sort", "score")),
+            body,
+            raw_head=True,
+        )
     )
+
+
+def _salary_cell(row: sqlite3.Row) -> str:
+    """Вилка как есть. Пусто — значит работодатель её не показал, и это факт."""
+    low, high = row["salary_from"], row["salary_to"]
+    if low is None and high is None:
+        return '<span class=muted>скрыта</span>'
+    parts = [format(int(value), ",d").replace(",", " ") for value in (low, high) if value]
+    return esc(" — ".join(parts))
 
 
 MARKET_CLASS = {
