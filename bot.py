@@ -27,22 +27,16 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
-from aiogram.exceptions import TelegramNetworkError
+from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 import contacts
 import db
 import settings
+import bot_buttons
+from bot_buttons import CONTACT_ACTIONS  # noqa: F401 — публичное имя остаётся в bot
 
 log = logging.getLogger(__name__)
-
-# Кнопки карточки контакта [OUT-006]: меняют только статус в базе.
-CONTACT_ACTIONS = {
-    "sent": ("sent_manually", "Отметил: отправлено"),
-    "other": ("skipped", "Поищу другой контакт в следующем прогоне"),
-    "skip": ("skipped", "Пропустил"),
-    "block": ("blocked", "Больше не пишем этой компании"),
-}
 
 EXPERIENCE_RU = {
     "noExperience": "без опыта",
@@ -276,6 +270,46 @@ async def send_contact_card(
         await bot.session.close()
 
 
+async def _respond(call: CallbackQuery, reply: "bot_buttons.Reply") -> None:
+    """Ответ на нажатие: всплывашка плюс «✓» на нажатой кнопке.
+
+    Без правки разметки кнопка выглядит мёртвой: всплывашка гаснет за секунду,
+    и владелец жмёт ещё раз (B-10). Обе операции терпимы к отказу: «query is
+    too old» на вчерашней карточке и «message is not modified» на повторном
+    нажатии — это норма, а не повод ронять обработчик [CORE-017].
+    """
+    try:
+        await call.answer(reply.text, show_alert=reply.alert)
+    except TelegramBadRequest as exc:
+        log.warning("не смог ответить на нажатие: %s", exc)
+    if reply.mark is None or call.message is None:
+        return
+    markup = getattr(call.message, "reply_markup", None)
+    if markup is None:
+        return
+    rows = [
+        [(button.text, button.callback_data or "") for button in row]
+        for row in markup.inline_keyboard
+    ]
+    updated = bot_buttons.marked(rows, reply.mark)
+    if updated == rows:
+        return
+    try:
+        await call.message.edit_reply_markup(
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(text=text, callback_data=data)
+                        for text, data in row
+                    ]
+                    for row in updated
+                ]
+            )
+        )
+    except TelegramBadRequest as exc:
+        log.warning("не смог обновить кнопки: %s", exc)
+
+
 async def run_polling(token: str, db_path: str) -> None:
     """Собирает нажатия кнопок в vacancies.feedback."""
     bot = _bot(token)
@@ -286,40 +320,28 @@ async def run_polling(token: str, db_path: str) -> None:
 
     @dp.callback_query(F.data.startswith("fb:"))
     async def on_feedback(call: CallbackQuery) -> None:
-        data = call.data or ""
-        try:
-            _, value, key = data.split(":", 2)
-        except ValueError:
-            log.error("непонятный callback_data: %r", data)
-            await call.answer("Не разобрал кнопку", show_alert=True)
+        parts = bot_buttons.parse(call.data)
+        if parts is None:
+            log.error("непонятный callback_data: %r", call.data)
+            await _respond(call, bot_buttons.Reply("Не разобрал кнопку", alert=True))
             return
-        updated = db.set_feedback(conn, key, value)
-        log.info("feedback %s -> %s (строк обновлено: %s)", key, value, updated)
-        if not updated:
-            # Ключ есть в кнопке, но нет в базе: чаще всего разные DB_PATH у run.py и bot.py.
-            await call.answer("Карточка не найдена в базе", show_alert=True)
-            return
-        await call.answer("Записал" if value == "good" else "Понятно")
+        _, value, key = parts
+        reply = bot_buttons.feedback(conn, key, value)
+        log.info("feedback %s -> %s: %s", key, value, reply.text)
+        await _respond(call, reply)
 
     @dp.callback_query(F.data.startswith("ct:"))
     async def on_contact(call: CallbackQuery) -> None:
         """[OUT-007]: статус контакта меняет владелец, система его не угадывает."""
-        data = call.data or ""
-        try:
-            _, action, raw_id = data.split(":", 2)
-            contact_id = int(raw_id)
-        except ValueError:
-            log.error("непонятный callback_data: %r", data)
-            await call.answer("Не разобрал кнопку", show_alert=True)
+        parts = bot_buttons.parse(call.data)
+        if parts is None or not parts[2].isdigit():
+            log.error("непонятный callback_data: %r", call.data)
+            await _respond(call, bot_buttons.Reply("Не разобрал кнопку", alert=True))
             return
-        known = CONTACT_ACTIONS.get(action)
-        if known is None:
-            await call.answer("Не моя кнопка")
-            return
-        status, reply = known
-        contacts.set_status(conn, contact_id, status)
-        log.info("контакт %s -> %s", contact_id, status)
-        await call.answer(reply)
+        _, action, raw_id = parts
+        reply = bot_buttons.contact(conn, int(raw_id), action)
+        log.info("контакт %s: %s -> %s", raw_id, action, reply.text)
+        await _respond(call, reply)
 
     @dp.callback_query()
     async def on_unknown_callback(call: CallbackQuery) -> None:
