@@ -1,7 +1,8 @@
 """Цели: хранилище, разбор ввода и шаги (ADR-025).
 
 Сеть в тестах не трогается: клиент hh.ru подменяется заглушкой, отдающей
-заранее записанный кусок страницы.
+заранее записанный кусок страницы. Задачи не запускаются: jobs.runner.start
+подменяется, иначе тест породил бы настоящий подпроцесс с сетью.
 """
 
 from __future__ import annotations
@@ -136,7 +137,7 @@ def test_captcha_is_not_reported_as_empty_result(
 
 def test_inn_target_explains_next_step(conn: sqlite3.Connection) -> None:
     note = ui_targets.add_from_input(conn, "7736207543")
-    assert "ИНН" in note and "Ресёрч" in note.replace("ресёрч", "Ресёрч")
+    assert "ИНН" in note and "ресёрч" in note
     assert len(targets.all_targets(conn)) == 1
 
 
@@ -200,3 +201,73 @@ def test_render_targets_lists_cards(conn: sqlite3.Connection) -> None:
     targets.add(conn, "Яндекс", employer_id="1455")
     html = ui_targets.render_targets(conn)
     assert "Яндекс" in html and "Добавить цель" in html and "Следить" in html
+
+
+def test_listing_sorts_and_filters(conn: sqlite3.Connection) -> None:
+    targets.add(conn, "Альфа", employer_id="1")
+    beta = targets.add(conn, "Бета", employer_id="2")
+    targets.link(conn, beta, ["k1", "k2"])
+    targets.set_watch(conn, beta, True)
+
+    assert [t.company for t, _, _ in targets.listing(conn, "company")] == ["Альфа", "Бета"]
+    assert [t.company for t, _, _ in targets.listing(conn, "vacancies")] == ["Бета", "Альфа"]
+    assert [t.company for t, _, _ in targets.listing(conn, "added", "watch")] == ["Бета"]
+    assert [t.company for t, _, _ in targets.listing(conn, "added", "fresh")] == ["Бета"]
+    assert targets.listing(conn, "company")[1][1:] == (2, 2)
+    # Чужое имя порядка и фильтра молча заменяется умолчанием [CORE-017].
+    assert len(targets.listing(conn, "DROP TABLE company_targets", "1=1; --")) == 2
+
+
+def test_one_button_collects_everything(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Три шага — одна задача: в jobs.py она всё равно идёт одна за раз.
+    calls: list[tuple[str, list[str]]] = []
+    monkeypatch.setattr(
+        ui_targets.jobs.runner,
+        "start",
+        lambda task, extra=(): calls.append((task, list(extra))),
+    )
+    tid = targets.add(conn, "Яндекс", employer_id="1455")
+    assert ui_targets.start_step(conn, tid, "all") == ""
+    assert calls == [("target-scan", ["--target", str(tid), "--step", "all"])]
+
+
+def test_target_by_inn_still_collects_what_it_can(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # У цели по ИНН нет работодателя, но отзывы и ресёрч собрать можно:
+    # единственная кнопка не должна отказывать целиком.
+    monkeypatch.setattr(ui_targets.jobs.runner, "start", lambda task, extra=(): None)
+    tid = targets.add(conn, "ООО Ромашка", inn="7736207543", source="inn")
+    assert ui_targets.start_step(conn, tid, "all") == ""
+
+
+def test_render_targets_collapses_and_offers_view(conn: sqlite3.Connection) -> None:
+    targets.add(conn, "Яндекс", employer_id="1455")
+    html = ui_targets.render_targets(conn)
+    assert "<details" in html and "<summary>" in html
+    assert "Собрать все данные" in html
+    # Трёх кнопок больше нет.
+    assert "Собрать вакансии</button>" not in html
+    assert "/targets/view" in html and "по названию" in html
+
+
+def test_view_choice_survives_between_requests(conn: sqlite3.Connection) -> None:
+    targets.add(conn, "Яндекс", employer_id="1455")
+    try:
+        ui_targets.handle(conn, "/targets/view", {"sort": ["company"], "only": ["watch"]})
+        assert ui_targets._VIEW == {"sort": "company", "only": "watch"}
+        assert "ни одна цель не попала" in ui_targets.render_targets(conn)
+        # Чужое имя не сохраняется вовсе.
+        ui_targets.handle(conn, "/targets/view", {"sort": ["чужое"], "only": ["чужое"]})
+        assert ui_targets._VIEW == {"sort": "added", "only": "all"}
+    finally:
+        ui_targets._VIEW.update({"sort": "added", "only": "all"})
+
+
+def test_target_page_shows_collapsible_vacancies(conn: sqlite3.Connection) -> None:
+    tid = targets.add(conn, "Яндекс", employer_id="1455")
+    html = ui_targets.render_target(conn, tid)
+    assert "<details open>" in html and "Вакансии компании" in html
+    assert "Собрать все данные" in html
