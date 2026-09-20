@@ -21,6 +21,12 @@ triggers:
     load:
       - wiki/architecture/pipeline.md
 
+  - id: map
+    keywords: [карта, map, метка, точка на карте, координаты, широта, долгота, метро, станция, радиус, рядом, геокодер, leaflet, тайлы, адрес вакансии]
+    load:
+      - wiki/architecture/map.md
+      - docs/map.md
+
   - id: outreach
     keywords: [контакт, письмо, аутрич, outreach, обойти hr, напрямую, руководитель отдела, тимлид, нанимающий менеджер, email, follow-up, шаблон письма]
     load:

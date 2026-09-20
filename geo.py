@@ -261,57 +261,6 @@ def save(conn: sqlite3.Connection, key: str, point: Point | None) -> bool:
     return point.mappable
 
 
-def _like(value: str) -> str:
-    """Строка поиска как данные: % и _ от владельца — буквы, а не джокеры."""
-    escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    return "%" + escaped + "%"
-
-
-def points(
-    conn: sqlite3.Connection,
-    min_score: float = 0.0,
-    area: str = "",
-    query: str = "",
-    limit: int = MAX_POINTS,
-) -> list[dict[str, Any]]:
-    """Вакансии с координатами. Отбор тот же, что в списке: город, скор, слово."""
-    where = ["lat IS NOT NULL", "lng IS NOT NULL", "COALESCE(score, 0) >= ?"]
-    args: list[Any] = [float(min_score or 0.0)]
-    if area:
-        where.append("COALESCE(area, '') = ?")
-        args.append(area)
-    if query:
-        where.append("(title LIKE ? ESCAPE '\\' OR COALESCE(company, '') LIKE ? ESCAPE '\\')")
-        args += [_like(query), _like(query)]
-    rows = conn.execute(
-        """
-        SELECT key, title, company, area, score, lat, lng, address, metro, url,
-               published_at
-        FROM vacancies
-        WHERE {}
-        ORDER BY COALESCE(score, 0) DESC, published_at DESC
-        LIMIT ?
-        """.format(" AND ".join(where)),
-        [*args, max(1, int(limit))],
-    ).fetchall()
-    return [
-        {
-            "key": row["key"],
-            "title": row["title"],
-            "company": row["company"] or "",
-            "area": row["area"] or "",
-            "score": float(row["score"] or 0.0),
-            "lat": float(row["lat"]),
-            "lng": float(row["lng"]),
-            "address": row["address"] or "",
-            "metro": row["metro"] or "",
-            "url": row["url"] or "",
-            "published": (row["published_at"] or "")[:10],
-        }
-        for row in rows
-    ]
-
-
 def one(conn: sqlite3.Connection, key: str) -> dict[str, Any] | None:
     """Точка одной вакансии — для ссылки «на карте»."""
     row = conn.execute(
@@ -488,7 +437,6 @@ __all__ = (
     "from_page",
     "one",
     "pending",
-    "points",
     "save",
     "vacancy_id",
     "valid",
