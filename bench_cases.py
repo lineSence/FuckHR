@@ -21,13 +21,32 @@ from typing import Any
 
 @dataclass(frozen=True)
 class Case:
-    """Одна задача: что подаём на вход и что считаем успехом."""
+    """Одна задача: что подаём на вход и что считаем успехом.
+
+    level — сложность: 1 «умеет вообще», 2 «не путается», 3 «не ведётся».
+    Итог этапа считается взвешенным средним, вес уровня — в bench_metrics.
+
+    twin — имя пары для проверки устойчивости к порядку: два кейса с одним
+    twin отличаются только перестановкой списка на входе, и разные баллы у них
+    означают, что модель цепляется за позицию, а не за смысл.
+
+    refusal — правильный ответ «ничего не выбирать» или «спросить». Такие
+    кейсы считаются отдельной колонкой: способность отказаться и есть разница
+    между умной моделью и услужливой [HRD-004].
+
+    check — своя проверка кейса. Нужна сложным наборам (bench_hard.py), где
+    успех описывается не парой ключей в expect, а условием.
+    """
 
     name: str
     stage: str
     payload: dict[str, Any]
     expect: dict[str, Any] = field(default_factory=dict)
     trap: bool = False
+    level: int = 1
+    twin: str = ""
+    refusal: bool = False
+    check: Any = None
 
 
 @dataclass(frozen=True)
@@ -295,6 +314,8 @@ CASES: tuple[Case, ...] = (
 
 def check(case: Case, result: Any) -> tuple[float, str]:
     """Оценка от 0 до 1 и короткая причина. Проверки те же, что в пайплайне."""
+    if case.check is not None:
+        return case.check(case, result)
     if case.stage == "extract":
         return _check_extract(case, result)
     if case.stage == "company":
@@ -498,4 +519,7 @@ def _check_draft(case: Case, result: Any) -> tuple[float, str]:
     return 1.0, "{} символов".format(len(text))
 
 
-__all__ = ("CASES", "Case", "Draft", "Hit", "Person", "check")
+# Публичное имя для сложного набора: числа считаются одинаково везде.
+numbers = _numbers
+
+__all__ = ("CASES", "Case", "Draft", "Hit", "Person", "check", "numbers")

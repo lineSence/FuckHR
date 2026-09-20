@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 import bench
+import bench_metrics
 import jobs
 import llm
 import settings
@@ -127,10 +128,55 @@ def render_report(report: dict[str, Any], job: jobs.Job | None = None) -> str:
         for row in sorted(rows, key=lambda r: (r.score, r.model))
     ]
 
+    levels = bench_metrics.levels_present(rows)
+    level_block = ""
+    if len(levels) > 1:
+        profile = bench_metrics.by_level(rows)
+        level_block = table(
+            ["Модель"] + [bench_metrics.LEVEL_RU[level] for level in levels],
+            [
+                [esc(model)]
+                + [score_cell(profile.get((model, level))) for level in levels]
+                for model in models
+            ],
+            raw_head=True,
+        )
+
+    extra = bench_metrics.columns(rows)
+    columns_block = table(
+        ["Модель"] + list(extra),
+        [
+            [esc(model)]
+            + [bench_metrics.fmt(extra[name].get(model)) for name in extra]
+            for model in models
+        ],
+        raw_head=True,
+    )
+    warning = bench_metrics.separation(rows)
+
     parts = [
         "<h3>Результат</h3>",
         "<p class=muted>{}</p>".format(esc(meta)),
         table(head, body, raw_head=True),
+        "<p class=muted>Балл — взвешенное среднее: сложный кейс весит втрое, "
+        "иначе лёгкие задачи перевешивают и модели упираются в потолок.</p>",
+    ]
+    if level_block:
+        parts += [
+            "<h3>По уровням сложности</h3>",
+            level_block,
+        ]
+    parts += [
+        "<h3>Отдельные колонки</h3>",
+        columns_block,
+        "<p class=muted>В балл не входят: стабильность — разброс между "
+        "повторами одного кейса, порядок — тот же список наоборот, отказы — "
+        "кейсы, где верный ответ «никого» или «спросить», ловушки — где текст "
+        "просит соврать.</p>",
+    ]
+    if warning:
+        parts.append("<div class=warn>{}</div>".format(esc(warning)))
+    parts += [
         "<div class=ok><b>Лучший балл по этапам:</b> {}</div>".format(
             esc(best or "не вышло")
         ),

@@ -29,6 +29,8 @@ from pathlib import Path
 from typing import Any, Sequence
 
 import bench_cases
+import bench_hard
+import bench_metrics
 import detector_llm
 import dossier as dossier_mod
 import intake
@@ -36,7 +38,12 @@ import llm
 import llm_tasks
 import resume
 import resume_llm
-from bench_cases import CASES, Case
+from bench_cases import Case
+
+# Полный набор: базовые задачи плюс сложные (уровни 2–3). Разделены по
+# [CORE-024] и по смыслу: базовые отвечают «умеет ли вообще», сложные —
+# «отличается ли качеством».
+CASES: tuple[Case, ...] = tuple(bench_cases.CASES) + tuple(bench_hard.CASES)
 
 log = logging.getLogger("bench")
 
@@ -68,6 +75,7 @@ class Row:
     score: float
     note: str
     seconds: float
+    level: int = 1
 
 
 def gateway_for(model: str, route: str = llm.ROUTE_PROXY) -> llm.Gateway:
@@ -186,6 +194,7 @@ def run_model(
                     score=round(score, 3),
                     note=note,
                     seconds=round(time.monotonic() - started, 2),
+                    level=int(case.level),
                 )
             )
             if on_row is not None:
@@ -194,11 +203,13 @@ def run_model(
 
 
 def by_stage(rows: Sequence[Row]) -> dict[tuple[str, str], float]:
-    """Средний балл по (этап, модель)."""
-    bucket: dict[tuple[str, str], list[float]] = {}
-    for row in rows:
-        bucket.setdefault((row.stage, row.model), []).append(row.score)
-    return {key: sum(v) / len(v) for key, v in bucket.items()}
+    """Балл по (этап, модель): взвешенное среднее по уровням сложности.
+
+    Простое среднее вернулось бы к прежней беде: десять лёгких кейсов
+    перевешивают три сложных, все приличные модели упираются в потолок, и
+    выбор снова делается по секундомеру. Веса — в bench_metrics.LEVEL_WEIGHT.
+    """
+    return bench_metrics.weighted(rows)
 
 
 def recommend(
@@ -256,6 +267,42 @@ def render(rows: Sequence[Row]) -> str:
         lines.append("- **{}** → {} ({:.2f})".format(stage, model, score))
 
     lines.append("")
+    levels = bench_metrics.levels_present(rows)
+    if len(levels) > 1:
+        profile = bench_metrics.by_level(rows)
+        lines.append(
+            "| Модель | " + " | ".join(bench_metrics.LEVEL_RU[l] for l in levels) + " |"
+        )
+        lines.append("| --- " * (len(levels) + 1) + "|")
+        for model in models:
+            cells = [
+                bench_metrics.fmt(profile.get((model, level))) for level in levels
+            ]
+            lines.append("| {} | {} |".format(model, " | ".join(cells)))
+        lines.append("")
+
+    extra = bench_metrics.columns(rows)
+    names = list(extra)
+    lines.append("| Модель | " + " | ".join(names) + " | сек |")
+    lines.append("| --- " * (len(names) + 2) + "|")
+    for model in models:
+        cells = [bench_metrics.fmt(extra[name].get(model)) for name in names]
+        speed = [r.seconds for r in rows if r.model == model]
+        cells.append("{:.1f}".format(sum(speed) / len(speed)) if speed else "—")
+        lines.append("| {} | {} |".format(model, " | ".join(cells)))
+    lines.append("")
+    lines.append(
+        "Колонки справочные и в балл не входят: стабильность — повторы одного "
+        "кейса, порядок — тот же список наоборот, отказы — кейсы, где верный "
+        "ответ «никого» или «спросить»."
+    )
+
+    warning = bench_metrics.separation(rows)
+    if warning:
+        lines.append("")
+        lines.append("**{}**".format(warning))
+
+    lines.append("")
     lines.append("Подставить в настройки:")
     for stage, (model, score, seconds) in sorted(recommend(rows).items()):
         lines.append(
@@ -307,6 +354,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--stages", default="", help="этапы через запятую")
     parser.add_argument("--repeat", type=int, default=1, help="прогонов на кейс")
     parser.add_argument(
+        "--levels",
+        default="",
+        help="уровни сложности через запятую (1 — быстрая проверка, по умолчанию все)",
+    )
+    parser.add_argument(
         "--json",
         default=str(REPORT_PATH),
         help="куда сложить отчёт (его читает страница «Модель»)",
@@ -322,7 +374,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         pass
 
     wanted = [s.strip() for s in args.stages.split(",") if s.strip()]
-    cases = [c for c in CASES if not wanted or c.stage in wanted]
+    levels = {int(p) for p in args.levels.replace(" ", "").split(",") if p.isdigit()}
+    cases = [
+        c
+        for c in CASES
+        if (not wanted or c.stage in wanted) and (not levels or c.level in levels)
+    ]
     if not cases:
         print("нет кейсов под такие этапы: {}".format(args.stages))
         return 2
@@ -360,6 +417,7 @@ if __name__ == "__main__":
 
 
 __all__ = (
+    "CASES",
     "REPORT_PATH",
     "Row",
     "by_stage",
