@@ -31,6 +31,8 @@ import conditions
 import contacts
 import db
 import detector
+import settings
+import ui_views
 import webui
 import websearch
 
@@ -196,3 +198,26 @@ def test_сортировка_списка_вакансий(conn, make_vacancy) 
     assert by_title.index("Backend Python") < by_title.index("Аналитик")
     # Неизвестное имя сортировки не роняет страницу и не уходит в SQL.
     assert "Аналитик" in webui.render_vacancies(conn, 0.0, 10, sort="1=1")
+
+
+def test_страница_настроек_складывается_в_подкаты() -> None:
+    """Подкаты и поиск: проверяем каркас, а не вёрстку.
+
+    Важно ровно одно — поля остаются внутри формы. Если группа однажды окажется
+    после </form>, свёрнутые настройки перестанут сохраняться молча.
+    """
+    html = ui_views.render_settings()
+
+    assert html.count("<details class=setgroup") == len(settings.GROUPS)
+    assert html.count(" open>") == 1  # раскрыт только первый подкат
+    assert 'id="setq"' in html or "id=setq" in html
+    assert html.index("<details class=setgroup") > html.index("<form method=post")
+    assert html.rindex("</details>") < html.index("</form>")
+    # data-find даёт поиску по чему искать: ключ, название, подсказка.
+    assert 'data-find="сколько вакансий собирать за прогон run_limit' in html
+
+
+def test_мёртвые_ключи_hh_api_убраны_из_настроек() -> None:
+    """HH_TOKEN и HH_USER_AGENT не читает ни один модуль: HHClient не в пайплайне."""
+    assert "HH_TOKEN" not in settings.FIELD_BY_KEY
+    assert "HH_USER_AGENT" not in settings.FIELD_BY_KEY

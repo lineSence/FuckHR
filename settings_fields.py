@@ -48,6 +48,21 @@ GROUP_LLM_STAGES = "Модель по этапам"
 GROUP_SEARCH = "Внешний поиск"
 GROUP_PATHS = "Файлы и логи"
 
+# Подпись группы в свёрнутом виде: по названию не всегда понятно, что внутри.
+GROUP_HINTS: dict[str, str] = {
+    GROUP_RUN: "сколько собираем за прогон, цикл, письма",
+    GROUP_PREFILTER: "что отсеиваем до загрузки описания",
+    GROUP_DETECTOR: "пороги проверки утверждений вакансии",
+    GROUP_SCORE: "светофор работодателя и его влияние на скоринг",
+    GROUP_DEEP: "реестры, суды, долги, новости по кнопке",
+    GROUP_SOURCE: "темп запросов к hh.ru, cookie и прокси",
+    GROUP_TELEGRAM: "куда и как часто уходят карточки",
+    GROUP_LLM: "адреса шлюза, имена моделей, лимиты",
+    GROUP_LLM_STAGES: "имя модели для отдельного этапа, если профиля мало",
+    GROUP_SEARCH: "провайдер поиска и потолки запросов",
+    GROUP_PATHS: "база, лог, дампы сбоев",
+}
+
 # Порядок важен: в таком виде поля рисуются на странице настроек.
 FIELDS: tuple[Field, ...] = (
     Field(
@@ -262,23 +277,21 @@ FIELDS: tuple[Field, ...] = (
         "«недостаточно данных» [CORE-019]. Работает, только если модель включена.",
     ),
     Field(
-        "HH_TOKEN",
-        "Токен hh.ru",
-        GROUP_SOURCE,
-        SECRET,
-        "",
-        "Необязателен: сбор работает по HTML-страницам (ADR-015).",
-    ),
-    Field(
         "HH_COOKIE",
         "Cookie hh.ru",
         GROUP_SOURCE,
         SECRET,
         "",
-        "Помогает, когда площадка начинает показывать капчу.",
+        "Заголовок Cookie из браузера. Нужен, когда hh.ru начинает показывать капчу.",
     ),
-    Field("HH_USER_AGENT", "User-Agent", GROUP_SOURCE, TEXT, "", "Подпись клиента при запросах."),
-    Field("HH_PROXY", "Прокси для hh.ru", GROUP_SOURCE, TEXT, "", "Например http://127.0.0.1:8080"),
+    Field(
+        "HH_PROXY",
+        "Прокси для hh.ru",
+        GROUP_SOURCE,
+        TEXT,
+        "",
+        "Вида http://user:pass@host:port. Сбор идёт только с RU-IP.",
+    ),
     Field(
         "HH_PAUSE",
         "Пауза между запросами, сек",
@@ -296,7 +309,14 @@ FIELDS: tuple[Field, ...] = (
         "На чистых ответах пауза плавно снижается до этого значения. "
         "Ниже 0.5 — быстрый путь к бану.",
     ),
-    Field("TELEGRAM_BOT_TOKEN", "Токен бота", GROUP_TELEGRAM, SECRET, "", "Без него карточки только в интерфейсе."),
+    Field(
+        "TELEGRAM_BOT_TOKEN",
+        "Токен бота",
+        GROUP_TELEGRAM,
+        SECRET,
+        "",
+        "От @BotFather. Без него карточки остаются только в интерфейсе.",
+    ),
     Field("TELEGRAM_CHAT_ID", "Чат для карточек", GROUP_TELEGRAM, TEXT, "", "Свой id можно узнать у @userinfobot."),
     Field(
         "TELEGRAM_ENABLED",
@@ -349,10 +369,46 @@ FIELDS: tuple[Field, ...] = (
         "LiteLLM через туннель, например http://127.0.0.1:4000/v1",
     ),
     Field("LLM_PROXY_API_KEY", "Ключ прокси", GROUP_LLM, SECRET, "", "Мастер-ключ LiteLLM. Без него будет 401."),
-    Field("LLM_PROXY_MODEL_FAST", "Модель для быстрых этапов", GROUP_LLM, TEXT, "", "Разбор условий, черновая работа."),
-    Field("LLM_PROXY_MODEL_SMART", "Модель для разбора", GROUP_LLM, TEXT, "", "HR-фильтр и скоринг."),
-    Field("LLM_PROXY_MODEL_LONG", "Модель для длинных текстов", GROUP_LLM, TEXT, "", "Справка о компании."),
-    Field("LLM_PROXY_MODEL_EMBEDDINGS", "Модель векторов", GROUP_LLM, TEXT, "", "Например bge-m3."),
+    Field(
+        "LLM_PROXY_MODEL_FAST",
+        "Модель профиля auto:fast",
+        GROUP_LLM,
+        TEXT,
+        "",
+        "Этапы extract, ai_text, resume_*. Пусто — на прокси уходит сам алиас auto:fast.",
+    ),
+    Field(
+        "LLM_PROXY_MODEL_SMART",
+        "Модель профиля auto:smart",
+        GROUP_LLM,
+        TEXT,
+        "",
+        "Этапы hr_filter, score, intake.",
+    ),
+    Field(
+        "LLM_PROXY_MODEL_LONG",
+        "Модель профиля auto:long",
+        GROUP_LLM,
+        TEXT,
+        "",
+        "Этап company: справка о компании по длинным страницам.",
+    ),
+    Field(
+        "LLM_PROXY_MODEL_LOCAL",
+        "Модель профиля local-only",
+        GROUP_LLM,
+        TEXT,
+        "",
+        "Этапы с данными о людях: contacts, dossier, draft, review_fake [CORE-012].",
+    ),
+    Field(
+        "LLM_PROXY_MODEL_EMBEDDINGS",
+        "Модель векторов",
+        GROUP_LLM,
+        TEXT,
+        "",
+        "Например bge-m3.",
+    ),
     *(
         Field(
             env_key,
@@ -372,15 +428,29 @@ FIELDS: tuple[Field, ...] = (
         "0",
         "ВНИМАНИЕ: включённый флаг отправляет ФИО и адреса живых людей за пределы машины [CORE-012].",
     ),
-    Field("LLM_TIMEOUT", "Таймаут модели, сек", GROUP_LLM, FLOAT, "60", ""),
-    Field("LLM_MAX_CALLS", "Лимит вызовов на прогон", GROUP_LLM, INT, "300", "Страховка от бесконечного цикла."),
+    Field(
+        "LLM_TIMEOUT",
+        "Таймаут модели, сек",
+        GROUP_LLM,
+        FLOAT,
+        "60",
+        "Ответ дольше — вызов неудачный: этап деградирует, прогон идёт дальше [CORE-017].",
+    ),
+    Field(
+        "LLM_MAX_CALLS",
+        "Лимит вызовов на прогон",
+        GROUP_LLM,
+        INT,
+        "300",
+        "Считается шлюзом: на потолке этапы идут без модели. Страховка от бесконечного цикла.",
+    ),
     Field(
         "SEARCH_PROVIDER",
         "Провайдер поиска",
         GROUP_SEARCH,
         TEXT,
         "searxng",
-        "searxng, tavily или brave.",
+        "searxng работает без ключа, tavily и brave требуют SEARCH_API_KEY.",
     ),
     Field(
         "SEARCH_BASE_URL",
@@ -388,12 +458,27 @@ FIELDS: tuple[Field, ...] = (
         GROUP_SEARCH,
         TEXT,
         "",
-        "Свой инстанс, например http://127.0.0.1:8888 через туннель.",
+        "Свой инстанс, например http://127.0.0.1:8888 через туннель. Движки, язык и "
+        "период инстанса — на странице «Поиск».",
     ),
     Field("SEARCH_API_KEY", "Ключ провайдера", GROUP_SEARCH, SECRET, "", "Только для tavily и brave."),
     Field("SEARCH_BASIC_AUTH", "Логин:пароль для SearXNG", GROUP_SEARCH, SECRET, "", "Если инстанс закрыт basic-авторизацией."),
-    Field("SEARCH_TIMEOUT", "Таймаут поиска, сек", GROUP_SEARCH, FLOAT, "20", ""),
-    Field("SEARCH_MAX_CALLS", "Лимит запросов на прогон", GROUP_SEARCH, INT, "60", ""),
+    Field(
+        "SEARCH_TIMEOUT",
+        "Таймаут поиска, сек",
+        GROUP_SEARCH,
+        FLOAT,
+        "20",
+        "Медленный инстанс не должен растягивать прогон: запрос считается неудачным.",
+    ),
+    Field(
+        "SEARCH_MAX_CALLS",
+        "Лимит запросов на прогон",
+        GROUP_SEARCH,
+        INT,
+        "60",
+        "Досье на одну компанию — около десятка запросов. Потолок общий на прогон [CORE-016].",
+    ),
     Field(
         "SEARCH_WORKERS",
         "Запросов к поиску одновременно",
@@ -418,10 +503,38 @@ FIELDS: tuple[Field, ...] = (
         "4",
         "Этапы extract и hr_filter идут пулом после сбора. Максимум 8.",
     ),
-    Field("DB_PATH", "Файл базы", GROUP_PATHS, TEXT, "data/fuckhr.sqlite3", ""),
-    Field("LOG_PATH", "Файл лога", GROUP_PATHS, TEXT, "data/fuckhr.log", ""),
-    Field("FAILURE_DIR", "Куда класть сырой HTML при сбоях", GROUP_PATHS, TEXT, "data/failures", ""),
-    Field("ALERT_COOLDOWN_HOURS", "Пауза между тревогами, часов", GROUP_PATHS, INT, "24", ""),
+    Field(
+        "DB_PATH",
+        "Файл базы",
+        GROUP_PATHS,
+        TEXT,
+        "data/fuckhr.sqlite3",
+        "SQLite со всем состоянием: вакансии, слепки истории, досье, оценки, контакты.",
+    ),
+    Field(
+        "LOG_PATH",
+        "Файл лога",
+        GROUP_PATHS,
+        TEXT,
+        "data/fuckhr.log",
+        "Его же показывает страница запуска.",
+    ),
+    Field(
+        "FAILURE_DIR",
+        "Куда класть сырой HTML при сбоях",
+        GROUP_PATHS,
+        TEXT,
+        "data/failures",
+        "Хранятся последние 5 файлов: по ним видно, вёрстка hh.ru поменялась или это капча.",
+    ),
+    Field(
+        "ALERT_COOLDOWN_HOURS",
+        "Пауза между тревогами, часов",
+        GROUP_PATHS,
+        INT,
+        "24",
+        "Канарейка не повторяет одну и ту же тревогу чаще этого срока.",
+    ),
 )
 
 FIELD_BY_KEY: dict[str, Field] = {field.key: field for field in FIELDS}
