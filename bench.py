@@ -217,28 +217,52 @@ def by_stage(rows: Sequence[Row]) -> dict[tuple[str, str], float]:
     return bench_metrics.weighted(rows)
 
 
-def recommend(
-    rows: Sequence[Row], tolerance: float = 0.05
-) -> dict[str, tuple[str, float, float]]:
-    """Модель на каждый этап: сначала балл, при почти равном балле — скорость.
+def cascades(
+    rows: Sequence[Row],
+    tolerance: float = 0.05,
+    limit: int = llm.MAX_CANDIDATES,
+) -> dict[str, list[tuple[str, float, float]]]:
+    """Каскад кандидатов на каждый этап: балл, при почти равном балле — скорость.
 
-    Настройка живёт на этапе (`llm.STAGE_MODEL_ENV`), а не только на профиле:
-    у extract и resume_section один класс задачи, но победители разные.
+    Это тот же выбор, что и раньше, только не остановленный на первом месте:
+    порядок фолбэка в рантайме (`llm_cascade`, ADR-022) берётся строго отсюда,
+    потому что качество на живых данных никто не меряет [CORE-019].
     tolerance — насколько балл может быть ниже лучшего, чтобы считаться ничьей:
     две сотых на шести кейсах ничего не значат, а секунды на каждом вызове
     значат [CORE-016].
     """
     means = by_stage(rows)
-    out: dict[str, tuple[str, float, float]] = {}
+    out: dict[str, list[tuple[str, float, float]]] = {}
     for stage in {stage for stage, _ in means}:
-        candidates = [(m, s) for (st, m), s in means.items() if st == stage]
-        top = max(score for _, score in candidates)
-        near = [(m, s) for m, s in candidates if s >= top - tolerance]
-        model, score = min(
-            near, key=lambda ms: (round(_speed(rows, stage, ms[0]), 2), ms[0])
-        )
-        out[stage] = (model, round(score, 3), round(_speed(rows, stage, model), 2))
+        pool = [
+            (m, round(s, 3), round(_speed(rows, stage, m), 2))
+            for (st, m), s in means.items()
+            if st == stage
+        ]
+        chain: list[tuple[str, float, float]] = []
+        while pool and len(chain) < limit:
+            top = max(score for _, score, _ in pool)
+            near = [c for c in pool if c[1] >= top - tolerance]
+            best = min(near, key=lambda c: (c[2], c[0]))
+            chain.append(best)
+            pool.remove(best)
+        out[stage] = chain
     return out
+
+
+def recommend(
+    rows: Sequence[Row], tolerance: float = 0.05
+) -> dict[str, tuple[str, float, float]]:
+    """Первый кандидат каждого этапа: кому идти первым.
+
+    Настройка живёт на этапе (`llm.STAGE_MODELS_ENV`), а не только на профиле:
+    у extract и resume_section один класс задачи, но победители разные.
+    """
+    return {
+        stage: chain[0]
+        for stage, chain in cascades(rows, tolerance, 1).items()
+        if chain
+    }
 
 
 def winners(rows: Sequence[Row]) -> dict[str, tuple[str, float]]:
@@ -309,12 +333,18 @@ def render(rows: Sequence[Row]) -> str:
 
     lines.append("")
     lines.append("Подставить в настройки:")
-    for stage, (model, score, seconds) in sorted(recommend(rows).items()):
+    for stage, chain in sorted(cascades(rows).items()):
+        names = ",".join(model for model, _, _ in chain)
+        detail = ", ".join(
+            "{} ({:.2f}, {:.1f} с)".format(model, score, seconds)
+            for model, score, seconds in chain
+        )
         lines.append(
-            "- {} = {} ({:.2f}, {:.1f} с) → {}".format(
-                stage, model, score, seconds, llm.STAGE_MODEL_ENV.get(stage, "—")
+            "- {} = {} → {}".format(
+                stage, names, llm.STAGE_MODELS_ENV.get(stage, "—")
             )
         )
+        lines.append("  порядок фолбэка: {}".format(detail))
 
     lines.append("")
     lines.append("| Модель | Кейс | Балл | Сек | Что вышло |")
@@ -426,6 +456,7 @@ __all__ = (
     "REPORT_PATH",
     "Row",
     "by_stage",
+    "cascades",
     "gateway_for",
     "main",
     "recommend",

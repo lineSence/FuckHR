@@ -64,6 +64,11 @@ LOCAL_FIRST_STAGES = frozenset({"embeddings"})
 ROUTE_LOCAL = "local"
 ROUTE_PROXY = "proxy"
 
+# Сколько кандидатов держит каскад этапа. Три — решение владельца
+# (20.09.2026): в худшем дне это три реальных похода в сеть на вакансию,
+# четвёртый уже дороже пропуска этапа [CORE-016], [CORE-017].
+MAX_CANDIDATES = 3
+
 # Переменная окружения с именем модели на прокси для каждого профиля.
 PROXY_MODEL_ENV = {
     FAST: "LLM_PROXY_MODEL_FAST",
@@ -79,6 +84,13 @@ PROXY_MODEL_ENV = {
 # регулярно показывает, что на extract выигрывает одна модель, а на draft — другая.
 STAGE_MODEL_ENV = {
     stage: "LLM_STAGE_MODEL_{}".format(stage.upper()) for stage in STAGE_PROFILES
+}
+
+# Переменная окружения с каскадом кандидатов на этап: до трёх имён через
+# запятую в порядке бенча (`bench.cascades`). Сильнее одиночного
+# STAGE_MODEL_ENV, пустая — этап работает одной моделью, как раньше.
+STAGE_MODELS_ENV = {
+    stage: "LLM_STAGE_MODELS_{}".format(stage.upper()) for stage in STAGE_PROFILES
 }
 
 class ProfileError(RuntimeError):

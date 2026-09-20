@@ -201,11 +201,16 @@ def test_модель_ставится_на_этап_а_не_на_профиль
 def test_форма_подстановки_предлагает_ключи_env() -> None:
     import ui_bench
 
-    rows = [bench.Row("быстрая", "extract", "к1", 1.0, "", 0.7)]
+    rows = [
+        bench.Row("быстрая", "extract", "к1", 1.0, "", 0.7),
+        bench.Row("медленная", "extract", "к1", 0.9, "", 5.0),
+    ]
     html = ui_bench.render_apply_form(rows)
-    assert "LLM_STAGE_MODEL_EXTRACT" in html
+    assert "LLM_STAGE_MODELS_EXTRACT" in html
     assert 'action="/llm/apply"' in html
-    assert "LLM_STAGE_MODEL_EXTRACT" in ui_bench.ENV_KEYS
+    assert "LLM_STAGE_MODELS_EXTRACT" in ui_bench.ENV_KEYS
+    # В поле уходит весь порядок фолбэка, а не один победитель [ADR-022].
+    assert 'value="быстрая,медленная"' in html
 
 
 def test_ловушка_про_вилку_ловит_число_а_не_поле() -> None:

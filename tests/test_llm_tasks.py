@@ -12,6 +12,7 @@ import sqlite3
 from typing import Sequence
 
 import llm
+import llm_cache
 import llm_tasks
 import outreach
 import websearch
@@ -124,8 +125,8 @@ def test_профиль_пд_остаётся_local_only_при_любом_ма�
 
 def test_кэш_разделён_по_маршрутам(conn: sqlite3.Connection) -> None:
     messages = [{"role": "user", "content": "привет"}]
-    local = llm._digest(llm.FAST, messages, 0.0, llm.ROUTE_LOCAL, llm.FAST)
-    proxy = llm._digest(llm.FAST, messages, 0.0, llm.ROUTE_PROXY, "gpt-4o-mini")
+    local = llm_cache.digest(llm.FAST, messages, 0.0, llm.ROUTE_LOCAL, llm.FAST)
+    proxy = llm_cache.digest(llm.FAST, messages, 0.0, llm.ROUTE_PROXY, "gpt-4o-mini")
     assert local != proxy
 
 
