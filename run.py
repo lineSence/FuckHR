@@ -61,6 +61,7 @@ import db
 import detector
 import detector_llm
 import dossier
+import hh_pages
 import llm
 import injection_store
 import llm_batch
@@ -170,6 +171,10 @@ def run_once(args: argparse.Namespace) -> int:
     new_count = 0
     enriched = 0
     reused_details = 0
+    # Сколько карточек не стали качать: даже идеальное описание не вытянуло бы
+    # вакансию до порога профиля (PREFILTER_DETAILS_DELTA, B-15).
+    skipped_details = 0
+    details_delta = hh_pages.details_delta()
     to_extract: list[Any] = []
     to_claim: list[tuple[Any, Any]] = []
     empty_descriptions = 0
@@ -188,6 +193,7 @@ def run_once(args: argparse.Namespace) -> int:
         cookie=os.getenv("HH_COOKIE") or None,
         proxy=os.getenv("HH_PROXY") or None,
         failure_dir=settings.get("FAILURE_DIR", "data/failures"),
+        cache=hh_pages.search_cache(),
     )
     try:
         seen, drafts, owners = profiles.collect_all(
@@ -209,16 +215,17 @@ def run_once(args: argparse.Namespace) -> int:
             # Счётчик в квадратных скобках — то, по чему интерфейс рисует полоску.
             log.info("[%s/%s] %s — %s", position, total, draft.title, draft.company)
             vacancy = draft
-            # Описание из базы вместо второго похода на hh.ru. Карточка вакансии
-            # стоит паузы в пару секунд, и на повторном прогоне именно эти
-            # запросы съедали почти всё время. Дата публикации сменилась —
-            # значит объявление переопубликовали, описание качаем заново.
+            # Описание из базы вместо второго похода на hh.ru: на повторном
+            # прогоне именно эти запросы съедали почти всё время. Дата публикации
+            # сменилась — объявление переопубликовали, описание качаем заново.
             cached = db.cached_details(conn, draft.key) if with_details else None
             if cached and (not draft.published_at or cached[2] == draft.published_at):
                 text, skills, _published = cached
                 vacancy = draft.model_copy(update={"description": text, "skills": skills})
                 reused_details += 1
-            elif with_details:
+            elif with_details and hh_pages.worth_details(
+                draft, bundle, owners.get(draft.key), prefilter.fuzzy, details_delta
+            ):
                 try:
                     vacancy = enrich(draft, client.vacancy(draft.external_id))
                     enriched += 1
@@ -231,6 +238,8 @@ def run_once(args: argparse.Namespace) -> int:
                     with_details = False
                 except Exception:  # noqa: BLE001 — вакансия могла быть уже закрыта
                     log.warning("нет деталей по %s, берём черновик", draft.external_id)
+            elif with_details:
+                skipped_details += 1
             # Спрятанная в тексте инструкция для ИИ — поступок работодателя,
             # а не техническая помеха (ADR-020). Запоминаем до скоринга: улика
             # нужна оценке компании и строке карточки.
@@ -253,7 +262,7 @@ def run_once(args: argparse.Namespace) -> int:
                 if chosen is not None
                 else Verdict(0.0, [], rejected=True, reject_reason="не подошла ни одному профилю")
             )
-            # Слепок пишется для всего, даже для отклоныённого: история публикаций
+            # Слепок пишется для всего, даже для отклонённого: история публикаций
             # нужна детектору независимо от нашего интереса (ADR-009, ADR-010).
             db.add_snapshot(conn, vacancy)
             if verdict.rejected:
@@ -290,17 +299,17 @@ def run_once(args: argparse.Namespace) -> int:
             )
             log.info("    скор %.1f", verdict.score)
 
-            # Порог пройдён — компания идёт в очередь на изучение. Сам поиск запускается
-            # после обхода hh.ru: мешать его с постраничным сбором — значит сбить паузы
-            # и приблизить капчу.
+            # Порог пройдён — компания идёт в очередь на изучение. Сам поиск идёт
+            # после обхода hh.ru: мешать его с постраничным сбором — значит сбить
+            # паузы и приблизить капчу.
             if profiles.passed(bundle, matches) and vacancy.company:
                 to_research.setdefault(vacancy.company, getattr(vacancy, "site_url", None))
                 to_contact.append(vacancy.key)
 
             # Этап extract. Только для вакансий, прошедших скоринг: гонять модель
-            # по отклонённым — жечь бюджет вызовов ради данных, которые никто не прочтёт.
+            # по отклонённым — жечь бюджет ради данных, которые никто не прочтёт.
             # Сами вызовы идут после обхода, пулом: ожидание шлюза внутри цикла
-            # останавливало сбор на секунды и сбивало ритм пауз hh.ru.
+            # останавливало сбор и сбивало ритм пауз hh.ru.
             if gateway is not None and vacancy.description.strip():
                 to_extract.append(vacancy)
 
@@ -325,6 +334,12 @@ def run_once(args: argparse.Namespace) -> int:
             "описаний взято из базы: %s, скачано с hh.ru: %s",
             reused_details,
             enriched,
+        )
+    if skipped_details:
+        log.info(
+            "карточек не качали: %s (до порога не хватало больше %.0f баллов)",
+            skipped_details,
+            details_delta,
         )
 
     # Этапы модели по всему собранному разом: сеть ждут параллельно, в базу
