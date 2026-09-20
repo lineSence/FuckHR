@@ -32,6 +32,7 @@ from settings_fields import (  # noqa: F401 — публичные имена о
     FLOAT,
     GROUP_DEEP,
     GROUP_DETECTOR,
+    GROUP_EMBED,
     GROUP_HINTS,
     GROUP_LLM,
     GROUP_LLM_STAGES,
@@ -274,6 +275,15 @@ class DetectorOptions:
 
 
 @dataclass(frozen=True)
+class EmbeddingsOptions:
+    """Векторы текстов (ADR-021): считать ли и с какой близости верить."""
+
+    enabled: bool
+    review_dup: float
+    vacancy_sim: float
+
+
+@dataclass(frozen=True)
 class CompanyScoreOptions:
     """Общая оценка работодателя (ADR-018): считать и учитывать ли её."""
 
@@ -346,6 +356,16 @@ def company_score_options() -> CompanyScoreOptions:
         enabled=flag("COMPANY_SCORE_ENABLED"),
         in_score=flag("COMPANY_SCORE_IN_SCORE"),
         penalty=max(0.0, as_float(os.getenv("COMPANY_SCORE_PENALTY"), 15.0)),
+    )
+
+
+def embeddings_options() -> EmbeddingsOptions:
+    """Пороги близости зажаты в 0.5..0.999: ниже это уже не «тот же текст»,
+    а выше — не срабатывает никогда, и обе крайности выглядят как «не работает»."""
+    return EmbeddingsOptions(
+        enabled=flag("EMBEDDINGS_ENABLED"),
+        review_dup=max(0.5, min(0.999, as_float(os.getenv("EMBEDDINGS_REVIEW_DUP"), 0.93))),
+        vacancy_sim=max(0.5, min(0.999, as_float(os.getenv("EMBEDDINGS_VACANCY_SIM"), 0.80))),
     )
 
 
@@ -423,6 +443,7 @@ __all__ = (
     "CollectOptions",
     "CompanyScoreOptions",
     "DetectorOptions",
+    "EmbeddingsOptions",
     "PrefilterOptions",
     "ENV_PATH",
     "FIELDS",
@@ -442,6 +463,7 @@ __all__ = (
     "collect_options",
     "company_score_options",
     "detector_options",
+    "embeddings_options",
     "flag",
     "form_updates",
     "get",

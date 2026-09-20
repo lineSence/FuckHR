@@ -40,6 +40,14 @@ TARGETS: tuple[tuple[str, str, tuple[str, ...], str, bool], ...] = (
         False,
     ),
     (
+        "embeddings",
+        "Векторы текстов",
+        ("embeddings",),
+        "Своих данных у таблицы нет: векторы считаются заново следующим прогоном. "
+        "Нужно после смены модели эмбеддингов [LLM-011].",
+        False,
+    ),
+    (
         "dossier",
         "Досье и отзывы о компаниях",
         (
@@ -120,6 +128,7 @@ DANGEROUS = tuple(code for code, _l, _t, _w, danger in TARGETS if danger)
 EVERYTHING = (
     "search_cache",
     "llm_cache",
+    "embeddings",
     "dossier",
     "contacts",
     "vacancies",

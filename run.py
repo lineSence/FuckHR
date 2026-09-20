@@ -77,6 +77,7 @@ from hh import Vacancy, enrich
 from hh_html import BlockedError, HHHtmlClient
 import run_cards
 import run_loop
+import embeddings_tasks
 from run_setup import build_gateway, notify_if_broken, setup_logging
 from research import (  # noqa: F401 — реэкспорт для старых вызовов
     MAX_RESEARCH_WORKERS,
@@ -325,6 +326,11 @@ def run_once(args: argparse.Namespace) -> int:
         db.deactivate_missing(conn, seen.keys())
     elif partial:
         log.info("сбор оборван лимитом — пропавшие вакансии не отмечаем")
+
+    # Векторы (ADR-021) — до досье: перефразированные отзывы ловятся уже в этом
+    # же прогоне, а не со следующего. Этап выключен по умолчанию и без
+    # эмбеддера просто ничего не делает [CORE-017].
+    embeddings_tasks.index_vacancies(conn, gateway)
 
     # Досье на компании. Идёт после hh.ru и до отправки карточек: без него в карточке
     # не будет самой полезной строки — стоит ли вообще связываться с этими людьми.

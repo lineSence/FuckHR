@@ -30,6 +30,7 @@
 - `wiki/architecture/hh-html-scraping.md` — разбор HTML hh.ru и его fallback-стратегии (ADR-015).
 - `wiki/architecture/company-score.md` — общая оценка работодателя: оси, улики, вето (ADR-018, замысел).
 - `wiki/architecture/prompt-injection.md` — инъекции в чужих текстах: чистка входа, улика, скрытый HTML (ADR-020, замысел).
+- `wiki/architecture/embeddings.md` — локальные эмбеддинги: модель, хранение, две задачи (ADR-021).
 - `wiki/architecture/deep-research.md` — глубокий ресёрч по компании: источники, капча, потолок по времени (ADR-019, замысел).
 
 ## workflows

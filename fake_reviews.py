@@ -189,12 +189,17 @@ def score_items(
     known_hashes: Mapping[str, str] | None = None,
     llm_ads: Iterable[int] = (),
     ai_texts: Iterable[int] = (),
+    near_pairs: Iterable[tuple[int, int]] = (),
     trust: Mapping[str, float] | None = None,
 ) -> tuple[Verdict, ...]:
     """Считает fake_score каждому отзыву компании.
 
     `known_hashes` — хэши отзывов о *других* компаниях: дословное совпадение с
     ними и есть след фабрики отзывов.
+
+    `near_pairs` — пары `item.index`, признанные пересказом друг друга по
+    векторам (ADR-021). Считаются снаружи по той же причине, что и `llm_ads`:
+    здесь нет ни сети, ни модели, только правила [CORE-015].
     """
     items = tuple(items)
     if not items:
@@ -202,6 +207,7 @@ def score_items(
     trust = trust or SITE_TRUST
     known_hashes = known_hashes or {}
     ads = set(llm_ads)
+    paraphrased = {index for pair in near_pairs for index in pair}
     generated = set(ai_texts)
     single_site = len({item.site for item in items if item.site}) <= 1
     hot = _bursts(items)
@@ -233,6 +239,10 @@ def score_items(
             signals.append("uniform_length")
         if item.index in ads:
             signals.append("llm_ad")
+        # Перефраз не добавляется поверх дословного дубля: это одно наблюдение,
+        # а не два, и вместе они выносили отзыв в «заказной» на ровном месте.
+        if item.index in paraphrased and "dup_same_company" not in signals:
+            signals.append("paraphrase")
 
         total = sum(R.SIGNALS[code][0] for code in signals)
         score = round(min(1.0, total / R.SCORE_CAP), 2)
