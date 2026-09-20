@@ -8,6 +8,15 @@
 Так решил владелец, и так же требует [CORE-016]: у каждого шага свои внешние
 запросы и своё время.
 
+Внутри цели вакансий бывает тысяча: Москва, Казань и Урюпинск вперемешку, скор
+от нуля до восьмидесяти. Поэтому над таблицей стоит отбор: город, порог
+скора, слово в названии и порядок. Отбор ничего не удаляет и ничего не
+запрашивает в сети — это только про то, что видно на экране.
+
+Выбранный отбор хранится в памяти процесса (`_VIEW`), как и список кандидатов:
+интерфейс однопользовательский, и заводить таблицу в базе ради временного
+состояния экрана не стоит [CORE-012]. После перезапуска отбор сбрасывается.
+
 В браузер не уходит ничего, кроме id цели. Название компании для подпроцесса
 берётся из базы: строку из формы владелец вводит свободную, и в argv ей
 не место.
@@ -23,16 +32,39 @@ import hh_employer
 import jobs
 import settings
 import targets
-from ui_core import esc, table
+from ui_core import esc, sort_pick, table
 
 # Кандидаты ищутся сетью, поэтому их держим в памяти процесса между двумя
 # запросами страницы: интерфейс однопользовательский, база для этого не нужна.
 _CANDIDATES: dict[str, list[hh_employer.Employer]] = {}
 
+# Отбор вакансий по каждой цели: {id цели: {sort, area, min, q}}.
+_VIEW: dict[int, dict[str, object]] = {}
+
 STEPS = (
     ("vacancies", "Собрать вакансии", "Все вакансии компании на hh.ru, без порога."),
     ("reviews", "Отзывы и оценка", "Досье по отзывам и общая оценка работодателя."),
     ("research", "Глубокий ресёрч", "Реестр, суды, долги, банкротство, новости."),
+)
+
+# Подписи к порядкам из targets.VAC_SORTS. Сами выражения SQL живут там же, где
+# запрос, а здесь только слова для человека.
+VAC_SORT_LABELS = (
+    ("fresh", "Сначала новые и свежие"),
+    ("score", "По скору"),
+    ("date", "По дате публикации"),
+    ("area", "По городу"),
+    ("title", "По названию"),
+)
+
+# Пороги скора ступеньками: точное число здесь никому не нужно, а выбор из
+# пяти вариантов быстрее любого поля ввода.
+SCORE_STEPS = (
+    (0.0, "любой скор"),
+    (20.0, "скор от 20"),
+    (40.0, "скор от 40"),
+    (60.0, "скор от 60"),
+    (80.0, "скор от 80"),
 )
 
 
@@ -136,6 +168,32 @@ def start_step(conn: sqlite3.Connection, target_id: int, step: str) -> str:
     return ""
 
 
+def view_of(target_id: int) -> dict[str, object]:
+    """Текущий отбор вакансий у цели. По умолчанию — всё, как раньше."""
+    saved = _VIEW.get(int(target_id))
+    if not saved:
+        return {"sort": targets.VAC_SORT_DEFAULT, "area": "", "min": 0.0, "q": ""}
+    return dict(saved)
+
+
+def set_view(target_id: int, form: Mapping[str, Sequence[str]]) -> None:
+    """Запомнить выбор из формы отбора. Пустая форма равна сбросу."""
+
+    def one(key: str) -> str:
+        return (form.get(key) or [""])[0]
+
+    _VIEW[int(target_id)] = {
+        # Имя порядка из браузера проверяется по белому списку, а город и
+        # слово уходят в SQL только параметрами.
+        "sort": sort_pick(
+            one("sort"), tuple(targets.VAC_SORTS), targets.VAC_SORT_DEFAULT
+        ),
+        "area": one("area").strip()[:120],
+        "min": settings.as_float(one("min"), 0.0),
+        "q": one("q").strip()[:80],
+    }
+
+
 def last_query(form: Mapping[str, Sequence[str]]) -> str:
     """Что искали: нужно, чтобы показать кандидатов после добавления по имени."""
     text = (form.get("text") or [""])[0]
@@ -164,6 +222,12 @@ def handle(conn: sqlite3.Connection, path: str, form: Mapping[str, Sequence[str]
         targets.remove(conn, int(one("id") or 0))
         return "Цель убрана из списка. Всё собранное о компании осталось в базе."
     if path == "/targets/step":
+        # Отбор вакансий — тоже POST сюда: это единственный путь, после которого
+        # снова рисуется страница самой цели, а не список целей. Никакой задачи
+        # отбор не запускает и в сеть не ходит.
+        if one("step") == "view":
+            set_view(int(one("id") or 0), form)
+            return ""
         problem = start_step(conn, int(one("id") or 0), one("step"))
         return problem or "Шаг запущен: смотри лог на странице «Запуск»."
     return ""
@@ -268,12 +332,68 @@ def render_targets(conn: sqlite3.Connection, note: str = "", query: str = "") ->
     return "".join(parts)
 
 
+def _option(value: str, label: str, current: str) -> str:
+    return '<option value="{value}"{sel}>{label}</option>'.format(
+        value=esc(value),
+        sel=" selected" if value == current else "",
+        label=esc(label),
+    )
+
+
+def _filters(
+    conn: sqlite3.Connection, target: targets.Target, view: dict[str, object], total: int
+) -> str:
+    """Форма отбора вакансий внутри цели.
+
+    Города перечисляются со счётчиками: видно, что из тысячи вакансий в твоём
+    городе две — и что искать там больше нечего.
+    """
+    area = str(view["area"])
+    cities = [_option("", "все города ({})".format(total), area)]
+    for name, count in targets.areas(conn, target.id):
+        cities.append(
+            _option(name, "{} ({})".format(name or "без города", count), area)
+        )
+    current_min = "{:g}".format(float(view["min"]))
+    scores = [
+        _option("{:g}".format(step), label, current_min) for step, label in SCORE_STEPS
+    ]
+    sorts = [_option(key, label, str(view["sort"])) for key, label in VAC_SORT_LABELS]
+    return (
+        '<form method=post action="/targets/step" class=filters>'
+        '<input type=hidden name="id" value="{tid}">'
+        '<input type=hidden name="step" value="view">'
+        '<label class=filt>Город<br><select name="area">{cities}</select></label>'
+        '<label class=filt>Скор<br><select name="min">{scores}</select></label>'
+        '<label class=filt>Порядок<br><select name="sort">{sorts}</select></label>'
+        '<label class=filt>В названии<br>'
+        '<input type=search name="q" value="{q}" maxlength="80" placeholder="python"></label>'
+        "<label class=filt><br><button>Показать</button></label>"
+        "</form>"
+    ).format(
+        tid=target.id,
+        cities="".join(cities),
+        scores="".join(scores),
+        sorts="".join(sorts),
+        q=esc(str(view["q"])),
+    )
+
+
+def _reset(target: targets.Target) -> str:
+    return (
+        '<form class=inline method=post action="/targets/step">'
+        '<input type=hidden name="id" value="{tid}">'
+        '<input type=hidden name="step" value="view">'
+        "<button class=secondary>Сбросить отбор</button></form>"
+    ).format(tid=target.id)
+
+
 def render_target(conn: sqlite3.Connection, target_id: int, note: str = "") -> str:
-    """Одна цель: шаги, вакансии целиком и ссылка на досье."""
+    """Одна цель: шаги, вакансии с отбором и ссылка на досье."""
     target = targets.get(conn, int(target_id))
     if target is None:
         return "<p>Такой цели нет.</p>"
-    targets.seen(conn, target.id)
+    total, _fresh = targets.counts(conn, target.id)
     parts = ['<p><a href="/targets">← Все цели</a></p>']
     if note:
         parts.append("<div class=ok>{}</div>".format(esc(note)))
@@ -301,8 +421,18 @@ def render_target(conn: sqlite3.Connection, target_id: int, note: str = "") -> s
         )
     )
 
+    view = view_of(target.id)
+    picked = bool(view["area"] or view["min"] or view["q"])
+    found = targets.vacancies(
+        conn,
+        target.id,
+        sort=str(view["sort"]),
+        area=str(view["area"]),
+        min_score=float(view["min"]),
+        query=str(view["q"]),
+    )
     rows = []
-    for row in targets.vacancies(conn, target.id):
+    for row in found:
         rows.append(
             [
                 '<a href="/vacancy?key={key}">{title}</a>{flag}'.format(
@@ -315,18 +445,32 @@ def render_target(conn: sqlite3.Connection, target_id: int, note: str = "") -> s
                 esc((row["published_at"] or "")[:10]),
             ]
         )
+    # Отметка «новая» гаснет после того, как строки уже посчитаны: иначе владелец
+    # никогда не увидит, что именно пришло нового.
+    targets.seen(conn, target.id)
+
     parts.append("<h2>Вакансии компании</h2>")
-    if not rows:
+    if not total:
         parts.append(
             "<p class=muted>Вакансии ещё не собирались. Кнопка «Собрать вакансии» "
             "возьмёт всё, что у компании открыто.</p>"
         )
-    else:
-        parts.append(
-            "<p class=muted>Показаны все вакансии компании, а не только прошедшие "
-            "порог: цель выбрана руками. Скор рядом — справочно, по лучшему "
-            "профилю.</p>"
+        return "".join(parts)
+
+    parts.append(_filters(conn, target, view, total))
+    parts.append(
+        "<p class=muted>Показано {shown} из {total}. Отбор только прячет строки на "
+        "экране: из базы ничего не пропадает, порог профиля к цели не "
+        "применяется, а скор рядом — справочно, по лучшему профилю.{reset}</p>".format(
+            shown=len(rows), total=total, reset=" " + _reset(target) if picked else ""
         )
+    )
+    if not rows:
+        parts.append(
+            "<p class=muted>Под этот отбор не попала ни одна вакансия. Ослабь порог "
+            "скора или выбери другой город.</p>"
+        )
+    else:
         parts.append(
             table(["Вакансия", "Город", "Скор", "Опубликована"], rows, raw_head=True)
         )
@@ -349,13 +493,17 @@ def star_form(conn: sqlite3.Connection, company: str) -> str:
 
 
 __all__ = (
+    "SCORE_STEPS",
     "STEPS",
+    "VAC_SORT_LABELS",
     "add_from_input",
     "handle",
     "last_query",
     "pick",
     "render_target",
     "render_targets",
+    "set_view",
     "star_form",
     "start_step",
+    "view_of",
 )
