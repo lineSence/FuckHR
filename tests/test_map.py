@@ -1,0 +1,187 @@
+"""Карта: что проверяется и почему именно это.
+
+Сети в тестах нет: ни hh.ru, ни тайлов, ни Leaflet [CORE-017]. База — в памяти.
+
+Главные риски фичи не в разметке, а в данных: вакансия без адреса, нулевая
+точка (0,0) и поиск со знаком % — именно они тихо портят карту.
+"""
+
+from __future__ import annotations
+
+import sqlite3
+
+import geo
+import jobs
+import ui_core
+import ui_map
+
+SCHEMA = """
+CREATE TABLE vacancies (
+    key TEXT PRIMARY KEY,
+    title TEXT,
+    company TEXT,
+    area TEXT,
+    score REAL,
+    url TEXT,
+    published_at TEXT,
+    last_seen_at TEXT
+)
+"""
+
+ROWS = (
+    ("hh:1", "Python-разработчик", "Компания А", "Москва", 80.0),
+    ("hh:2", "Аналитик 100% удалённо", "Компания Б", "Казань", 40.0),
+    ("hh:3", "Без адреса", "Компания В", "Урюпинск", 10.0),
+)
+
+
+def make_db() -> sqlite3.Connection:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(SCHEMA)
+    for key, title, company, area, score in ROWS:
+        conn.execute(
+            "INSERT INTO vacancies (key, title, company, area, score, url,"
+            " published_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                key,
+                title,
+                company,
+                area,
+                score,
+                "https://hh.ru/vacancy/" + key.split(":")[1],
+                "2026-09-01T10:00:00",
+                "2026-09-02T10:00:00",
+            ),
+        )
+    conn.commit()
+    geo.ensure_schema(conn)
+    geo.save(conn, "hh:1", geo.Point("Москва, Ленинский пр-т, 1", 55.71, 37.59, "Октябрьская"))
+    geo.save(conn, "hh:2", geo.Point("Казань, Баумана, 5", 55.79, 49.12, None))
+    return conn
+
+
+def test_ensure_schema_idempotent() -> None:
+    """Колонки добавляются на живой базе и только один раз."""
+    conn = make_db()
+    geo.ensure_schema(conn)
+    names = {row[1] for row in conn.execute("PRAGMA table_info(vacancies)")}
+    assert {"address", "lat", "lng", "metro"} <= names
+
+
+def test_valid_rejects_null_island() -> None:
+    """(0, 0) — это пустое поле, а не Атлантика."""
+    assert geo.valid(55.7, 37.6)
+    assert not geo.valid(0.0, 0.0)
+    assert not geo.valid(None, 37.6)
+    assert not geo.valid(91.0, 37.6)
+
+
+def test_num_survives_comma_and_junk() -> None:
+    assert geo._num("55,75") == 55.75
+    assert geo._num("") is None
+    assert geo._num("москва") is None
+    assert geo._num(True) is None
+
+
+def test_address_of_object() -> None:
+    node = {
+        "address": {
+            "city": "Москва",
+            "street": "Ленинский пр-т",
+            "building": "1",
+            "lat": "55,71",
+            "lng": 37.59,
+            "metroStations": [{"stationName": "Октябрьская"}],
+        }
+    }
+    point = geo.address_of(node)
+    assert point is not None
+    assert point.mappable
+    assert "Москва" in point.address
+    assert point.metro == "Октябрьская"
+
+
+def test_address_of_string_and_missing() -> None:
+    """Адрес бывает строкой; его может не быть вовсе — это не ошибка."""
+    point = geo.address_of({"address": "Казань, Баумана, 5"})
+    assert point is not None and not point.mappable
+    assert geo.address_of({"name": "Удалённо"}) is None
+    assert geo.address_of({"address": {"lat": 0, "lng": 0}}) is None
+
+
+def test_points_and_coverage() -> None:
+    conn = make_db()
+    assert geo.coverage(conn) == (2, 3)
+    assert len(geo.points(conn)) == 2
+    assert [p["key"] for p in geo.points(conn, min_score=60.0)] == ["hh:1"]
+    assert [p["key"] for p in geo.points(conn, area="Казань")] == ["hh:2"]
+    assert [p["key"] for p in geo.points(conn, query="Python")] == ["hh:1"]
+
+
+def test_points_treat_percent_as_text() -> None:
+    """Процент в запросе — буква, а не джокер LIKE."""
+    conn = make_db()
+    assert [p["key"] for p in geo.points(conn, query="100%")] == ["hh:2"]
+    assert geo.points(conn, query="%") == []
+
+
+def test_one_and_areas() -> None:
+    conn = make_db()
+    item = geo.one(conn, "hh:1")
+    assert item is not None and item["lat"] is not None
+    assert geo.one(conn, "hh:3")["lat"] is None
+    assert geo.one(conn, "hh:404") is None
+    assert dict(geo.areas(conn)) == {"Москва": 1, "Казань": 1}
+
+
+def test_pending_skips_mapped() -> None:
+    conn = make_db()
+    assert [row["key"] for row in geo.pending(conn)] == ["hh:3"]
+
+
+def test_vacancy_id() -> None:
+    assert geo.vacancy_id("https://hh.ru/vacancy/12345?from=x") == "12345"
+    assert geo.vacancy_id("https://hh.ru/employer/1") is None
+    assert geo.vacancy_id(None) is None
+
+
+def test_points_json_has_focus() -> None:
+    conn = make_db()
+    import json
+
+    data = json.loads(ui_map.points_json(conn, {"key": "hh:2"}))
+    assert data["focus"] == "hh:2"
+    assert {p["key"] for p in data["points"]} == {"hh:1", "hh:2"}
+
+
+def test_render_map_offline() -> None:
+    """Страница собирается без сети и честно считает вакансии без адреса."""
+    conn = make_db()
+    html = ui_map.render_map(conn, {})
+    assert 'id=map' in html
+    assert "без адреса" in html
+    # Список адресов есть всегда: это запасной вид без Leaflet.
+    assert "maplist" in html and "Казань, Баумана, 5" in html
+
+
+def test_tiles_placeholders_are_literal() -> None:
+    """Адрес тайлов уходит в Leaflet как есть: {s}/{z}/{x}/{y} разбирает он."""
+    assert "{s}" in ui_map.tile_url() and "{z}" in ui_map.tile_url()
+    assert "{{" not in ui_map.DEFAULT_TILES
+
+
+def test_link_and_hint() -> None:
+    conn = make_db()
+    assert "/map?key=hh%3A1" in ui_map.link(conn, "hh:1") or "/map?key=hh:1" in ui_map.link(
+        conn, "hh:1"
+    )
+    # У вакансии без точки ссылки на карту нет и быть не должно.
+    assert "на карте" not in ui_map.link(conn, "hh:3")
+    assert "2 из 3" in ui_map.hint(conn)
+
+
+def test_map_is_reachable_from_menu() -> None:
+    """Фича, до которой нельзя дойти мышью, для владельца не существует."""
+    assert any(path == "/map" for path, _ in ui_core.NAV_ITEMS)
+    assert "geo-backfill" in jobs.TASKS
