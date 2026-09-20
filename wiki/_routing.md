@@ -74,6 +74,11 @@ triggers:
       - wiki/architecture/embeddings.md
       - docs/embeddings.md
 
+  - id: rebuild
+    keywords: [пересчёт базы, пересчитать скор, обработать собранное, задним числом, бэкфилл, rebuild, применить новые правила]
+    load:
+      - docs/rebuild.md
+
   - id: deep-research
     keywords: [глубокий ресёрч, ресерч компании, реестр, егрюл, инн, суд, арбитраж, банкротство, приставы, исполнительное производство, новости о компании]
     load:
