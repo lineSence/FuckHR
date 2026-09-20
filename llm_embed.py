@@ -36,6 +36,10 @@ def model_name(gateway: object | None) -> str:
     и с одной моделью. Эмбеддеру не хватает — Ollama на `model=embeddings`
     отвечает «model not found». Поэтому локальный маршрут берёт имя из
     `LLM_STAGE_MODEL_EMBEDDINGS` (поле «Этап embeddings» в настройках).
+
+    Этап в `LOCAL_FIRST_STAGES`, поэтому при настроенном `LLM_BASE_URL` имя
+    берётся отсюда почти всегда; на прокси этап уходит, только если локального
+    адреса нет, и тогда имя должно совпадать с алиасом из его `config.yaml`.
     """
     route = getattr(gateway, "route_for", lambda _stage: None)(STAGE)
     if route is None:
@@ -90,6 +94,12 @@ def embed(gateway: object | None, texts: Sequence[str]) -> list[list[float]] | N
                     response.status_code,
                     response.text[:200],
                 )
+                if response.status_code < 500:
+                    # Отказ по сути запроса (обычно «нет такой модели») не
+                    # исправится ни на втором батче, ни на второй вакансии.
+                    getattr(gateway, "reject", lambda *_a: None)(
+                        route.name, model, "HTTP {}".format(response.status_code)
+                    )
                 return None
             payload = response.json()
         except Exception as exc:  # noqa: BLE001 — модель не роняет прогон [CORE-017]

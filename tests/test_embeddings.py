@@ -158,3 +158,34 @@ def test_локальный_маршрут_требует_имя_модели(mo
 
     gateway.stage_models = {"embeddings": "bge-m3"}
     assert llm_embed.model_name(gateway) == "bge-m3"
+
+
+def test_отказ_эмбеддера_гасит_пару_маршрут_модель(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """400 «нет такой модели» не должен повторяться на каждом батче.
+
+    Так у владельца выглядел прокси: туда уходило ollama-имя bge-m3:latest,
+    которого нет в config.yaml LiteLLM. Теперь этап сам себя выключает, а
+    шлюз запоминает отказ и на следующем вызове маршрута уже не даёт.
+    """
+
+    class Refusing(FakeGateway):
+        stage_models = {"embeddings": "bge-m3:latest"}
+
+        def __init__(self) -> None:
+            self.rejected: list[tuple[str, str, str]] = []
+
+        def reject(self, route: str, model: str, reason: str) -> None:
+            self.rejected.append((route, model, reason))
+
+    class Response:
+        status_code = 400
+        text = '{"error": {"message": "Invalid model name"}}'
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "post", lambda *a, **kw: Response())
+    gateway = Refusing()
+    assert llm_embed.embed(gateway, ["текст"]) is None
+    assert gateway.rejected == [("local", "bge-m3:latest", "HTTP 400")]

@@ -68,6 +68,38 @@ def test_персональные_этапы_остаются_локальным
         assert route.name == llm.ROUTE_LOCAL, stage
 
 
+def test_эмбеддинги_остаются_локальными_при_настроенном_прокси() -> None:
+    # Модель векторов пиннится навсегда [LLM-011], а состав моделей на прокси
+    # владелец не контролирует. Плюс ollama-имя на прокси даёт 400.
+    gateway = llm.Gateway(
+        base_url=LOCAL_URL,
+        proxy_base_url=PROXY_URL,
+        proxy_models={llm.EMBEDDINGS: "text-embedding-3-large"},
+    )
+    route = gateway.route_for("embeddings")
+    assert route is not None
+    assert (route.name, route.base_url) == (llm.ROUTE_LOCAL, LOCAL_URL)
+
+
+def test_эмбеддинги_без_локального_адреса_уходят_на_прокси() -> None:
+    # Запасной маршрут: лучше считать на прокси, чем не считать вовсе [CORE-017].
+    gateway = llm.Gateway(
+        proxy_base_url=PROXY_URL, proxy_models={llm.EMBEDDINGS: "bge-m3"}
+    )
+    route = gateway.route_for("embeddings")
+    assert route is not None
+    assert (route.name, route.model) == (llm.ROUTE_PROXY, "bge-m3")
+
+
+def test_отклонённая_моделью_прокси_пара_больше_не_берётся() -> None:
+    # Тот же приём, что у чата: 400 по сути запроса в прогоне не исправится.
+    gateway = llm.Gateway(
+        proxy_base_url=PROXY_URL, proxy_models={llm.EMBEDDINGS: "bge-m3"}
+    )
+    gateway.reject(llm.ROUTE_PROXY, "bge-m3", "HTTP 400")
+    assert gateway.route_for("embeddings") is None
+
+
 def test_персональные_этапы_без_локальной_модели_пропускаются() -> None:
     # Лучше остаться без шлифовки письма, чем тихо отправить ФИО наружу.
     gateway = llm.Gateway(proxy_base_url=PROXY_URL)

@@ -60,6 +60,7 @@ from llm_profiles import (  # noqa: F401 — публичные имена ос�
     EMBEDDINGS,
     FAST,
     LOCAL,
+    LOCAL_FIRST_STAGES,
     LONG,
     PERSONAL_STAGES,
     PROXY_MODEL_ENV,
@@ -295,6 +296,15 @@ class Gateway:
                 env_name,
             )
 
+    def reject(self, route: str, model: str, reason: str) -> None:
+        """Запомнить отказ по сути запроса: пара (маршрут, модель) больше не берётся.
+
+        Нужно снаружи: `/embeddings` живёт в `llm_embed` [CORE-024], а 400 от
+        прокси там означает то же, что и в чате, — конфиг прокси этой модели не
+        знает, и в этом прогоне не узнает.
+        """
+        self._rejected[(route, model)] = reason
+
     def route_for(self, stage: str) -> Route | None:
         """Где будет считаться этап. None — считать негде.
 
@@ -303,9 +313,10 @@ class Gateway:
         1. этапы с ПД идут на локальный адрес, если владелец явно не разрешил
            обратное через LLM_PERSONAL_VIA_PROXY;
         2. остальные предпочитают прокси: модели там сильнее;
-        3. если нужный адрес не задан — берётся второй, кроме случая ПД без
+        3. этапы из LOCAL_FIRST_STAGES идут на локальный адрес, если он есть;
+        4. если нужный адрес не задан — берётся второй, кроме случая ПД без
            разрешения: там фолбэка на прокси нет вообще;
-        4. если прокси уже отказал по этой модели в этом же прогоне — идём
+        5. если прокси уже отказал по этой модели в этом же прогоне — идём
            на локальный адрес, если он вообще есть.
         """
         profile = profile_for(stage)
@@ -325,6 +336,10 @@ class Gateway:
         if proxy is not None and (ROUTE_PROXY, proxy_model) in self._rejected:
             # Отказ по сути запроса не пройдёт и со второй вакансией.
             proxy = None
+
+        if stage in LOCAL_FIRST_STAGES and local is not None:
+            # Эмбеддинги живут там, где владелец сам управляет моделью.
+            return local
 
         if personal and not self.personal_via_proxy:
             if proxy is not None and local is None:
@@ -527,6 +542,7 @@ __all__ = (
     "FAST",
     "Gateway",
     "LOCAL",
+    "LOCAL_FIRST_STAGES",
     "LONG",
     "PERSONAL_STAGES",
     "PROXY_MODEL_ENV",
