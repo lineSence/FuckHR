@@ -5,6 +5,10 @@
 Внешний геокодер на тысяче вакансий — это тысяча чужих запросов, лимиты и ключи
 ради данных, которые уже приехали вместе со страницей [CORE-016].
 
+Адрес ищется не по одному жёсткому пути, а обходом всего состояния — по той же
+причине, что и в hh_html (ADR-015): у hh.ru адрес лежит то внутри узла вакансии,
+то отдельной веткой состояния, и привязка к одному месту даёт тихие нули.
+
 Колонки address/lat/lng/metro добавляются к живой таблице vacancies: точка —
 это свойство вакансии, а не отдельная сущность, и своя таблица только добавила бы
 джойн к каждому запросу [CORE-012].
@@ -130,32 +134,21 @@ def _metro(raw: Any) -> str | None:
 
 ADDRESS_KEYS = ("address", "vacancyAddress", "addresses")
 
+# Признаки того, что словарь — это адрес, а не что-то ещё.
+ADDRESS_HINTS = (
+    "rawAddress",
+    "displayName",
+    "fullAddress",
+    "metroStations",
+    "building",
+    "street",
+)
 
-def address_of(node: dict[str, Any]) -> Point | None:
-    """Адрес из узла состояния страницы. None — адреса нет вообще.
 
-    Поле бывает объектом, списком или просто строкой: привязываться к одному
-    виду разметки нельзя по той же причине, что и в hh_html (ADR-015).
-    """
-    if not isinstance(node, dict):
+def _point(raw: dict[str, Any]) -> Point | None:
+    """Собирает точку из сырого словаря адреса."""
+    if not isinstance(raw, dict):
         return None
-    raw: dict[str, Any] | None = None
-    for key in ADDRESS_KEYS:
-        value = node.get(key)
-        if isinstance(value, dict):
-            raw = value
-            break
-        if isinstance(value, (list, tuple)):
-            found = [item for item in value if isinstance(item, dict)]
-            if found:
-                raw = found[0]
-                break
-        if isinstance(value, str) and value.strip():
-            raw = {"rawAddress": value.strip()}
-            break
-    if raw is None:
-        return None
-
     lat = _num(_first(raw, "lat", "latitude"))
     lng = _num(_first(raw, "lng", "lon", "longitude"))
     if not valid(lat, lng):
@@ -180,6 +173,73 @@ def address_of(node: dict[str, Any]) -> Point | None:
         metro=_metro(_first(raw, "metroStations", "metro", "stations")),
     )
     return point if (point.address or point.mappable or point.metro) else None
+
+
+def _looks_like_address(node: dict[str, Any]) -> bool:
+    if not isinstance(node, dict):
+        return False
+    if valid(_num(_first(node, "lat", "latitude")), _num(_first(node, "lng", "lon", "longitude"))):
+        return True
+    if any(node.get(key) for key in ADDRESS_HINTS):
+        return True
+    # Город сам по себе адресом не считается: у hh.ru это половина состояния.
+    return bool(node.get("city") and (node.get("street") or node.get("building")))
+
+
+def find_address_nodes(state: Any, limit: int = 20) -> list[dict[str, Any]]:
+    """Обходит состояние страницы и собирает всё, что похоже на адрес.
+
+    Сначала идут узлы с координатами: именно они нужны карте.
+    """
+    found: list[dict[str, Any]] = []
+    queue: list[Any] = [state]
+    seen = 0
+    while queue and len(found) < limit:
+        node = queue.pop(0)
+        seen += 1
+        if seen > 200_000:
+            break
+        if isinstance(node, dict):
+            if _looks_like_address(node):
+                found.append(node)
+            queue.extend(node.values())
+        elif isinstance(node, list):
+            queue.extend(node)
+    found.sort(
+        key=lambda raw: 0
+        if valid(
+            _num(_first(raw, "lat", "latitude")),
+            _num(_first(raw, "lng", "lon", "longitude")),
+        )
+        else 1
+    )
+    return found
+
+
+def address_of(node: dict[str, Any]) -> Point | None:
+    """Адрес из узла состояния страницы. None — адреса нет вообще.
+
+    Поле бывает объектом, списком или просто строкой.
+    """
+    if not isinstance(node, dict):
+        return None
+    raw: dict[str, Any] | None = None
+    for key in ADDRESS_KEYS:
+        value = node.get(key)
+        if isinstance(value, dict):
+            raw = value
+            break
+        if isinstance(value, (list, tuple)):
+            found = [item for item in value if isinstance(item, dict)]
+            if found:
+                raw = found[0]
+                break
+        if isinstance(value, str) and value.strip():
+            raw = {"rawAddress": value.strip()}
+            break
+    if raw is None:
+        return None
+    return _point(raw)
 
 
 def save(conn: sqlite3.Connection, key: str, point: Point | None) -> bool:
@@ -317,13 +377,20 @@ def vacancy_id(url: str | None) -> str | None:
 
 
 def from_page(page: str, vacancy: str | None = None) -> Point | None:
-    """Адрес со страницы вакансии. Сломанная страница — это None, а не исключение."""
+    """Адрес со страницы вакансии. Сломанная страница — это None, а не исключение.
+
+    Два захода потому, что у hh.ru адрес лежит по-разному: иногда внутри узла
+    вакансии, иногда отдельной веткой состояния. Первый заход точнее,
+    второй — живучее.
+    """
     import hh_html  # локально: hh_html тянет httpx, а интерфейс читает только базу
 
     try:
         state = hh_html.extract_state(page)
-    except hh_html.ExtractionError:
+    except hh_html.ExtractionError as exc:
+        log.warning("состояние страницы не разобралось: %s", exc)
         return None
+
     nodes = hh_html.find_vacancy_nodes(state)
     chosen: dict[str, Any] | None = None
     for node in nodes:
@@ -332,7 +399,27 @@ def from_page(page: str, vacancy: str | None = None) -> Point | None:
             break
     if chosen is None and nodes:
         chosen = nodes[0]
-    return address_of(chosen or {})
+
+    point = address_of(chosen or {})
+    if point is not None and point.mappable:
+        return point
+
+    # В узле вакансии адреса нет или он без координат — ищем по всей странице.
+    fallback = None
+    for raw in find_address_nodes(state):
+        candidate = _point(raw)
+        if candidate is None:
+            continue
+        if candidate.mappable:
+            return candidate
+        fallback = fallback or candidate
+
+    if point is None and fallback is None:
+        log.info(
+            "адрес на странице не найден; корневые ключи состояния: %s",
+            list(state)[:12],
+        )
+    return point or fallback
 
 
 def backfill(
@@ -348,6 +435,8 @@ def backfill(
     rows = pending(conn, limit)
     filled = 0
     tried = 0
+    addressed = 0
+    dumped = False
     for index, row in enumerate(rows, start=1):
         ident = vacancy_id(row["url"])
         if not ident:
@@ -363,9 +452,26 @@ def backfill(
         except Exception as exc:  # noqa: BLE001 — одна страница не стоит всего прогона
             log.warning("страница %s не открылась: %s", ident, exc)
             continue
-        if save(conn, row["key"], from_page(page, ident)):
+        point = from_page(page, ident)
+        if point is not None and point.address:
+            addressed += 1
+        if save(conn, row["key"], point):
             filled += 1
-    log.info("адреса: точек добавлено %s из %s попыток", filled, tried)
+        elif not dumped:
+            # Первая страница без точки — единственная улика, если hh.ru переименовал
+            # поля. Без неё починка парсера превращается в гадание (ADR-015).
+            dumped = True
+            try:
+                path = hh_html.dump_failure(page, "geo-no-point-" + ident)
+                log.warning("точки нет, сырая страница сохранена: %s", path)
+            except OSError as exc:
+                log.debug("не смог сохранить страницу: %s", exc)
+    log.info(
+        "адреса: точек добавлено %s, адресов без координат %s, попыток %s",
+        filled,
+        max(0, addressed - filled),
+        tried,
+    )
     return filled, tried
 
 
@@ -378,6 +484,7 @@ __all__ = (
     "backfill",
     "coverage",
     "ensure_schema",
+    "find_address_nodes",
     "from_page",
     "one",
     "pending",
