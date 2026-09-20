@@ -23,7 +23,7 @@ import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Sequence
+from typing import Any, Callable, Iterable, Iterator, Sequence
 
 import httpx
 
@@ -303,6 +303,7 @@ class HHHtmlClient:
         cookie: str | None = None,
         proxy: str | None = None,
         failure_dir: str | Path | None = FAILURE_DIR,
+        cache: Any | None = None,
     ) -> None:
         # Пауза адаптивная: HH_PAUSE — верхняя граница и точка возврата, а не
         # постоянная величина. На чистых ответах она снижается до HH_PAUSE_MIN,
@@ -315,6 +316,11 @@ class HHHtmlClient:
         self.pages_fetched = 0
         self.fallback_pages = 0
         self.empty_pages = 0
+        # Кэш страниц выдачи на прогон (hh_pages.PageCache). Профили часто ищут
+        # одно и то же; без кэша каждый платит за страницу заново (B-15).
+        self.cache = cache
+        # Сколько раз обход остановился на полностью известной странице.
+        self.known_stops = 0
         # Дошли ли до конца выдачи в последнем search: по нему прогон
         # отличает «вакансии кончились» от «упёрлись в свой потолок».
         self.exhausted = False
@@ -324,12 +330,26 @@ class HHHtmlClient:
         headers = dict(BROWSER_HEADERS)
         if cookie:
             headers["Cookie"] = cookie
-        self._client = httpx.Client(
-            headers=headers,
-            timeout=timeout,
-            follow_redirects=True,
-            proxy=proxy,
-        )
+        self._client = self._open(headers, timeout, proxy)
+
+    @staticmethod
+    def _open(headers: dict[str, str], timeout: float, proxy: str | None) -> httpx.Client:
+        """HTTP/2 экономит на рукопожатиях при сотнях запросов к одному хосту.
+
+        Он требует пакет h2. Его может не быть в старом окружении, и ронять из-за
+        этого прогон нельзя: сбор работал и без HTTP/2 [CORE-017].
+        """
+        common = {
+            "headers": headers,
+            "timeout": timeout,
+            "follow_redirects": True,
+            "proxy": proxy,
+        }
+        try:
+            return httpx.Client(http2=True, **common)
+        except ImportError:
+            log.info("пакет h2 не установлен, идём к hh.ru по HTTP/1.1")
+            return httpx.Client(**common)
 
     def __enter__(self) -> "HHHtmlClient":
         return self
@@ -408,6 +428,7 @@ class HHHtmlClient:
         per_page: int = 50,
         max_pages: int = 0,
         extra: dict[str, Any] | None = None,
+        known_page: Callable[[Sequence[Vacancy]], bool] | None = None,
     ) -> Iterator[Vacancy]:
         """max_pages=0 — идти до конца выдачи.
 
@@ -415,7 +436,14 @@ class HHHtmlClient:
         страницы отдавали половину. Обход всё равно конечен — hh.ru отдаёт
         пустую страницу, а при зацикливании выдачи страница приходит без единого
         нового id, и это тоже конец.
+
+        `known_page` — третий конец (B-15): страница целиком уже в базе. Выдача
+        отсортирована по дате публикации, значит дальше лежит только более старое,
+        и платить за него паузами незачем. Вакансии со страницы всё равно отдаются:
+        «видна в выдаче» — факт, который нужен истории (ADR-009).
         """
+        from hh_pages import cache_key  # локально: hh_pages тянет настройки
+
         seen_ids: set[str] = set()
         self.exhausted = False
         page = 0
@@ -434,32 +462,49 @@ class HHHtmlClient:
             if extra:
                 params.update(extra)
 
-            body = self.fetch(SEARCH_URL, params)
-            try:
-                nodes = find_vacancy_nodes(extract_state(body))
-                vacancies = [node_to_vacancy(n) for n in nodes if _first(n, "vacancyId", "id")]
-            except ExtractionError as exc:
-                log.warning("JSON состояния не найден (%s), иду по разметке", exc)
-                self.fallback_pages += 1
-                self._back_off()
-                self._dump(body, "no-state")
-                vacancies = parse_cards_fallback(body)
+            key = cache_key(params)
+            cached = self.cache.get(key, page) if self.cache is not None else None
+            if cached is not None:
+                log.info("страница %s: взята из кэша прогона", page)
+                vacancies = list(cached)
+            else:
+                body = self.fetch(SEARCH_URL, params)
+                try:
+                    nodes = find_vacancy_nodes(extract_state(body))
+                    vacancies = [node_to_vacancy(n) for n in nodes if _first(n, "vacancyId", "id")]
+                except ExtractionError as exc:
+                    log.warning("JSON состояния не найден (%s), иду по разметке", exc)
+                    self.fallback_pages += 1
+                    self._back_off()
+                    self._dump(body, "no-state")
+                    vacancies = parse_cards_fallback(body)
 
-            vacancies = [v for v in vacancies if v.external_id and v.title]
+                vacancies = [v for v in vacancies if v.external_id and v.title]
+                if not vacancies and page == 0:
+                    # Пустая первая страница по широкому запросу — повод посмотреть глазами.
+                    self.empty_pages += 1
+                    self._dump(body, "empty-search")
+                if self.cache is not None:
+                    self.cache.put(key, page, vacancies)
+
             fresh = [v for v in vacancies if v.external_id not in seen_ids]
             seen_ids.update(v.external_id for v in fresh)
             log.info("страница %s: вакансий %s", page, len(vacancies))
             yield from fresh
             if not vacancies:
-                if page == 0:
-                    # Пустая первая страница по широкому запросу — повод посмотреть глазами.
-                    self.empty_pages += 1
-                    self._dump(body, "empty-search")
                 self.exhausted = True
                 break
             if not fresh:
                 # hh.ru после последней страницы повторяет предыдущую.
                 log.info("выдача пошла по кругу на странице %s, дальше нечего брать", page)
+                self.exhausted = True
+                break
+            if known_page is not None and known_page(vacancies):
+                self.known_stops += 1
+                log.info(
+                    "страница %s целиком известна, дальше только старше — останавливаемся",
+                    page,
+                )
                 self.exhausted = True
                 break
             page += 1
