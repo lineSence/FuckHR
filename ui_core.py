@@ -138,6 +138,9 @@ input:focus, textarea:focus, select:focus { outline: 0; background: #fff; border
 .cols .field { flex: 1 1 220px; margin: 8px 0 }
 .checks { display: flex; gap: 16px; flex-wrap: wrap; margin: 8px 0 2px }
 .checks label, .field label:has(input) { font-weight: 400 }
+/* Карта Leaflet тянет свой CSS из сети; здесь только то, без чего контейнер
+   схлопывается в ноль высоты до загрузки библиотеки. */
+#map { background: #eceff1 }
 @media (max-width: 720px) {
   .topbar { height: auto; flex-wrap: wrap; gap: 8px; padding: 10px 14px }
   main { padding: 12px 10px }
@@ -149,6 +152,7 @@ input:focus, textarea:focus, select:focus { outline: 0; background: #fff; border
 NAV_ITEMS = (
     ("/", "Запуск"),
     ("/vacancies", "Вакансии"),
+    ("/map", "Карта"),
     ("/companies", "Компании и контакты"),
     ("/targets", "Цели"),
     ("/search", "Поиск"),
