@@ -85,7 +85,8 @@ from research import (  # noqa: F401 — реэкспорт для старых 
     research_companies,
     research_workers,
 )
-from score import Profile, evaluate
+import profiles
+from score import Profile, Verdict, evaluate  # noqa: F401 — реэкспорт для старых вызовов
 
 log = logging.getLogger("fuckhr")
 
@@ -151,7 +152,8 @@ def run_once(args: argparse.Namespace) -> int:
     else:
         log.info("детектор брехни выключен в настройках: карточки пойдут без HR-флагов")
 
-    profile = Profile.load(options.profile)
+    # Профилей может быть несколько: каталог с YAML или один файл (ADR-023).
+    bundle = profiles.load_all(options.profile)
 
     conn = db.connect(db_path)
     db.init_schema(conn)
@@ -187,7 +189,9 @@ def run_once(args: argparse.Namespace) -> int:
         failure_dir=settings.get("FAILURE_DIR", "data/failures"),
     )
     try:
-        seen, drafts = collect(client, profile, options.limit, prefilter, conn=conn)
+        seen, drafts, owners = profiles.collect_all(
+            client, bundle, options.limit, prefilter, conn=conn
+        )
         log.info("увидели: %s, прошло предфильтр: %s", len(seen), len(drafts))
         # Рынок пересчитывается до скоринга: вес `market` в score.py берётся
         # из свежих срезов, иначе первая вакансия прогона сравнивалась бы с
@@ -233,7 +237,16 @@ def run_once(args: argparse.Namespace) -> int:
             ai_verdict = aitext.assess(
                 vacancy.description, aitext_rules.VACANCY, vacancy.published_at
             )
-            verdict = evaluate(vacancy, profile, prefilter.fuzzy, market_marker=marker)
+            matches = profiles.score_all(
+                vacancy, bundle, owners.get(vacancy.key), prefilter.fuzzy, marker
+            )
+            chosen = profiles.best(matches)
+            # Ни один свой профиль не пропустил: вакансия отклонена целиком.
+            verdict = (
+                chosen[1]
+                if chosen is not None
+                else Verdict(0.0, [], rejected=True, reject_reason="не подошла ни одному профилю")
+            )
             # Слепок пишется для всего, даже для отклоныённого: история публикаций
             # нужна детектору независимо от нашего интереса (ADR-009, ADR-010).
             db.add_snapshot(conn, vacancy)
@@ -263,12 +276,18 @@ def run_once(args: argparse.Namespace) -> int:
                 ai_verdict=ai_verdict,
             ):
                 new_count += 1
+            # Балл каждого профиля живёт на связи: у профилей разные критерии.
+            db.save_matches(
+                conn,
+                vacancy.key,
+                [(pid, v.score, v.reasons) for pid, v in matches],
+            )
             log.info("    скор %.1f", verdict.score)
 
             # Порог пройдён — компания идёт в очередь на изучение. Сам поиск запускается
             # после обхода hh.ru: мешать его с постраничным сбором — значит сбить паузы
             # и приблизить капчу.
-            if verdict.score >= profile.min_score and vacancy.company:
+            if profiles.passed(bundle, matches) and vacancy.company:
                 to_research.setdefault(vacancy.company, getattr(vacancy, "site_url", None))
                 to_contact.append(vacancy.key)
 
@@ -400,36 +419,15 @@ def run_once(args: argparse.Namespace) -> int:
             unknown,
         )
 
-    rows = db.pending_cards(conn, profile.min_score, options.limit or CARD_LIMIT)
+    # Ниже самого низкого порога карточка не нужна ни одному профилю.
+    rows = db.pending_cards(
+        conn, profiles.min_threshold(bundle), options.limit or CARD_LIMIT
+    )
     log.info("новых вакансий: %s, к отправке: %s", new_count, len(rows))
 
     signals = run_cards.card_lines(conn, rows, score_opts.enabled)
 
-    if args.dry_run:
-        for row in rows:
-            log.info("%5.1f  %s — %s", row["score"], row["title"], row["company"])
-            log.info("        %s", row["url"])
-            for line in conditions.lines(conn, row["key"]):
-                log.info("        %s", line)
-            for line in signals.get(row["key"], []):
-                log.info("        %s", line)
-    elif rows:
-        token = os.getenv("TELEGRAM_BOT_TOKEN")
-        chat_id = os.getenv("TELEGRAM_CHAT_ID")
-        if not token or not chat_id:
-            # Раньше здесь был KeyError и прогон терял всю работу на последнем шаге.
-            # Собранное уже в базе и видно в интерфейсе [CORE-017].
-            log.warning(
-                "Telegram не настроен: %s карточек ждут в базе, смотри их в интерфейсе",
-                len(rows),
-            )
-        else:
-            republished = {row["key"]: db.republish_count(conn, row["key"]) for row in rows}
-            delivered = asyncio.run(
-                tg.send_cards(token, chat_id, rows, republished, signals)
-            )
-            db.mark_notified(conn, delivered)
-            log.info("отправлено карточек: %s", len(delivered))
+    run_cards.deliver(conn, rows, signals, dry_run=args.dry_run)
 
     filled, total_snapshots = db.published_at_coverage(conn)
     flagged, assessed = detector.coverage(conn)

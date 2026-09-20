@@ -35,6 +35,12 @@ triggers:
       - wiki/references/contact-discovery.md
       - wiki/rules/outreach.md
 
+  - id: profiles
+    keywords: [профиль, профили, несколько профилей, направление поиска, vacancy_profiles, multi-profile, каталог профилей]
+    load:
+      - wiki/architecture/profiles.md
+      - docs/profiles.md
+
   - id: tech-stack
     keywords: [стек, зависимости, библиотека, альтернатива, выбор технологии]
     load:
