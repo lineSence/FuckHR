@@ -44,7 +44,8 @@ class Loaded:
 
     @property
     def name(self) -> str:
-        return self.id.replace("_", " ").replace("-", " ")
+        """Человеческое имя: из файла, а если его там нет — из имени файла."""
+        return self.profile.title or self.id.replace("_", " ").replace("-", " ")
 
 
 def load_all(path: str | Path) -> list[Loaded]:
@@ -61,7 +62,18 @@ def load_all(path: str | Path) -> list[Loaded]:
             raise FileNotFoundError(f"в каталоге {target} нет ни одного *.yaml")
     else:
         files = [target]
-    out = [Loaded(id=f.stem, profile=Profile.load(f)) for f in files]
+    every = [Loaded(id=f.stem, profile=Profile.load(f)) for f in files]
+    out = [item for item in every if item.profile.enabled]
+    off = [item.id for item in every if not item.profile.enabled]
+    if off:
+        # Выключенный профиль остаётся файлом: владелец гасит направление на
+        # время, а не удаляет критерии. В логе это должно быть видно, иначе
+        # «почему не собралось» ищется часами.
+        log.info("профили выключены и пропущены: %s", ", ".join(off))
+    if not out:
+        raise ValueError(
+            "все профили выключены: включи хотя бы один в разделе «Профили»"
+        )
     if len(out) > EXPECTED_MAX:
         log.warning(
             "профилей %s: каждый это отдельный обход hh.ru, прогон станет длиннее",

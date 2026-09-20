@@ -1,4 +1,4 @@
-"""Верх страницы «Профиль и резюме»: разговор о поиске.
+"""Верх страницы профиля: разговор о поиске.
 
 Раньше это были два раздела с тридцатью полями, и заполнять их надо было, уже
 зная ответ. Здесь владелец пишет своими словами, модель задаёт недостающие
@@ -34,7 +34,12 @@ def _bubble(role: str, text: str) -> str:
     )
 
 
-def render_plan(plan: intake.Plan) -> str:
+def hidden_id(pid: str) -> str:
+    """Скрытый id профиля: разговор правит критерии того профиля, что открыт."""
+    return '<input type=hidden name="id" value="{}">'.format(esc(pid)) if pid else ""
+
+
+def render_plan(plan: intake.Plan, pid: str = "") -> str:
     """Предложение: критерии и блоки резюме с галочками. Вопросы — отдельно."""
     if plan.empty:
         return ""
@@ -81,10 +86,11 @@ def render_plan(plan: intake.Plan) -> str:
     )
     return (
         "{summary}{dropped}"
-        '<form method=post action="/intake/apply">'
+        '<form method=post action="/intake/apply">{pid}'
         '<input type=hidden name="plan" value="{blob}">'
         "{table}<button>Применить отмеченное</button></form>"
     ).format(
+        pid=hidden_id(pid),
         summary=summary,
         dropped=dropped,
         blob=esc(json.dumps(_plan_payload(plan), ensure_ascii=False)),
@@ -117,6 +123,7 @@ def render_intake(
     profile_path: str = "profile.yaml",
     plan: intake.Plan | None = None,
     note: str = "",
+    pid: str = "",
 ) -> str:
     """Чат-бокс, история разговора и последнее предложение."""
     parts = [note] if note else []
@@ -141,6 +148,7 @@ def render_intake(
         plan = intake.last_plan(conn)
 
     parts.append('<form method=post action="/intake">')
+    parts.append(hidden_id(pid))
     if plan is not None and plan.questions:
         parts.append(
             "<p class=muted><b>Уточню, чтобы не выдумывать.</b> Отвечай прямо в "
@@ -166,7 +174,7 @@ def render_intake(
     )
 
     if plan is not None:
-        parts.append(render_plan(plan))
+        parts.append(render_plan(plan, pid))
     return "".join(parts)
 
 

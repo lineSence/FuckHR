@@ -90,6 +90,11 @@ class Query(BaseModel):
 class ProfileSchema(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
+    # Имя и выключатель нужны там, где профилей несколько (ADR-023): имя
+    # подписывает карточку, выключатель убирает профиль из прогона, не удаляя
+    # файл. Пустое имя — берётся имя файла, поэтому старые профили не трогаем.
+    title: str = ""
+    enabled: bool = True
     queries: list[Query] = []
     skills: StrList = []
     nice_to_have: StrList = []

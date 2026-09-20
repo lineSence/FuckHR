@@ -4,7 +4,7 @@
 
 - запуск: сбор, письма, проверка модели и тесты — кнопками, с полоской и живым
   логом; тот же вывод дублируется в терминал, где запущен интерфейс;
-- настройки: весь .env формой, profile.yaml целиком и подробные параметры поиска;
+- настройки: весь .env формой, профили поиска карточками и подробные параметры поиска;
 - выдача: вакансии, условия, HR-флаги, досье на компании, контакты, выдача
   поиска, маршруты модели;
 - очистка: удаление накопленных данных по целям, с подтверждением там, где
@@ -15,7 +15,8 @@ python outreach.py без флагов, параметры они берут и�
 планировщик Windows, и настройки у них одни и те же.
 
 Файл сознательно тонкий: здесь только сервер и маршруты. Страницы живут в
-`ui_views.py`, `ui_forms.py`, `ui_profile.py`, `ui_resume.py` и `ui_companies.py`,
+`ui_views.py`, `ui_forms.py`, `ui_resume.py` и `ui_companies.py`, раздел профилей
+целиком — в `webui_profile.py` и `ui_profiles.py`,
 общие детали — в `ui_core.py`. Имена страниц проброшены сюда же, чтобы
 webui.render_vacancies и подобные продолжали работать.
 
@@ -51,7 +52,6 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import jobs
 import llm
-import profile_form
 import settings
 from ui_companies import (
     apply_cleanup,
@@ -89,11 +89,10 @@ from ui_forms import (
     search_updates,
     start_bench,
 )
-import intake
 import ui_injections
 import ui_research
 import ui_run
-import ui_intake
+import webui_profile
 from ui_resume import render_resume, save_resume
 from ui_views import (
     vacancy_rows,
@@ -142,25 +141,6 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(length).decode("utf-8")
         return urllib.parse.parse_qs(raw, keep_blank_values=True)
-
-    def _profile_page(
-        self,
-        conn: object,
-        plan: object = None,
-        note: str = "",
-        saved: int | None = None,
-        problems: tuple[str, ...] = (),
-        resume_note: str = "",
-    ) -> str:
-        """Одна страница из трёх частей: разговор, критерии поиска, резюме."""
-        return (
-            "<h2>Разговор о поиске</h2>"
-            + ui_intake.render_intake(conn, self.profile_path, plan, note)
-            + "<h2>Критерии поиска</h2>"
-            + render_profile(self.profile_path, saved=saved, problems=problems)
-            + "<h2>Резюме</h2>"
-            + render_resume(conn, self.profile_path, saved=resume_note)
-        )
 
     def do_GET(self) -> None:  # noqa: N802
         parsed = urllib.parse.urlparse(self.path)
@@ -225,7 +205,13 @@ class Handler(BaseHTTPRequestHandler):
                 elif parsed.path == "/contacts":
                     self._redirect("/companies")
                 elif parsed.path == "/profile":
-                    self._send(page("Профиль и резюме", self._profile_page(conn)))
+                    # Без id — карточки всех профилей, с id — редактор одного.
+                    self._send(
+                        page(
+                            webui_profile.TITLE,
+                            webui_profile.body(conn, self.profile_path, one("id")),
+                        )
+                    )
                 elif parsed.path == "/resume":
                     # Раздел один: резюме и критерии поиска — это один разговор.
                     self._redirect("/profile")
@@ -369,20 +355,6 @@ class Handler(BaseHTTPRequestHandler):
                     conn.close()
                 return
 
-            if parsed.path == "/resume":
-                # Как и на очистке, ответ рисуется сразу: после сохранения нужно
-                # сказать, что именно модель предложила и что ждёт подтверждения;
-                # редирект это сообщение теряет.
-                flat = {key: values[0] for key, values in form.items() if values}
-                conn = open_db()
-                try:
-                    saved = save_resume(conn, flat, self.profile_path)
-                    body = self._profile_page(conn, resume_note=saved)
-                    self._send(page("Профиль и резюме", body))
-                finally:
-                    conn.close()
-                return
-
             if parsed.path == "/search":
                 updates = search_updates(form)
                 saved = settings.save(updates)
@@ -401,81 +373,17 @@ class Handler(BaseHTTPRequestHandler):
                     conn.close()
                 return
 
-            if parsed.path == "/profile":
-                count, problems = save_profile(self.profile_path, form)
-                conn = open_db()
-                try:
-                    body = self._profile_page(
-                        conn, saved=count, problems=tuple(problems)
-                    )
-                    self._send(page("Профиль и резюме", body))
-                finally:
-                    conn.close()
-                return
-
-            if parsed.path == "/intake":
-                # Реплика владельца: один вызов модели, ответ показывается
-                # предложением с галочками. Ничего не применяется само.
-                conn = open_db()
-                try:
-                    if (form.get("action") or [""])[0] == "clear":
-                        intake.clear(conn)
-                        body = self._profile_page(
-                            conn, note="<div class=ok>Разговор очищен.</div>"
-                        )
-                        self._send(page("Профиль и резюме", body))
-                        return
-                    said, dialogue = ui_intake.compose(
-                        form.get("question") or [],
-                        form.get("answer") or [],
-                        (form.get("text") or [""])[0],
-                    )
-                    if not said:
-                        body = self._profile_page(
-                            conn,
-                            note="<div class=warn>Пустое сообщение.</div>",
-                        )
-                        self._send(page("Профиль и резюме", body))
-                        return
-                    intake.log_message(conn, "owner", said)
-                    gateway = (
-                        llm.Gateway.from_env(conn)
-                        if settings.flag("LLM_ENABLED")
-                        else None
-                    )
-                    plan = intake.ask(
-                        gateway,
-                        intake.owner_words(conn),
-                        profile_form.load(self.profile_path),
-                        context=dialogue,
-                    )
-                    reply = plan.summary or (
-                        "\n".join(plan.questions) if plan.questions else "Ответа нет."
-                    )
-                    intake.log_message(conn, "ai", reply)
-                    intake.save_plan(conn, plan)
-                    self._send(
-                        page("Профиль и резюме", self._profile_page(conn, plan))
-                    )
-                finally:
-                    conn.close()
-                return
-
-            if parsed.path == "/intake/apply":
-                conn = open_db()
-                try:
-                    note = ui_intake.apply_plan(
-                        conn,
-                        self.profile_path,
-                        (form.get("plan") or [""])[0],
-                        form.get("apply") or [],
-                    )
-                    body = self._profile_page(
-                        conn, note="<div class=ok>{}</div>".format(esc(note))
-                    )
-                    self._send(page("Профиль и резюме", body))
-                finally:
-                    conn.close()
+            if parsed.path in webui_profile.POST_PATHS:
+                # Весь раздел профилей в одном месте: карточки, выключатель,
+                # критерии, разговор и резюме правят одни и те же файлы.
+                title, body, new_path = webui_profile.handle(
+                    parsed.path, form, self.profile_path
+                )
+                # Каталог профилей мог появиться прямо сейчас (первое «Добавить
+                # профиль»), и RUN_PROFILE уже переписан — подхватываем без
+                # перезапуска сервера.
+                Handler.profile_path = new_path
+                self._send(page(title, body))
                 return
 
             if parsed.path == "/vacancy":
