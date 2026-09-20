@@ -449,6 +449,19 @@ FIELDS: tuple[Field, ...] = (
         )
         for stage, env_key in llm.STAGE_MODEL_ENV.items()
     ),
+    *(
+        Field(
+            env_key,
+            "Каскад этапа {}".format(stage),
+            GROUP_LLM_STAGES,
+            TEXT,
+            "",
+            "До трёх моделей через запятую по порядку бенча. Сильнее одиночной "
+            "модели этапа; последним кандидатом всегда идёт локальная модель "
+            "[ADR-022].",
+        )
+        for stage, env_key in llm.STAGE_MODELS_ENV.items()
+    ),
     Field(
         "LLM_PERSONAL_VIA_PROXY",
         "Пускать персональные этапы на прокси",

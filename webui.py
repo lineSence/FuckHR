@@ -300,8 +300,14 @@ class Handler(BaseHTTPRequestHandler):
                     if key not in ui_bench.ENV_KEYS:
                         continue
                     names = bench_models((form.get("model:" + key) or [""])[0])
-                    if names:
-                        updates[key] = names[0]
+                    if not names:
+                        continue
+                    # Каскадный ключ хранит порядок кандидатов, обычный — одно имя.
+                    updates[key] = (
+                        ",".join(names[: llm.MAX_CANDIDATES])
+                        if key in ui_bench.CASCADE_KEYS
+                        else names[0]
+                    )
                 saved = settings.save(updates) if updates else []
                 if saved:
                     note = "<div class=ok>Записано в .env: {}</div>".format(

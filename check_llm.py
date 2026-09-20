@@ -81,6 +81,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         mark = " ← ПД" if stage in llm.PERSONAL_STAGES else ""
         print(f"  {stage:<12}{profile:<14}{route:<10}{model:<28}{source}{mark}")
 
+    cascaded = {
+        stage: gateway.models_for(stage)
+        for stage in llm.STAGE_PROFILES
+        if len(gateway.models_for(stage)) > 1
+    }
+    if cascaded:
+        print()
+        print("Каскады фолбэка (последним слотом шлюз сам ставит локальную модель)")
+        for stage, names in sorted(cascaded.items()):
+            print(f"  {stage:<12}{' → '.join(names)}")
+
     if gateway.proxy_base_url:
         print()
         names = gateway.models(llm.ROUTE_PROXY)

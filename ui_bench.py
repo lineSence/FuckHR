@@ -27,8 +27,11 @@ REPORT_PATH = ROOT / "data" / "bench" / "last.json"
 
 # Ключи .env, куда можно подставить модель. Список закрытый: из браузера
 # приходит имя ключа, и записать он должен только настройку модели.
-ENV_KEYS = frozenset(llm.PROXY_MODEL_ENV.values()) | frozenset(
-    llm.STAGE_MODEL_ENV.values()
+CASCADE_KEYS = frozenset(llm.STAGE_MODELS_ENV.values())
+ENV_KEYS = (
+    frozenset(llm.PROXY_MODEL_ENV.values())
+    | frozenset(llm.STAGE_MODEL_ENV.values())
+    | CASCADE_KEYS
 )
 
 # Границы окраски балла: 0.8 — рабочая модель, 0.5 — «иногда врёт», ниже — брак.
@@ -200,22 +203,25 @@ def render_report(report: dict[str, Any], job: jobs.Job | None = None) -> str:
 
 
 def render_apply_form(rows: Sequence[bench.Row]) -> str:
-    """Подстановка победителей в .env: своя модель на каждый проверенный этап.
+    """Подстановка каскада в .env: свой порядок кандидатов на каждый этап.
 
-    Выбор делает bench.recommend: сначала балл, при почти равном балле —
-    скорость. Галочки сняты у этапов, где нужная модель уже стоит: незачем
-    предлагать запись, которая ничего не меняет.
+    Порядок делает bench.cascades: сначала балл, при почти равном балле —
+    скорость. Пишется не одно имя, а до трёх через запятую: это и есть
+    порядок фолбэка в рантайме (ADR-022). Галочки сняты у этапов, где тот же
+    каскад уже стоит: незачем предлагать запись, которая ничего не меняет.
     """
-    picks = bench.recommend(rows)
+    picks = bench.cascades(rows)
     if not picks:
         return ""
     values = settings.load()
     body, hidden = [], []
     personal = False
-    for stage, (model, score, seconds) in sorted(picks.items()):
-        env_key = llm.STAGE_MODEL_ENV.get(stage)
+    for stage, chain in sorted(picks.items()):
+        env_key = llm.STAGE_MODELS_ENV.get(stage)
         if not env_key:
             continue
+        names = ",".join(model for model, _, _ in chain)
+        model, score, seconds = chain[0]
         profile = llm.STAGE_PROFILES.get(stage, "")
         current = values.get(env_key, "")
         named = values.get(llm.PROXY_MODEL_ENV.get(profile, ""), "")
@@ -225,7 +231,7 @@ def render_apply_form(rows: Sequence[bench.Row]) -> str:
         personal = personal or stage in llm.PERSONAL_STAGES
         hidden.append(
             '<input type=hidden name="model:{key}" value="{model}">'.format(
-                key=esc(env_key), model=esc(model)
+                key=esc(env_key), model=esc(names)
             )
         )
         body.append(
@@ -233,11 +239,11 @@ def render_apply_form(rows: Sequence[bench.Row]) -> str:
                 '<label><input type=checkbox name=apply value="{key}"{on}> '
                 "{stage}</label>".format(
                     key=esc(env_key),
-                    on="" if current == model else " checked",
+                    on="" if current == names else " checked",
                     stage=esc(stage),
                 ),
                 esc(current or fallback),
-                "<b>{}</b>".format(esc(model)),
+                "<b>{}</b>".format(esc(names.replace(",", " → "))),
                 "{} · {:.1f} с".format(score_cell(score), seconds),
             ]
         )
@@ -252,16 +258,17 @@ def render_apply_form(rows: Sequence[bench.Row]) -> str:
     )
     return (
         "<h3>Подставить в настройки</h3>"
-        "<p class=muted>Модель ставится на конкретный этап и перебивает модель "
-        "профиля. Непроверенные этапы остаются на профиле. Запись идёт в .env, "
-        "как со страницы «Настройки».</p>"
+        "<p class=muted>На этап ставится каскад: до трёх кандидатов по порядку "
+        "бенча, а последним слотом всегда идёт локальная модель. Первый "
+        "кандидат перебивает модель профиля. Непроверенные этапы остаются на "
+        "профиле. Запись идёт в .env, как со страницы «Настройки».</p>"
         "{note}"
         '<form method=post action="/llm/apply">{hidden}{table}'
         "<button>Записать отмеченные</button></form>"
     ).format(
         note=note,
         hidden="".join(hidden),
-        table=table(["Этап", "Сейчас", "Ставим", "Балл и время"], body),
+        table=table(["Этап", "Сейчас", "Каскад", "Первый: балл и время"], body),
     )
 
 
@@ -321,6 +328,7 @@ def render_bench_form(note: str = "", known: Sequence[str] = ()) -> str:
 
 
 __all__ = (
+    "CASCADE_KEYS",
     "ENV_KEYS",
     "REPORT_PATH",
     "load_report",

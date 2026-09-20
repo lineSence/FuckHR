@@ -22,6 +22,14 @@
 Остальное как было: кэш по хэшу промпта всегда включён [LLM-006], любая ошибка
 возвращает None, а не исключение [CORE-017], [LLM-009].
 
+О каскаде. У этапа теперь не одна модель, а до трёх кандидатов в порядке
+бенча плюс локальный адрес последним слотом (`llm_cascade`, ADR-022). Кэш
+проверяется по всему каскаду сверху вниз: ответ сильнейшего кандидата не
+должен пропадать оттого, что в этом прогоне спрашивали второго [LLM-006].
+Повторы к одному кандидату остались только там, где следующего нет: пока
+кандидат в списке не последний, на ошибку сервиса тратится одна попытка,
+а не три.
+
 Об ошибках адреса. Ответы 4xx и 5xx разные по природе, и обращаться с ними надо
 по-разному. 500, 502, 503, таймаут и 429 — состояние мира, оно меняется, повтор
 осмыслен. 400 и 404 — суждение о самом запросе: нет такой модели, не тот формат,
@@ -62,28 +70,23 @@ from llm_profiles import (  # noqa: F401 — публичные имена ос�
     LOCAL,
     LOCAL_FIRST_STAGES,
     LONG,
+    MAX_CANDIDATES,
     PERSONAL_STAGES,
     PROXY_MODEL_ENV,
     ROUTE_LOCAL,
     ROUTE_PROXY,
     SMART,
     STAGE_MODEL_ENV,
+    STAGE_MODELS_ENV,
     STAGE_PROFILES,
     ProfileError,
     profile_for,
 )
+import llm_cache
+from llm_cache import CACHE_SCHEMA, ensure_cache  # noqa: F401 — публичные имена остаются в llm
+from llm_cascade import Dropped, Route, build_chain, parse_models
 
 log = logging.getLogger(__name__)
-
-CACHE_SCHEMA = """
-CREATE TABLE IF NOT EXISTS llm_cache (
-    hash        TEXT PRIMARY KEY,
-    stage       TEXT NOT NULL,
-    profile     TEXT NOT NULL,
-    response    TEXT NOT NULL,
-    created_at  TEXT NOT NULL
-);
-"""
 
 # Коды, при которых повтор имеет смысл: это состояние сервиса, не запроса.
 RETRY_STATUSES = frozenset({408, 409, 425, 429, 500, 502, 503, 504, 529})
@@ -109,25 +112,7 @@ class Usage:
     cached: int = 0
     failures: int = 0
     skipped: int = 0
-
-
-@dataclass(frozen=True)
-class Route:
-    """Куда физически уходит запрос и под каким именем модели."""
-
-    name: str
-    base_url: str
-    api_key: str | None
-    model: str
-
-    @property
-    def is_proxy(self) -> bool:
-        return self.name == ROUTE_PROXY
-
-
-def ensure_cache(conn: sqlite3.Connection) -> None:
-    conn.executescript(CACHE_SCHEMA)
-    conn.commit()
+    degraded: int = 0
 
 
 def error_message(payload: Any, fallback: str = "") -> str:
@@ -152,32 +137,6 @@ def error_message(payload: Any, fallback: str = "") -> str:
     return (fallback or "").strip()[:MAX_ERROR_CHARS]
 
 
-def _digest(
-    profile: str,
-    messages: Sequence[dict[str, str]],
-    temperature: float,
-    route: str = ROUTE_LOCAL,
-    model: str = "",
-) -> str:
-    """Маршрут и модель входят в ключ кэша.
-
-    Иначе ответ слабой локальной модели навсегда подменит собой ответ с
-    прокси на тот же промпт.
-    """
-    blob = json.dumps(
-        {
-            "profile": profile,
-            "messages": list(messages),
-            "t": temperature,
-            "route": route,
-            "model": model,
-        },
-        ensure_ascii=False,
-        sort_keys=True,
-    )
-    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
-
-
 class Gateway:
     """Тонкий клиент к двум адресам. Без обоих выключен и всегда возвращает None."""
 
@@ -194,6 +153,7 @@ class Gateway:
         proxy_api_key: str | None = None,
         proxy_models: dict[str, str] | None = None,
         stage_models: dict[str, str] | None = None,
+        stage_cascades: dict[str, list[str]] | None = None,
         personal_via_proxy: bool = False,
     ) -> None:
         self.base_url = (base_url or "").rstrip("/")
@@ -202,6 +162,7 @@ class Gateway:
         self.proxy_api_key = proxy_api_key
         self.proxy_models = dict(proxy_models or {})
         self.stage_models = dict(stage_models or {})
+        self.stage_cascades = {k: list(v) for k, v in (stage_cascades or {}).items()}
         self.personal_via_proxy = bool(personal_via_proxy)
         self.timeout = timeout
         self.max_calls = max_calls
@@ -209,9 +170,9 @@ class Gateway:
         self.usage = Usage()
         self._transport = transport
         self.conn = conn
-        # Профили, по которым прокси уже отказал: второй раз такой вызов делать
-        # незачем — конфиг прокси внутри одного прогона не меняется.
-        self._rejected: dict[tuple[str, str], str] = {}
+        # Кандидаты, выбывшие до конца прогона: отказ по сути запроса (400/404)
+        # и исчерпанная квота (429). Подробности — llm_cascade.Dropped.
+        self._dropped = Dropped()
         if conn is not None:
             ensure_cache(conn)
 
@@ -227,6 +188,11 @@ class Gateway:
             value = os.getenv(name)
             if value:
                 stages[stage] = value.strip()
+        cascades = {}
+        for stage, name in STAGE_MODELS_ENV.items():
+            chain = parse_models(os.getenv(name))
+            if chain:
+                cascades[stage] = chain
         return cls(
             base_url=os.getenv("LLM_BASE_URL") or None,
             api_key=os.getenv("LLM_API_KEY") or None,
@@ -237,6 +203,7 @@ class Gateway:
             proxy_api_key=os.getenv("LLM_PROXY_API_KEY") or None,
             proxy_models=models,
             stage_models=stages,
+            stage_cascades=cascades,
             personal_via_proxy=(os.getenv("LLM_PERSONAL_VIA_PROXY", "") or "").strip()
             in {"1", "true", "yes", "on"},
         )
@@ -263,10 +230,20 @@ class Gateway:
         Имя этапа сильнее имени профиля: профиль — это класс задачи, а победитель
         бенчмарка считается по этапу (`bench.recommend`).
         """
+        chain = self.stage_cascades.get(stage)
+        if chain:
+            return chain[0], "каскад"
         name = self.stage_models.get(stage)
         if name:
             return name, "этап"
         return self._proxy_model(profile_for(stage)), "профиль"
+
+    def models_for(self, stage: str) -> list[str]:
+        """Имена моделей на прокси по порядку: каскад целиком или одно имя."""
+        chain = self.stage_cascades.get(stage)
+        if chain:
+            return list(chain)
+        return [self.model_for(stage)[0]]
 
     def unmapped_profiles(self) -> list[tuple[str, str, str]]:
         """Профили без явного имени модели: (профиль, что уйдёт, переменная).
@@ -303,63 +280,33 @@ class Gateway:
         прокси там означает то же, что и в чате, — конфиг прокси этой модели не
         знает, и в этом прогоне не узнает.
         """
-        self._rejected[(route, model)] = reason
+        self._dropped.add(route, model, reason)
 
-    def route_for(self, stage: str) -> Route | None:
-        """Где будет считаться этап. None — считать негде.
+    def cascade_for(self, stage: str) -> list[Route]:
+        """Кандидаты этапа по порядку. Пустой список — считать негде.
 
-        Правила по порядку:
-
-        1. этапы с ПД идут на локальный адрес, если владелец явно не разрешил
-           обратное через LLM_PERSONAL_VIA_PROXY;
-        2. остальные предпочитают прокси: модели там сильнее;
-        3. этапы из LOCAL_FIRST_STAGES идут на локальный адрес, если он есть;
-        4. если нужный адрес не задан — берётся второй, кроме случая ПД без
-           разрешения: там фолбэка на прокси нет вообще;
-        5. если прокси уже отказал по этой модели в этом же прогоне — идём
-           на локальный адрес, если он вообще есть.
+        Вся логика порядка — в `llm_cascade.build_chain`: здесь только сбор
+        входных данных из окружения шлюза [CORE-024].
         """
-        profile = profile_for(stage)
-        personal = stage in PERSONAL_STAGES
-
         local = (
-            Route(ROUTE_LOCAL, self.base_url, self.api_key, profile)
+            Route(ROUTE_LOCAL, self.base_url, self.api_key, profile_for(stage))
             if self.base_url
             else None
         )
-        proxy_model = self.model_for(stage)[0]
-        proxy = (
-            Route(ROUTE_PROXY, self.proxy_base_url, self.proxy_api_key, proxy_model)
-            if self.proxy_base_url
-            else None
+        return build_chain(
+            stage,
+            local,
+            self.models_for(stage),
+            self.proxy_base_url,
+            self.proxy_api_key,
+            self._dropped,
+            self.personal_via_proxy,
         )
-        if proxy is not None and (ROUTE_PROXY, proxy_model) in self._rejected:
-            # Отказ по сути запроса не пройдёт и со второй вакансией.
-            proxy = None
 
-        if stage in LOCAL_FIRST_STAGES and local is not None:
-            # Эмбеддинги живут там, где владелец сам управляет моделью.
-            return local
-
-        if personal and not self.personal_via_proxy:
-            if proxy is not None and local is None:
-                log.warning(
-                    "этап %s работает с ПД и пропущен: локальной модели нет, "
-                    "а на прокси его пускать не разрешено (LLM_PERSONAL_VIA_PROXY)",
-                    stage,
-                )
-            return local
-
-        if personal and proxy is not None:
-            # Громко и каждый раз: такое решение должно быть видно в логе.
-            log.warning(
-                "этап %s с персональными данными уходит на внешний прокси (%s)",
-                stage,
-                proxy.model,
-            )
-            return proxy
-
-        return proxy or local
+    def route_for(self, stage: str) -> Route | None:
+        """Первый кандидат этапа. None — считать негде."""
+        chain = self.cascade_for(stage)
+        return chain[0] if chain else None
 
     def describe_routes(self) -> list[tuple[str, str, str, str, str]]:
         """(этап, профиль, маршрут, модель, откуда имя) — для интерфейса и логов."""
@@ -407,24 +354,10 @@ class Gateway:
         return [str(i.get("id")) for i in items if isinstance(i, dict) and i.get("id")]
 
     def _cache_get(self, digest: str) -> str | None:
-        if self.conn is None:
-            return None
-        row = self.conn.execute(
-            "SELECT response FROM llm_cache WHERE hash = ?", (digest,)
-        ).fetchone()
-        return None if row is None else row[0]
+        return llm_cache.get(self.conn, digest)
 
     def _cache_put(self, digest: str, stage: str, profile: str, response: str) -> None:
-        if self.conn is None:
-            return
-        self.conn.execute(
-            """
-            INSERT OR REPLACE INTO llm_cache (hash, stage, profile, response, created_at)
-            VALUES (?, ?, ?, ?, datetime('now'))
-            """,
-            (digest, stage, profile, response),
-        )
-        self.conn.commit()
+        llm_cache.put(self.conn, digest, stage, profile, response)
 
     def _http_call(
         self, route: Route, messages: Sequence[dict[str, str]], temperature: float
@@ -477,17 +410,23 @@ class Gateway:
         temperature: float = 0.0,
     ) -> str | None:
         profile = profile_for(stage)
-        route = self.route_for(stage)
-        if route is None:
+        chain = self.cascade_for(stage)
+        if not chain:
             self.usage.skipped += 1
             log.debug("этап %s пропущен: %s", stage, self.disabled_reason)
             return None
 
-        digest = _digest(profile, messages, temperature, route.name, route.model)
-        cached = self._cache_get(digest)
-        if cached is not None:
-            self.usage.cached += 1
-            return cached
+        digests = [
+            llm_cache.digest(profile, messages, temperature, route.name, route.model)
+            for route in chain
+        ]
+        # Кэш проверяется по всему каскаду: ответ сильнейшего кандидата не
+        # должен пропадать оттого, что сегодня спрашивают второго [LLM-006].
+        for digest in digests:
+            cached = self._cache_get(digest)
+            if cached is not None:
+                self.usage.cached += 1
+                return cached
 
         if self.usage.calls >= self.max_calls:
             # Лимит «умного» профиля — 100–300 вызовов в сутки [LLM-004].
@@ -495,58 +434,103 @@ class Gateway:
             log.warning("бюджет вызовов исчерпан (%s), этап %s пропущен", self.max_calls, stage)
             return None
 
-        for attempt, pause in enumerate(self.backoff, start=1):
+        for position, route in enumerate(chain):
+            last = position == len(chain) - 1
+            text = self._attempt(route, stage, profile, messages, temperature, last)
+            if text is None:
+                continue
+            if position:
+                # Ответ пришёл не от лучшей модели: это деградация качества,
+                # и она должна быть видна, а не выглядеть обычным прогоном.
+                self.usage.degraded += 1
+                log.warning(
+                    "этап %s сделан кандидатом %s из %s (%s/%s)",
+                    stage,
+                    position + 1,
+                    len(chain),
+                    route.name,
+                    route.model,
+                )
+            self._cache_put(digests[position], stage, profile, text)
+            return text
+        return None
+
+    def _attempt(
+        self,
+        route: Route,
+        stage: str,
+        profile: str,
+        messages: Sequence[dict[str, str]],
+        temperature: float,
+        last: bool,
+    ) -> str | None:
+        """Один кандидат. None — не вышло, пора к следующему.
+
+        Повторять одну и ту же модель имеет смысл, только когда следующей нет:
+        пока кандидат не последний, на ошибку сервиса тратится одна попытка,
+        а не весь backoff [CORE-016].
+        """
+        tries = self.backoff if last else self.backoff[:1]
+        for attempt, pause in enumerate(tries, start=1):
+            if self.usage.calls >= self.max_calls:
+                return None
+            # Считаются попытки, а не успехи: каскад из трёх кандидатов на
+            # упавшем провайдере — это три реальных похода в сеть, и бюджет
+            # обязан их видеть [LLM-004].
+            self.usage.calls += 1
             try:
                 if self._transport is not None:
-                    text = self._transport(profile, messages, temperature)
-                else:
-                    text = self._http_call(route, messages, temperature)
+                    return self._transport(profile, messages, temperature)
+                return self._http_call(route, messages, temperature)
             except Exception as exc:  # noqa: BLE001 — модель не должна ронять прогон
-                final = isinstance(exc, ApiError) and not exc.retryable
+                out = isinstance(exc, ApiError) and (
+                    not exc.retryable or exc.status == 429
+                )
                 log.warning(
                     "%s/%s ответил ошибкой (%s/%s, этап %s): %s",
                     route.name,
                     route.model,
                     attempt,
-                    len(self.backoff),
+                    len(tries),
                     stage,
                     exc,
                 )
-                if final:
-                    # Отказ по сути запроса: повтор даст то же самое, только медленнее.
+                if out:
+                    # 400/404 — отказ по сути запроса, 429 — кончилась квота.
+                    # И то и другое внутри прогона не меняется [ADR-022].
                     self.usage.failures += 1
-                    self._rejected[(route.name, route.model)] = str(exc)
-                    log.error(
-                        "%s отклонил запрос с model=%r — повторы не помогут. "
-                        "Проверь, есть ли такое имя в его config.yaml (GET /models), "
-                        "и задай его в %s",
-                        route.name,
-                        route.model,
-                        PROXY_MODEL_ENV.get(profile, "настройках моделей"),
-                    )
+                    self._dropped.add(route.name, route.model, str(exc))
+                    if getattr(exc, "status", 0) != 429:
+                        log.error(
+                            "%s отклонил запрос с model=%r — повторы не помогут. "
+                            "Проверь, есть ли такое имя в его config.yaml "
+                            "(GET /models), и задай его в %s",
+                            route.name,
+                            route.model,
+                            PROXY_MODEL_ENV.get(profile, "настройках моделей"),
+                        )
                     return None
-                if attempt == len(self.backoff):
+                if attempt == len(tries):
                     self.usage.failures += 1
                     return None
                 time.sleep(pause)
-                continue
-            self.usage.calls += 1
-            self._cache_put(digest, stage, profile, text)
-            return text
         return None
 
 
 __all__ = (
     "ApiError",
+    "Dropped",
     "EMBEDDINGS",
     "FAST",
     "Gateway",
     "LOCAL",
     "LOCAL_FIRST_STAGES",
     "LONG",
+    "MAX_CANDIDATES",
     "PERSONAL_STAGES",
     "PROXY_MODEL_ENV",
     "STAGE_MODEL_ENV",
+    "STAGE_MODELS_ENV",
     "ProfileError",
     "RETRY_STATUSES",
     "ROUTE_LOCAL",
@@ -555,7 +539,9 @@ __all__ = (
     "SMART",
     "STAGE_PROFILES",
     "Usage",
+    "build_chain",
     "ensure_cache",
     "error_message",
+    "parse_models",
     "profile_for",
 )

@@ -76,7 +76,11 @@ def env_keys_read() -> dict[str, set[str]]:
                         remember(node.slice.value, path.name)
 
     # Имена собираются из профилей и этапов, в коде буквами не встречаются.
-    for key in (*llm.PROXY_MODEL_ENV.values(), *llm.STAGE_MODEL_ENV.values()):
+    for key in (
+        *llm.PROXY_MODEL_ENV.values(),
+        *llm.STAGE_MODEL_ENV.values(),
+        *llm.STAGE_MODELS_ENV.values(),
+    ):
         remember(key, "llm.py")
     return found
 
