@@ -29,6 +29,8 @@ from urllib.parse import urlencode
 import geo
 from ui_core import esc, table
 
+# Строка уходит в Leaflet как есть: {s}/{z}/{x}/{y} подставляет он сам. Через
+# str.format этот адрес никогда не проходит, поэтому скобки не удваиваются.
 DEFAULT_TILES = "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
 ATTRIBUTION = (
     'Данные &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
