@@ -135,6 +135,29 @@ def evidence(conn: sqlite3.Connection, company: str) -> list[tuple]:
     return out
 
 
+def recent(
+    conn: sqlite3.Connection, limit: int = 100, level: str = ""
+) -> list[sqlite3.Row]:
+    """Последние находки для страницы «Инъекции»: свежие сверху.
+
+    Название вакансии подтягивается слева, потому что ключ (`название|компания`)
+    читается глазами плохо, а вакансию могли уже вычистить из базы — тогда
+    остаётся строка находки без ссылки, и это правильно: сам факт попытки
+    переживает вакансию.
+    """
+    where = "WHERE h.level = ?" if level else ""
+    args: tuple = (level, limit) if level else (limit,)
+    try:
+        return conn.execute(
+            "SELECT h.*, v.title AS title FROM injection_hits h"
+            " LEFT JOIN vacancies v ON v.key = h.key AND h.kind = 'vacancy'"
+            " {} ORDER BY h.seen_at DESC, h.code LIMIT ?".format(where),
+            args,
+        ).fetchall()
+    except sqlite3.Error:  # старая база [CORE-017]
+        return []
+
+
 def counts(conn: sqlite3.Connection) -> tuple[int, int]:
     """Сколько объектов с инъекциями и сколько из них красных."""
     try:
@@ -159,5 +182,6 @@ __all__ = (
     "evidence",
     "hits",
     "lines",
+    "recent",
     "record",
 )

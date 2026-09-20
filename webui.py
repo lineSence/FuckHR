@@ -90,6 +90,7 @@ from ui_forms import (
     start_bench,
 )
 import intake
+import ui_injections
 import ui_research
 import ui_run
 import ui_intake
@@ -225,6 +226,13 @@ class Handler(BaseHTTPRequestHandler):
                 elif parsed.path == "/search":
                     body = render_search(conn, one("q"), one("company"))
                     self._send(page("Проверка поиска", body))
+                elif parsed.path == "/injections":
+                    self._send(
+                        page(
+                            "Инъекции",
+                            ui_injections.render_injections(conn, one("level")),
+                        )
+                    )
                 elif parsed.path == "/llm":
                     # Пока идёт сравнение, страница обновляет себя сама: результат
                     # появляется на месте формы, уходить в лог не нужно.
