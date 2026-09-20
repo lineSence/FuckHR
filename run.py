@@ -71,6 +71,7 @@ import market_store
 import llm_tasks
 import outreach
 import settings
+import targets_hh
 import websearch
 from collector import collect  # noqa: F401 — реэкспорт: сбор живёт в collector.py
 from hh import Vacancy, enrich
@@ -193,6 +194,11 @@ def run_once(args: argparse.Namespace) -> int:
             client, bundle, options.limit, prefilter, conn=conn
         )
         log.info("увидели: %s, прошло предфильтр: %s", len(seen), len(drafts))
+        # Цели со слежением (ADR-025): отдельный обход по employer_id, не чаще
+        # раза в сутки на цель. Компания выбрана владельцем, поэтому её
+        # вакансии сохраняются целиком, без предфильтра и порога.
+        for company, fresh in targets_hh.sweep(conn, client):
+            log.info("цель %s: новых вакансий %s", company, fresh)
         # Рынок пересчитывается до скоринга: вес `market` в score.py берётся
         # из свежих срезов, иначе первая вакансия прогона сравнивалась бы с
         # позавчерашней медианой.

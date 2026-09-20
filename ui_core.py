@@ -21,6 +21,7 @@ import db
 import detector
 import dossier
 import resume
+import targets
 
 # Адрес зашит намеренно: интерфейс без авторизации не должен слушать сеть.
 HOST = "127.0.0.1"
@@ -98,7 +99,7 @@ td .warn, td .danger, td .ok { display: inline-block; padding: 1px 8px; margin: 
         padding: 12px 14px; display: flex; flex-direction: column; gap: 6px }
 .card.off { background: #fafbfc; color: var(--muted) }
 .cardtop { display: flex; align-items: center; justify-content: space-between; gap: 8px }
-.cardtop .warn { margin: 0; padding: 1px 8px; border: 0; border-radius: 3px;
+.cardtop .warn, .cardtop .ok { margin: 0; padding: 1px 8px; border: 0; border-radius: 3px;
         font-size: 11.5px; font-weight: 700; text-transform: uppercase }
 .cardbtns { display: flex; align-items: center; gap: 8px; margin-top: 4px }
 .cardbtns form { margin: 0 }
@@ -149,6 +150,7 @@ NAV_ITEMS = (
     ("/", "Запуск"),
     ("/vacancies", "Вакансии"),
     ("/companies", "Компании и контакты"),
+    ("/targets", "Цели"),
     ("/search", "Поиск"),
     ("/injections", "Инъекции"),
     ("/llm", "Модель"),
@@ -225,6 +227,7 @@ def open_db() -> sqlite3.Connection:
     conditions.ensure_schema(conn)
     dossier.ensure_schema(conn)
     resume.ensure_schema(conn)
+    targets.ensure_schema(conn)
     return conn
 
 

@@ -25,6 +25,7 @@
 - `wiki/architecture/pipeline.md` — этапы обработки вакансии от сбора до Telegram.
 - `wiki/architecture/model-routing.md` — FreeLLMAPI, профили, маршрутизация по этапам.
 - `wiki/architecture/profiles.md` — несколько профилей поиска: что общее, что на профиль (ADR-023), раздел «Профили» в интерфейсе (ADR-024).
+- `wiki/architecture/targets.md` — цели: компании, выбранные владельцем, шаги и слежение (ADR-025).
 - `wiki/architecture/tech-stack.md` — замысел стека и рассмотренные альтернативы.
 - `wiki/architecture/sources-and-outreach.md` — источники контактов и поисковый API этапа писем.
 - `wiki/architecture/runtime-windows.md` — запуск по расписанию на Windows (ADR-014).

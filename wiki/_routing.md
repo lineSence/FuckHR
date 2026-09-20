@@ -35,6 +35,12 @@ triggers:
       - wiki/references/contact-discovery.md
       - wiki/rules/outreach.md
 
+  - id: targets
+    keywords: [цель, цели, таргет, компания вручную, employer_id, слежение за компанией, ИНН, кандидаты работодателя]
+    load:
+      - wiki/architecture/targets.md
+      - docs/targets.md
+
   - id: profiles
     keywords: [профиль, профили, несколько профилей, направление поиска, vacancy_profiles, multi-profile, каталог профилей, карточки профилей, выключить профиль, enabled]
     load:
