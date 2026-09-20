@@ -1,12 +1,20 @@
 """Раздел «Цели»: компании, выбранные владельцем (ADR-025).
 
-Страница устроена как список карточек — те же карточки, что и у профилей, и по
-той же причине: целей около десятка, и первый вопрос к странице «кто у меня в
-работе», а не «что известно про третью».
+Список — сворачиваемые блоки, а не карточки: целей около десятка, и первый
+вопрос к странице «кто у меня в работе», а не «что известно про третью».
+Открыл цель — её вакансии видны прямо в списке, закрыл — страница снова
+читается сверху одним взглядом.
 
-Каждый шаг — отдельная кнопка: вакансии, отзывы с оценкой, глубокий ресёрч.
-Так решил владелец, и так же требует [CORE-016]: у каждого шага свои внешние
-запросы и своё время.
+Кнопка одна: «Собрать все данные» — вакансии, отзывы с оценкой и глубокий
+ресёрч одной задачей (поправка к ADR-025 от 20.09.2026). Задача в jobs.py
+всё равно идёт одна, и тремя кнопками владелец просто ждал три раза подряд.
+Запуск остаётся ручным: цена шагов никуда не делась [CORE-016].
+
+Порядок и фильтр списка приходят формой, а не адресом: у /targets нет
+GET-параметров, и выбор живёт в памяти процесса — там же, где кандидаты.
+Интерфейс однопользовательский. Имена сверяются со словарями `targets.SORTS`
+и `targets.FILTERS`: из браузера в SQL не попадает ни один символ, чужое имя
+молча заменяется умолчанием [CORE-017].
 
 В браузер не уходит ничего, кроме id цели. Название компании для подпроцесса
 берётся из базы: строку из формы владелец вводит свободную, и в argv ей
@@ -23,16 +31,42 @@ import hh_employer
 import jobs
 import settings
 import targets
-from ui_core import esc, table
+from ui_core import details, esc, sort_pick, table
 
 # Кандидаты ищутся сетью, поэтому их держим в памяти процесса между двумя
 # запросами страницы: интерфейс однопользовательский, база для этого не нужна.
 _CANDIDATES: dict[str, list[hh_employer.Employer]] = {}
 
+# Как показан список. Тоже память процесса: это вид, а не данные.
+_VIEW = {"sort": "added", "only": "all"}
+
+# Что именно делает единственная кнопка. Список нужен и странице — сказать,
+# за что владелец платит одним нажатием.
 STEPS = (
     ("vacancies", "Собрать вакансии", "Все вакансии компании на hh.ru, без порога."),
     ("reviews", "Отзывы и оценка", "Досье по отзывам и общая оценка работодателя."),
     ("research", "Глубокий ресёрч", "Реестр, суды, долги, банкротство, новости."),
+)
+
+ALL_STEP = (
+    "all",
+    "Собрать все данные",
+    "Вакансии, отзывы с оценкой и глубокий ресёрч — одной задачей.",
+)
+
+SORT_LABELS = (
+    ("added", "по добавлению"),
+    ("company", "по названию"),
+    ("fresh", "по новым"),
+    ("vacancies", "по вакансиям"),
+    ("scan", "по последнему сбору"),
+)
+
+ONLY_LABELS = (
+    ("all", "все"),
+    ("watch", "со слежением"),
+    ("fresh", "с новыми"),
+    ("unresolved", "без работодателя"),
 )
 
 
@@ -57,9 +91,9 @@ def add_from_input(conn: sqlite3.Connection, text: str) -> str:
         targets.add(conn, text.strip(), inn=ask.value, source="inn")
         return (
             "Цель добавлена по ИНН. На hh.ru по ИНН ничего не ищется — это ключ к "
-            "реестрам, а не к работодателю. Запусти у цели «Глубокий ресёрч», а "
-            "чтобы собрать вакансии, добавь ту же компанию ещё раз по названию "
-            "или ссылке — цель не раздвоится, а дополнится."
+            "реестрам, а не к работодателю. Кнопка «Собрать все данные» принесёт "
+            "отзывы и ресёрч, а чтобы собрались вакансии, добавь ту же компанию "
+            "ещё раз по названию или ссылке — цель не раздвоится, а дополнится."
         )
     client = _client()
     try:
@@ -116,7 +150,12 @@ def start_step(conn: sqlite3.Connection, target_id: int, step: str) -> str:
     if target is None:
         return "Такой цели нет."
     try:
-        if step == "research":
+        if step == "all":
+            # Невозможные шаги не проверяем здесь: у цели по ИНН нет
+            # работодателя, а DEEP_ENABLED мог быть выключен — задача пропустит
+            # такой шаг строкой в логе и доделает остальные.
+            jobs.runner.start("target-scan", ["--target", str(target.id), "--step", "all"])
+        elif step == "research":
             if not deepresearch.options().enabled:
                 return "Глубокий ресёрч выключен настройкой DEEP_ENABLED."
             jobs.runner.start("research-deep", ["--company", target.company, "--force"])
@@ -153,6 +192,11 @@ def handle(conn: sqlite3.Connection, path: str, form: Mapping[str, Sequence[str]
         return add_from_input(conn, one("text"))
     if path == "/targets/pick":
         return pick(conn, one("query"), one("employer"))
+    if path == "/targets/view":
+        # Порядок и фильтр: в SQL уходит не значение, а найденное по нему имя.
+        _VIEW["sort"] = sort_pick(one("sort"), tuple(targets.SORTS), "added")
+        _VIEW["only"] = sort_pick(one("only"), tuple(targets.FILTERS), "all")
+        return ""
     if path == "/targets/star":
         # Звёздочка со страницы компании: название приходит из своей же базы.
         targets.add(conn, one("company"), source="run")
@@ -169,36 +213,97 @@ def handle(conn: sqlite3.Connection, path: str, form: Mapping[str, Sequence[str]
     return ""
 
 
-CARD = (
+COLLECT_FORM = (
+    '<form class=inline method=post action="/targets/step">'
+    '<input type=hidden name="id" value="{tid}">'
+    '<input type=hidden name="step" value="all">'
+    '<button title="{hint}">{label}</button></form>'
+)
+
+BLOCK_BTNS = (
     # Цель без слежения не «выключена»: гасить её нечестно, слежение — это
     # только про новые вакансии.
-    '<div class="card">'
-    "<div class=cardtop><b>{company}</b>{flag}</div>"
-    "<div class=muted>{meta}</div>"
     "<div class=cardbtns>"
     '<a class=chip href="/target?id={tid}">Открыть</a>'
+    "{collect}"
     '<form class=inline method=post action="/targets/watch">'
     '<input type=hidden name="id" value="{tid}"><input type=hidden name="on" value="{next_watch}">'
     "<button class=secondary>{watch_label}</button></form>"
     '<form class=inline method=post action="/targets/remove">'
     '<input type=hidden name="id" value="{tid}">'
     "<button class=secondary>Убрать</button></form>"
-    "</div></div>"
+    "</div>"
 )
 
 
-def _meta(conn: sqlite3.Connection, target: targets.Target) -> str:
-    total, fresh = targets.counts(conn, target.id)
+def _collect_button(target_id: int) -> str:
+    return COLLECT_FORM.format(
+        tid=int(target_id), hint=esc(ALL_STEP[2]), label=esc(ALL_STEP[1])
+    )
+
+
+def _meta(target: targets.Target, total: int, fresh: int) -> str:
+    """Строка под названием цели. Возвращает текст, а не HTML."""
     bits = ["вакансий {}".format(total)]
     if fresh:
         bits.append("новых {}".format(fresh))
+    if target.watch:
+        bits.append("следим")
     if target.inn:
         bits.append("ИНН {}".format(target.inn))
     if not target.resolved:
         bits.append("работодатель hh.ru не выбран")
     if target.last_scan_at:
         bits.append("смотрели {}".format(target.last_scan_at[:10]))
-    return esc(" · ".join(bits))
+    return " · ".join(bits)
+
+
+def _vacancy_table(conn: sqlite3.Connection, target_id: int) -> str:
+    """Вакансии цели таблицей. Пусто — объясняем, а не показываем ничего."""
+    rows = []
+    for row in targets.vacancies(conn, target_id):
+        rows.append(
+            [
+                '<a href="/vacancy?key={key}">{title}</a>{flag}'.format(
+                    key=esc(row["key"]),
+                    title=esc(row["title"]),
+                    flag=' <span class="ok">новая</span>' if row["fresh"] else "",
+                ),
+                esc(row["area"] or ""),
+                "{:.0f}".format(row["score"] or 0),
+                esc((row["published_at"] or "")[:10]),
+            ]
+        )
+    if not rows:
+        return (
+            "<p class=muted>Вакансии ещё не собирались. Кнопка «Собрать все данные» "
+            "возьмёт всё, что у компании открыто.</p>"
+        )
+    return table(["Вакансия", "Город", "Скор", "Опубликована"], rows, raw_head=True)
+
+
+def _view_button(param: str, key: str, label: str) -> str:
+    """Кнопка порядка или фильтра. Формой, потому что у /targets нет параметров."""
+    values = dict(_VIEW)
+    values[param] = key
+    return (
+        '<form class=inline method=post action="/targets/view">'
+        '<input type=hidden name="sort" value="{sort}">'
+        '<input type=hidden name="only" value="{only}">'
+        '<button class="{cls}">{label}</button></form>'
+    ).format(
+        sort=esc(values["sort"]),
+        only=esc(values["only"]),
+        cls="" if _VIEW[param] == key else "secondary",
+        label=esc(label),
+    )
+
+
+def _view_row(title: str, param: str, items: Sequence[tuple[str, str]]) -> str:
+    return '<div class=chips><span class=filt>{title}</span>{buttons}</div>'.format(
+        title=esc(title),
+        buttons="".join(_view_button(param, key, label) for key, label in items),
+    )
 
 
 def render_targets(conn: sqlite3.Connection, note: str = "", query: str = "") -> str:
@@ -209,8 +314,8 @@ def render_targets(conn: sqlite3.Connection, note: str = "", query: str = "") ->
     parts.append(
         "<p class=muted>Цель — компания, которую выбрал ты, а не сбор. Можно "
         "вписать название, вставить ссылку на компанию или вакансию с hh.ru "
-        "или указать ИНН. Шаги запускаются кнопками: каждый стоит времени и "
-        "внешних запросов.</p>"
+        "или указать ИНН. Сбор запускается кнопкой: он стоит времени и внешних "
+        "запросов, сам по себе ничего не тратится.</p>"
     )
     parts.append(
         '<form method=post action="/targets/add" class=addrow>'
@@ -243,23 +348,33 @@ def render_targets(conn: sqlite3.Connection, note: str = "", query: str = "") ->
         )
         parts.append(table(["Компания", "Страница", ""], rows, raw_head=True))
 
-    found = targets.all_targets(conn)
+    parts.append(_view_row("Порядок:", "sort", SORT_LABELS))
+    parts.append(_view_row("Показать:", "only", ONLY_LABELS))
+
+    found = targets.listing(conn, _VIEW["sort"], _VIEW["only"])
     if not found:
-        parts.append("<p class=muted>Целей пока нет.</p>")
-        return "".join(parts)
-    cards = []
-    for target in found:
-        cards.append(
-            CARD.format(
-                company=esc(target.company),
-                flag='<span class="ok">следим</span>' if target.watch else "",
-                meta=_meta(conn, target),
-                tid=target.id,
-                next_watch="0" if target.watch else "1",
-                watch_label="Не следить" if target.watch else "Следить",
+        parts.append(
+            "<p class=muted>{}</p>".format(
+                "Под этот фильтр ни одна цель не попала."
+                if _VIEW["only"] != "all"
+                else "Целей пока нет."
             )
         )
-    parts.append('<div class=cards>{}</div>'.format("".join(cards)))
+        return "".join(parts)
+    for target, total, fresh in found:
+        parts.append(
+            details(
+                target.company,
+                _meta(target, total, fresh),
+                BLOCK_BTNS.format(
+                    tid=target.id,
+                    collect=_collect_button(target.id),
+                    next_watch="0" if target.watch else "1",
+                    watch_label="Не следить" if target.watch else "Следить",
+                )
+                + _vacancy_table(conn, target.id),
+            )
+        )
     if len(found) > targets.EXPECTED_MAX:
         parts.append(
             "<p class=muted>Целей больше десятка: каждая со слежением — "
@@ -269,10 +384,11 @@ def render_targets(conn: sqlite3.Connection, note: str = "", query: str = "") ->
 
 
 def render_target(conn: sqlite3.Connection, target_id: int, note: str = "") -> str:
-    """Одна цель: шаги, вакансии целиком и ссылка на досье."""
+    """Одна цель: сбор, вакансии целиком и ссылка на досье."""
     target = targets.get(conn, int(target_id))
     if target is None:
         return "<p>Такой цели нет.</p>"
+    total, fresh = targets.counts(conn, target.id)
     targets.seen(conn, target.id)
     parts = ['<p><a href="/targets">← Все цели</a></p>']
     if note:
@@ -280,56 +396,34 @@ def render_target(conn: sqlite3.Connection, target_id: int, note: str = "") -> s
     parts.append("<h1>{}</h1>".format(esc(target.company)))
     parts.append(
         '<p class=muted>{meta} · <a href="/company?name={name}">досье и контакты</a></p>'.format(
-            meta=_meta(conn, target), name=esc(target.company)
+            meta=esc(_meta(target, total, fresh)), name=esc(target.company)
         )
     )
 
-    buttons = []
-    for step, label, hint in STEPS:
-        buttons.append(
-            (
-                '<form class=inline method=post action="/targets/step">'
-                '<input type=hidden name="id" value="{tid}">'
-                '<input type=hidden name="step" value="{step}">'
-                '<button title="{hint}">{label}</button></form>'
-            ).format(tid=target.id, step=step, hint=esc(hint), label=esc(label))
-        )
-    parts.append("<div class=tasks>{}</div>".format("".join(buttons)))
+    parts.append("<div class=tasks>{}</div>".format(_collect_button(target.id)))
     parts.append(
-        "<p class=muted>{}</p>".format(
+        "<p class=muted>Одной задачей: {}</p>".format(
             " · ".join("{}: {}".format(esc(label), esc(hint)) for _, label, hint in STEPS)
         )
     )
+    parts.append(
+        "<p class=muted>Невозможный шаг пропускается строкой в логе, остальные "
+        "доезжают: цель по ИНН остаётся без вакансий, выключенный DEEP_ENABLED — "
+        "без ресёрча. Перезапустить один шаг: "
+        "<code>python target_scan.py --target {tid} --step reviews</code>.</p>".format(
+            tid=target.id
+        )
+    )
 
-    rows = []
-    for row in targets.vacancies(conn, target.id):
-        rows.append(
-            [
-                '<a href="/vacancy?key={key}">{title}</a>{flag}'.format(
-                    key=esc(row["key"]),
-                    title=esc(row["title"]),
-                    flag=' <span class="ok">новая</span>' if row["fresh"] else "",
-                ),
-                esc(row["area"] or ""),
-                "{:.0f}".format(row["score"] or 0),
-                esc((row["published_at"] or "")[:10]),
-            ]
+    parts.append(
+        details(
+            "Вакансии компании",
+            "показаны все, порог профиля не применяется",
+            "<p class=muted>Скор рядом — справочно, по лучшему профилю.</p>"
+            + _vacancy_table(conn, target.id),
+            open_=True,
         )
-    parts.append("<h2>Вакансии компании</h2>")
-    if not rows:
-        parts.append(
-            "<p class=muted>Вакансии ещё не собирались. Кнопка «Собрать вакансии» "
-            "возьмёт всё, что у компании открыто.</p>"
-        )
-    else:
-        parts.append(
-            "<p class=muted>Показаны все вакансии компании, а не только прошедшие "
-            "порог: цель выбрана руками. Скор рядом — справочно, по лучшему "
-            "профилю.</p>"
-        )
-        parts.append(
-            table(["Вакансия", "Город", "Скор", "Опубликована"], rows, raw_head=True)
-        )
+    )
     return "".join(parts)
 
 
@@ -349,6 +443,9 @@ def star_form(conn: sqlite3.Connection, company: str) -> str:
 
 
 __all__ = (
+    "ALL_STEP",
+    "ONLY_LABELS",
+    "SORT_LABELS",
     "STEPS",
     "add_from_input",
     "handle",

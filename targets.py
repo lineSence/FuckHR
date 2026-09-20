@@ -10,7 +10,8 @@
 
 - вход всеми тремя способами: название, ссылка, ИНН;
 - одноимённые конторы не угадываются — показываются кандидаты с hh.ru;
-- шаги по кнопкам, а не одним прогоном: каждый шаг стоит времени [CORE-016];
+- сбор запускается руками, а не прогоном: он стоит времени [CORE-016]. Одной
+  кнопкой, а не тремя — поправка того же дня, см. ADR-025;
 - слежение за новыми вакансиями включается у каждой цели отдельно;
 - целей около десятка;
 - вакансии цели показываются **все**, порог профиля к ним не применяется:
@@ -39,6 +40,24 @@ EXPECTED_MAX = 10
 # Слежение — раз в сутки. Чаще бессмысленно: вакансии не появляются ежечасно,
 # а каждый лишний обход это риск капчи [CORE-014].
 WATCH_HOURS = 24
+
+# Порядок и фильтр списка. Из браузера приходит только имя, и оно ищется здесь:
+# в SQL не попадает ни один символ владельца, чужое имя молча заменяется
+# умолчанием [CORE-017]. Обратной сортировки нет намеренно [CORE-025].
+SORTS = {
+    "added": "t.added_at DESC, t.id DESC",
+    "company": "t.company COLLATE NOCASE",
+    "fresh": "fresh_count DESC, total DESC, t.company COLLATE NOCASE",
+    "vacancies": "total DESC, t.company COLLATE NOCASE",
+    "scan": "COALESCE(t.last_scan_at, '') DESC, t.company COLLATE NOCASE",
+}
+
+FILTERS = {
+    "all": "1 = 1",
+    "watch": "t.watch = 1",
+    "fresh": "fresh_count > 0",
+    "unresolved": "COALESCE(t.employer_id, '') = ''",
+}
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS company_targets (
@@ -161,6 +180,36 @@ def all_targets(conn: sqlite3.Connection) -> list[Target]:
     ensure_schema(conn)
     cur = conn.execute("SELECT * FROM company_targets ORDER BY added_at DESC, id DESC")
     return [_row(row) for row in cur.fetchall()]
+
+
+def listing(
+    conn: sqlite3.Connection, sort: str = "added", only: str = "all"
+) -> list[tuple[Target, int, int]]:
+    """Цели со счётчиками: (цель, сколько вакансий, сколько новых).
+
+    Порядок и фильтр берутся из словарей выше по имени. Считать вакансии
+    отдельным запросом на каждую цель незачем: их десяток, а запрос и так уже
+    идёт по обеим таблицам.
+    """
+    ensure_schema(conn)
+    order = SORTS.get(sort, SORTS["added"])
+    where = FILTERS.get(only, FILTERS["all"])
+    cur = conn.execute(
+        """
+        SELECT t.*,
+               COUNT(tv.key) AS total,
+               COALESCE(SUM(tv.fresh), 0) AS fresh_count
+          FROM company_targets t
+          LEFT JOIN target_vacancies tv ON tv.target_id = t.id
+         GROUP BY t.id
+        HAVING {where}
+         ORDER BY {order}
+        """.format(where=where, order=order)
+    )
+    return [
+        (_row(row), int(row["total"] or 0), int(row["fresh_count"] or 0))
+        for row in cur.fetchall()
+    ]
 
 
 def get(conn: sqlite3.Connection, target_id: int) -> Target | None:
@@ -297,7 +346,9 @@ def due(conn: sqlite3.Connection, hours: int = WATCH_HOURS) -> list[Target]:
 
 __all__ = (
     "EXPECTED_MAX",
+    "FILTERS",
     "SCHEMA",
+    "SORTS",
     "Target",
     "WATCH_HOURS",
     "add",
@@ -308,6 +359,7 @@ __all__ = (
     "ensure_schema",
     "get",
     "link",
+    "listing",
     "mark_scan",
     "remove",
     "seen",
