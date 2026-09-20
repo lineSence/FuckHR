@@ -68,6 +68,12 @@ triggers:
       - wiki/architecture/company-score.md
       - docs/company-score.md
 
+  - id: embeddings
+    keywords: [эмбеддинг, вектор, косинус, похожие вакансии, перефраз, bge-m3, семантика, sqlite-vec]
+    load:
+      - wiki/architecture/embeddings.md
+      - docs/embeddings.md
+
   - id: deep-research
     keywords: [глубокий ресёрч, ресерч компании, реестр, егрюл, инн, суд, арбитраж, банкротство, приставы, исполнительное производство, новости о компании]
     load:

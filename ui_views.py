@@ -17,6 +17,7 @@ from typing import Sequence
 
 import conditions
 import contact_finds
+import embeddings_tasks
 import contacts
 import db
 import detector
@@ -501,8 +502,37 @@ def render_vacancy(conn: sqlite3.Connection, key: str, with_draft: bool) -> str:
             "модель, ничего не отправляет.</p>"
         )
 
+    parts.append(similar_block(conn, key))
     parts.append("<h2>Описание</h2><pre>{}</pre>".format(esc(row["description"])))
     return "".join(parts)
+
+
+def similar_block(conn: sqlite3.Connection, key: str) -> str:
+    """Похожие вакансии по векторам (ADR-021). Выключено — пустая строка.
+
+    Показываем то, что уже посчитано прогоном: страница не будит эмбеддер.
+    Полезно ровно одним — видно «ту же вакансию» под другим названием, которую
+    ключ title+company считает новой.
+    """
+    gateway = llm.Gateway.from_env(conn) if settings.flag("LLM_ENABLED") else None
+    found = embeddings_tasks.similar_vacancies(conn, gateway, key)
+    if not found:
+        return ""
+    rows = []
+    for other, score in found:
+        row = vacancy_one(conn, other)
+        if row is None:
+            continue
+        link = '<a href="/vacancy?key={}">{}</a>'.format(esc(other), esc(row["title"]))
+        rows.append([link, esc(row["company"] or ""), "{:.0%}".format(score)])
+    if not rows:
+        return ""
+    return (
+        "<h2>Похожие вакансии</h2>"
+        + table(["Вакансия", "Компания", "Близость"], rows)
+        + "<p class=muted>Сравниваются векторы названия и описания. На скоринг и "
+        "оценку работодателя не влияет.</p>"
+    )
 
 
 def render_contacts(conn: sqlite3.Connection, sort: str = "created") -> str:
@@ -555,6 +585,7 @@ __all__ = (
     "sort_rows",
     "render_run",
     "render_settings",
+    "similar_block",
     "render_vacancies",
     "render_vacancy",
     "vacancy_one",

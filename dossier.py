@@ -55,6 +55,7 @@ from typing import Sequence
 import contacts
 import fake_company
 import aitext_llm
+import embeddings_tasks
 import fake_llm
 import reviewlegit
 import reviewlegit_store
@@ -444,6 +445,7 @@ def score_reviews(
         ai_texts=aitext_llm.generated_indexes(
             gateway, {item.index: item.text for item in items}
         ),
+        near_pairs=embeddings_tasks.review_pairs(conn, gateway, items),
     )
 
 
