@@ -91,6 +91,7 @@ from ui_forms import (
 )
 import ui_injections
 import ui_research
+import ui_targets
 import ui_run
 import webui_profile
 from ui_resume import render_resume, save_resume
@@ -196,10 +197,21 @@ class Handler(BaseHTTPRequestHandler):
                         )
                     )
                 elif parsed.path == "/company":
-                    body = render_company(
-                        conn, one("name"), one("jsort"), one("ksort")
-                    ) + ui_research.render_research(conn, one("name"))
+                    # Звёздочка сверху: компанию из прогона можно перенести
+                    # в «Цели» и дальше копать её отдельно (ADR-025).
+                    body = (
+                        ui_targets.star_form(conn, one("name"))
+                        + render_company(conn, one("name"), one("jsort"), one("ksort"))
+                        + ui_research.render_research(conn, one("name"))
+                    )
                     self._send(page("Досье", body))
+                elif parsed.path == "/targets":
+                    self._send(page("Цели", ui_targets.render_targets(conn)))
+                elif parsed.path == "/target":
+                    body = ui_targets.render_target(
+                        conn, settings.as_int(one("id"), 0)
+                    )
+                    self._send(page("Цель", body))
                 elif parsed.path == "/cleanup":
                     self._send(page("Очистка", render_cleanup(conn)))
                 elif parsed.path == "/contacts":
@@ -369,6 +381,26 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     body = render_search(conn, "", "", saved)
                     self._send(page("Проверка поиска", body))
+                finally:
+                    conn.close()
+                return
+
+            if parsed.path.startswith("/targets/"):
+                # Раздел целей: добавление, выбор кандидата, шаги, слежение.
+                # В подпроцесс уходит только id цели из своей базы (ADR-025).
+                conn = open_db()
+                try:
+                    note = ui_targets.handle(conn, parsed.path, form)
+                    if parsed.path == "/targets/step":
+                        body = ui_targets.render_target(
+                            conn, settings.as_int((form.get("id") or [""])[0], 0), note
+                        )
+                        self._send(page("Цель", body))
+                        return
+                    body = ui_targets.render_targets(
+                        conn, note, ui_targets.last_query(form)
+                    )
+                    self._send(page("Цели", body))
                 finally:
                     conn.close()
                 return
