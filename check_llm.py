@@ -4,7 +4,7 @@
 сотни запросов к hh.ru, а проверить нужно две вещи: подхватился ли адрес и
 куда уйдут этапы с персональными данными.
 
-    python check_llm.py            # таблица маршрутов + список моделей
+    python check_llm.py            # таблица маршрутов + списки моделей
     python check_llm.py --live      # плюс один реальный вызов на этапе extract
 
 Ни одного персонального вызова здесь не делается даже с --live: текст для пробного
@@ -92,14 +92,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         for stage, names in sorted(cascaded.items()):
             print(f"  {stage:<12}{' → '.join(names)}")
 
-    if gateway.proxy_base_url:
+    # Список моделей спрашивается у обоих адресов: локальные имена нужны для
+    # LLM_LOCAL_MODEL_* и LLM_LOCAL_STAGE_MODEL_* ровно так же, как проксёвые
+    # для LLM_PROXY_MODEL_*.
+    for route, title, base in (
+        (llm.ROUTE_LOCAL, "локальном адресе", gateway.base_url),
+        (llm.ROUTE_PROXY, "прокси", gateway.proxy_base_url),
+    ):
+        if not base:
+            continue
         print()
-        names = gateway.models(llm.ROUTE_PROXY)
+        names = gateway.models(route)
         if names:
-            print(f"Модели на прокси ({len(names)}): {', '.join(names[:20])}")
+            print(f"Модели на {title} ({len(names)}): {', '.join(names[:20])}")
         else:
-            print("Прокси не отдал список моделей.")
-            print("  Проверь туннель и адрес: в LLM_PROXY_BASE_URL нужен суффикс /v1")
+            print(f"Адрес {base} не отдал список моделей.")
+            print("  Проверь туннель и адрес: нужен суффикс /v1")
 
     if not args.live:
         print()
