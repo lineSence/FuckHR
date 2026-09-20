@@ -6,11 +6,16 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
+import os
 import sqlite3
 from typing import Sequence
 
 import aitext
 import company_score_store
+import conditions
+import db
 import contact_finds
 import contacts
 import detector
@@ -19,6 +24,8 @@ import dossier
 import market
 import market_company
 import market_store
+
+log = logging.getLogger(__name__)
 
 
 def card_lines(
@@ -60,4 +67,45 @@ def card_lines(
     return signals
 
 
-__all__ = ("card_lines",)
+def deliver(
+    conn: sqlite3.Connection,
+    rows: Sequence[sqlite3.Row],
+    signals: dict[str, list[str]],
+    dry_run: bool = False,
+) -> int:
+    """Отправка готовых карточек в Telegram. Возвращает число доставленных.
+
+    Вынесено из run.py вместе с card_lines: тот снова упёрся в 25 КБ
+    [CORE-024]. Поведение прежнее — в сухом прогоне карточки только пишутся в
+    лог, а ненастроенный Telegram не считается ошибкой: собранное уже в базе и
+    видно в интерфейсе [CORE-017].
+    """
+    if dry_run:
+        for row in rows:
+            log.info("%5.1f  %s — %s", row["score"], row["title"], row["company"])
+            log.info("        %s", row["url"])
+            for line in conditions.lines(conn, row["key"]):
+                log.info("        %s", line)
+            for line in signals.get(row["key"], []):
+                log.info("        %s", line)
+        return 0
+    if not rows:
+        return 0
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    if not token or not chat_id:
+        log.warning(
+            "Telegram не настроен: %s карточек ждут в базе, смотри их в интерфейсе",
+            len(rows),
+        )
+        return 0
+    import bot as tg
+
+    republished = {row["key"]: db.republish_count(conn, row["key"]) for row in rows}
+    delivered = asyncio.run(tg.send_cards(token, chat_id, rows, republished, signals))
+    db.mark_notified(conn, delivered)
+    log.info("отправлено карточек: %s", len(delivered))
+    return len(delivered)
+
+
+__all__ = ("card_lines", "deliver")

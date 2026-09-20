@@ -53,6 +53,18 @@ CREATE TABLE IF NOT EXISTS vacancies (
     feedback        TEXT
 );
 
+CREATE TABLE IF NOT EXISTS vacancy_profiles (
+    key           TEXT NOT NULL,
+    profile_id    TEXT NOT NULL,
+    score         REAL,
+    score_reasons TEXT,
+    matched_at    TEXT NOT NULL,
+    PRIMARY KEY (key, profile_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_vacancy_profiles_profile
+    ON vacancy_profiles (profile_id, score);
+
 CREATE TABLE IF NOT EXISTS vacancy_snapshots (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     key           TEXT NOT NULL,
@@ -404,6 +416,43 @@ def pending_cards(
         (min_score, limit),
     )
     return cur.fetchall()
+
+
+def save_matches(
+    conn: sqlite3.Connection, key: str, matches: Iterable[tuple[str, float, list[str]]]
+) -> int:
+    """Связи «вакансия ↔ профиль» с баллом каждого профиля (ADR-023).
+
+    Вакансия остаётся одной записью: дедуп, история публикаций и досье общие.
+    Балл живёт на связи, потому что у профилей разные критерии и разные веса —
+    одна цифра в `vacancies.score` ответила бы только за лучший профиль.
+    """
+    now = utcnow()
+    rows = [(key, pid, score, json.dumps(reasons, ensure_ascii=False), now) for pid, score, reasons in matches]
+    if not rows:
+        return 0
+    conn.executemany(
+        """
+        INSERT OR REPLACE INTO vacancy_profiles
+            (key, profile_id, score, score_reasons, matched_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        rows,
+    )
+    conn.commit()
+    return len(rows)
+
+
+def profiles_of(conn: sqlite3.Connection, key: str) -> list[tuple[str, float]]:
+    """Профили вакансии по убыванию балла: чей интерес и насколько сильный."""
+    cur = conn.execute(
+        """
+        SELECT profile_id, score FROM vacancy_profiles
+        WHERE key = ? ORDER BY score DESC, profile_id
+        """,
+        (key,),
+    )
+    return [(row[0], row[1] or 0.0) for row in cur.fetchall()]
 
 
 def mark_notified(conn: sqlite3.Connection, keys: Iterable[str]) -> None:

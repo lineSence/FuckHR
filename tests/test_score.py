@@ -110,3 +110,33 @@ def test_короткое_стоп_слово_не_ловит_лишнее(profi
         make_vacancy(description="Python, отклик за 1 день, 100 000 запросов"), profile
     )
     assert not verdict.rejected
+
+
+def test_профили_грузятся_каталогом(tmp_path) -> None:
+    """Каталог — это несколько профилей, файл — один: старые запуски живы (ADR-023)."""
+    import shutil
+
+    import profiles
+
+    src = Path("profile.yaml")
+    folder = tmp_path / "profiles"
+    folder.mkdir()
+    shutil.copy(src, folder / "python_backend.yaml")
+    shutil.copy(src, folder / "data.yaml")
+    bundle = profiles.load_all(folder)
+    assert [p.id for p in bundle] == ["data", "python_backend"]
+    assert [p.id for p in profiles.load_all(src)] == ["profile"]
+
+
+def test_вакансия_одна_а_профилей_несколько(tmp_path) -> None:
+    """Одна запись со связями: балл живёт на связи, критерии у профилей разные."""
+    import profiles
+    from score import Verdict
+
+    strict = profiles.Loaded("strict", Profile(min_score=80.0))
+    loose = profiles.Loaded("loose", Profile(min_score=10.0))
+    matches = [("strict", Verdict(40.0, ["мимо"])), ("loose", Verdict(40.0, ["ок"]))]
+    assert profiles.best(matches)[0] in {"strict", "loose"}
+    # Порог у каждого свой: чужой min_score вакансию в досье не протаскивает.
+    assert profiles.passed([strict, loose], matches) == ["loose"]
+    assert profiles.min_threshold([strict, loose]) == 10.0

@@ -1,0 +1,68 @@
+# Целевой профиль владельца. На шаге 1 заполняется руками.
+# Позже генерируется из резюме PDF/DOCX (ADR-013), но формат останется этим же.
+
+# Каждый запрос — отдельный обход hh.ru /vacancies.
+# area: 1 = Москва, 2 = Санкт-Петербург, 113 = Россия целиком.
+queries:
+  - text: "python разработчик"
+    area: 113
+    period: 7
+    max_pages: 3
+  - text: "backend python"
+    area: 113
+    period: 7
+    max_pages: 2
+
+salary:
+  min_net: 250000        # рублей на руки в месяц; gross пересчитывается с коэффициентом 0.87
+  currency: RUR
+  allow_missing: true    # вакансии без вилки не отбрасывать, а штрафовать
+
+# Стек, которым владеешь. Совпадение считается по подстроке или rapidfuzz >= 88.
+skills:
+  - python
+  - asyncio
+  - fastapi
+  - postgresql
+  - docker
+  - sql
+
+nice_to_have:
+  - langchain
+  - llm
+  - kafka
+  - clickhouse
+
+# Жёсткий отказ до любого начисления баллов. Ищутся в названии и в теле
+# вакансии, с учётом словоформ. Фраза из нескольких слов — только целиком.
+stop_words:
+  - 1c
+  - битрикс
+  - стажировка
+  - менеджер по продажам
+  - вахта
+  - самозанятый
+
+geo:
+  areas: [113]
+  remote_ok: true
+
+# id из hh.ru: noExperience, between1And3, between3And6, moreThan6
+experience_ok:
+  - between1And3
+  - between3And6
+
+# Сумма весов = 100. Меняй под себя, когда увидишь первые карточки.
+weights:
+  skills: 50
+  salary: 15
+  nice_to_have: 10
+  remote: 10
+  experience: 5
+  market: 10          # вилка против медианы среза (docs/market-salary.md)
+
+min_score: 45
+
+# Факты о себе — единственный разрешённый источник для будущих черновиков писем ([OUT-005]).
+# На шаге 1 не используется.
+facts: []
