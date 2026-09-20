@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import profile_form
-from ui_core import area_field, checkbox_field, esc, hint_block, open_db
+from ui_core import area_field, checkbox_field, esc, hint_block, open_db, text_field
 
 log = logging.getLogger(__name__)
 
@@ -319,10 +319,22 @@ def summary_line(values: Mapping[str, Any]) -> str:
     )
 
 
+def section(number: int, title: str, body: str, open_: bool = False) -> str:
+    """Раздел формы, свёрнутый по умолчанию.
+
+    Семь разделов подряд — четыре экрана прокрутки, а правят обычно один.
+    Первый раздел открыт: с запросов начинается любая настройка.
+    """
+    return (
+        "<details class=sect{open}><summary>{num}. {title}</summary>{body}</details>"
+    ).format(open=" open" if open_ else "", num=number, title=esc(title), body=body)
+
+
 def render_profile(
     profile_path: str,
     saved: int | None = None,
     problems: Sequence[str] = (),
+    pid: str = "",
 ) -> str:
     """Форма-фильтр. Неизвестные ключи файла сохраняются при записи."""
     data = profile_form.load(profile_path)
@@ -345,28 +357,39 @@ def render_profile(
         )
 
     parts.append('<form method=post action="/profile">')
+    parts.append('<input type=hidden name="id" value="{}">'.format(esc(pid)))
 
-    parts.append("<h2>1. Кого и где искать</h2>")
-    parts.append(queries_block(values["query_slots"]))
-
-    parts.append("<h2>2. География и формат</h2>")
-    parts.append(areas_block(values["geo_area_codes"], values["geo_areas_extra"]))
     parts.append(
-        checkbox_field(
-            "geo_remote_ok",
-            "Удалёнка подходит",
-            values["geo_remote_ok"],
-            "Влияет и на фильтр, и на баллы за формат работы.",
+        section(
+            1,
+            "Кого и где искать",
+            text_field(
+                "title",
+                "Название профиля",
+                values.get("title", ""),
+                "Видно на карточке и в подписи к сообщению в Telegram.",
+                placeholder=Path(profile_path).stem,
+            )
+            + queries_block(values["query_slots"]),
+            open_=True,
         )
     )
-    parts.append(experience_block(values["experience_ok"]))
 
-    parts.append("<h2>3. Деньги</h2>")
-    parts.append(salary_block(values))
+    geo = areas_block(values["geo_area_codes"], values["geo_areas_extra"])
+    geo += checkbox_field(
+        "geo_remote_ok",
+        "Удалёнка подходит",
+        values["geo_remote_ok"],
+        "Влияет и на фильтр, и на баллы за формат работы.",
+    )
+    geo += experience_block(values["experience_ok"])
+    parts.append(section(2, "География и формат", geo))
 
-    parts.append("<h2>4. Навыки и стоп-слова</h2>")
+    parts.append(section(3, "Деньги", salary_block(values)))
+
+    lists = []
     for key, label in profile_form.LIST_FIELDS:
-        parts.append(
+        lists.append(
             area_field(
                 key,
                 label,
@@ -376,33 +399,42 @@ def render_profile(
                 ),
             )
         )
+    parts.append(section(4, "Навыки и стоп-слова", "".join(lists)))
 
-    parts.append("<h2>5. Что важнее при отборе</h2>")
-    parts.append(importance_block(values["importance"]))
-
-    parts.append("<h2>6. Порог отбора</h2>")
     parts.append(
-        (
-            '<div class=field><label>Письма готовить от скора</label>'
-            '<input type=number step=5 min=0 max=100 name="min_score" value="{value}">'
-            "{hint}{preview}</div>"
-        ).format(
-            value=esc(values["min_score"]),
-            hint=hint_block(
-                "Вакансии ниже порога остаются в базе, но не идут в письма и Telegram."
+        section(5, "Что важнее при отборе", importance_block(values["importance"]))
+    )
+
+    parts.append(
+        section(
+            6,
+            "Порог отбора",
+            (
+                '<div class=field><label>Письма готовить от скора</label>'
+                '<input type=number step=5 min=0 max=100 name="min_score"'
+                ' value="{value}">{hint}{preview}</div>'
+            ).format(
+                value=esc(values["min_score"]),
+                hint=hint_block(
+                    "Вакансии ниже порога остаются в базе, но не идут в письма "
+                    "и Telegram."
+                ),
+                preview=score_preview(values["min_score"]),
             ),
-            preview=score_preview(values["min_score"]),
         )
     )
 
-    parts.append("<h2>7. Факты о себе</h2>")
     parts.append(
-        area_field(
-            "facts",
-            "По одному на строку, с цифрами",
-            values["facts"],
-            "Только эти строки попадают в письмо. Пример: сократил время сборки "
-            "с 40 до 6 минут на проекте из 200 тысяч строк.",
+        section(
+            7,
+            "Факты о себе",
+            area_field(
+                "facts",
+                "По одному на строку, с цифрами",
+                values["facts"],
+                "Только эти строки попадают в письмо. Пример: сократил время "
+                "сборки с 40 до 6 минут на проекте из 200 тысяч строк.",
+            ),
         )
     )
 
@@ -433,6 +465,7 @@ __all__ = (
     "importance_block",
     "queries_block",
     "render_profile",
+    "section",
     "salary_block",
     "save_profile",
     "score_preview",

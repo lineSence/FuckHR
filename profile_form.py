@@ -385,6 +385,11 @@ def apply_form(
     result: dict[str, Any] = dict(data or {})
     problems: list[str] = []
 
+    # Имя профиля правится той же формой; выключатель — только кнопкой на
+    # карточке, поэтому в форме его нет и трогать его здесь нельзя.
+    if "title" in form:
+        result["title"] = _one(form, "title").strip()
+
     _apply_queries(result, form, problems)
 
     salary = dict(result.get("salary") or {})
@@ -433,6 +438,7 @@ def form_values(data: Mapping[str, Any]) -> dict[str, Any]:
     areas = [code for code in (geo.get("areas") or [])]
     known = {code for code, _ in AREA_CHOICES}
     return {
+        "title": str(data.get("title") or ""),
         "queries": render_queries(data.get("queries") or []),
         "query_slots": query_slots(data.get("queries") or []),
         "salary_min_net": salary.get("min_net", ""),

@@ -89,6 +89,22 @@ td .warn, td .danger, td .ok { display: inline-block; padding: 1px 8px; margin: 
 .filters { display: flex; gap: 10px 14px; flex-wrap: wrap; margin: 6px 0 10px }
 .filt { font-size: 12.5px; color: var(--muted) }
 .filt select, .filt input { margin-top: 2px }
+/* Профили: блочный список. Карточка живёт своей жизнью — её можно выключить,
+   не открывая, поэтому кнопки лежат прямо на ней. Выключенная гасится, но не
+   прячется: это не удаление. */
+.cards { display: grid; gap: 12px; margin: 12px 0;
+         grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)) }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 4px;
+        padding: 12px 14px; display: flex; flex-direction: column; gap: 6px }
+.card.off { background: #fafbfc; color: var(--muted) }
+.cardtop { display: flex; align-items: center; justify-content: space-between; gap: 8px }
+.cardtop .warn { margin: 0; padding: 1px 8px; border: 0; border-radius: 3px;
+        font-size: 11.5px; font-weight: 700; text-transform: uppercase }
+.cardbtns { display: flex; align-items: center; gap: 8px; margin-top: 4px }
+.cardbtns form { margin: 0 }
+.addrow { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 14px 0 }
+.addrow input[type=text] { max-width: 320px }
+details.sect { background: #fafbfc }
 .pill { display: inline-block; padding: 2px 8px; margin-right: 6px; border-radius: 3px;
         background: #deebff; color: var(--brand); font-size: 12px; font-weight: 700;
         text-transform: uppercase }
@@ -136,7 +152,7 @@ NAV_ITEMS = (
     ("/search", "Поиск"),
     ("/injections", "Инъекции"),
     ("/llm", "Модель"),
-    ("/profile", "Профиль и резюме"),
+    ("/profile", "Профили"),
     ("/settings", "Настройки"),
     ("/cleanup", "Очистка"),
 )

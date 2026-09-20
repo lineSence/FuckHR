@@ -36,7 +36,7 @@ triggers:
       - wiki/rules/outreach.md
 
   - id: profiles
-    keywords: [профиль, профили, несколько профилей, направление поиска, vacancy_profiles, multi-profile, каталог профилей]
+    keywords: [профиль, профили, несколько профилей, направление поиска, vacancy_profiles, multi-profile, каталог профилей, карточки профилей, выключить профиль, enabled]
     load:
       - wiki/architecture/profiles.md
       - docs/profiles.md

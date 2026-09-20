@@ -37,6 +37,8 @@ STEM_FROM = 5
 
 @dataclass
 class Profile:
+    title: str = ""
+    enabled: bool = True
     queries: list[dict[str, Any]] = field(default_factory=list)
     skills: list[str] = field(default_factory=list)
     nice_to_have: list[str] = field(default_factory=list)
@@ -65,6 +67,8 @@ class Profile:
         for note in notes:
             log.warning("профиль %s: %s", path.name, note)
         return cls(
+            title=data.title,
+            enabled=data.enabled,
             queries=[query.model_dump(exclude_none=True) for query in data.queries],
             skills=[s.lower() for s in data.skills],
             nice_to_have=[s.lower() for s in data.nice_to_have],
