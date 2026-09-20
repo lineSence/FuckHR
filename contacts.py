@@ -54,7 +54,11 @@ SENT = "sent_manually"
 REPLIED = "replied"
 BLOCKED = "blocked"
 SKIPPED = "skipped"
-STATUSES = (DRAFTED, SENT, REPLIED, BLOCKED, SKIPPED)
+# «Другой контакт»: канал владельцу не подошёл, человек — не блок, компания
+# остаётся открытой. Отдельно от SKIPPED, иначе следующий прогон присылает того
+# же кандидата и кнопка выглядит сломанной (B-10).
+RETRY = "retry"
+STATUSES = (DRAFTED, SENT, REPLIED, BLOCKED, SKIPPED, RETRY)
 
 REPEAT_AFTER_DAYS = 90  # [OUT-007]: тот же человек — не раньше трёх месяцев
 
@@ -521,6 +525,19 @@ def store(
     )
     conn.commit()
     return int(cur.lastrowid)
+
+
+def rejected_channels(conn: sqlite3.Connection, key: str) -> set[str]:
+    """Каналы по вакансии, которые владелец уже отклонил кнопкой.
+
+    Нужно выбору кандидата: без этого «Другой контакт» возвращает того же
+    человека, потому что берётся всегда `candidates[0]` (B-10).
+    """
+    rows = conn.execute(
+        "SELECT channel_value FROM contacts WHERE key = ? AND status IN (?, ?)",
+        (key, RETRY, SKIPPED),
+    ).fetchall()
+    return {row[0] for row in rows if row[0]}
 
 
 def set_status(conn: sqlite3.Connection, contact_id: int, status: str) -> None:

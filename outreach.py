@@ -300,6 +300,21 @@ def process_row(
         discovery, hits = find_contacts(conn, row, provider, check_mx=check_mx)
         contact_finds.save(conn, discovery)
 
+    # «Другой контакт» в Telegram обязан приводить к другому человеку: без
+    # этого фильтра берётся всё тот же candidates[0], и кнопка выглядит
+    # сломанной (B-10, [OUT-006]).
+    rejected = contacts.rejected_channels(conn, row["key"])
+    if rejected and discovery.candidates:
+        left = tuple(c for c in discovery.candidates if c.channel_value not in rejected)
+        if not left:
+            return discovery, None, "все найденные каналы владелец отклонил"
+        discovery = contacts.Discovery(
+            key=discovery.key,
+            company=discovery.company,
+            candidates=left,
+            dropped=discovery.dropped,
+        )
+
     # Этап company. Справка собирается только из уже полученных сниппетов:
     # модель в сеть не ходит и свои знания о компании не вспоминает.
     brief = None
