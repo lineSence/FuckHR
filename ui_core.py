@@ -98,7 +98,8 @@ button.secondary { background: #ebecf0; color: var(--text) }
 textarea { width: 100%; min-height: 110px; padding: 8px 10px; background: #fafbfc;
            border: 2px solid var(--line); border-radius: 4px;
            font: 13px/1.5 ui-monospace, Consolas, monospace }
-input[type=text], input[type=number], input[type=password] { width: 100%; max-width: 560px;
+input[type=text], input[type=number], input[type=password], input[type=search] {
+           width: 100%; max-width: 560px;
            padding: 6px 10px;
            background: #fafbfc; border: 2px solid var(--line); border-radius: 4px;
            font-size: 13.5px; font-family: inherit }

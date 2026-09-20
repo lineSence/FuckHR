@@ -2,7 +2,8 @@
 
 Исторически здесь жил клиент hh.ru Open API. С апреля 2026 публичный GET /vacancies
 отдаёт 403 всем неавторизованным, поэтому сбор переехал в hh_html.py (ADR-015).
-Клиент HHClient оставлен: он сразу заработает, если появится токен приложения (HH_TOKEN).
+Клиент HHClient оставлен: он сразу заработает, если появится токен приложения
+(передаётся аргументом token, переменной в .env под него нет).
 """
 
 from __future__ import annotations
@@ -263,7 +264,7 @@ class HHClient:
     ) -> None:
         if not user_agent or "@" not in user_agent:
             raise ValueError(
-                "HH_USER_AGENT должен содержать контакт, например 'FuckHR/0.1 (me@example.com)'"
+                "user_agent должен содержать контакт, например 'FuckHR/0.1 (me@example.com)'"
             )
         self.pause = pause
         headers = {"User-Agent": user_agent, "Accept": "application/json"}
@@ -288,7 +289,7 @@ class HHClient:
                 # С апреля 2026 это штатный ответ на любой анонимный поиск, а не сбой.
                 raise PermissionError(
                     "hh.ru Open API закрыт для неавторизованных запросов (403). "
-                    "Используй hh_html.HHHtmlClient или задай токен приложения HH_TOKEN. "
+                    "Используй hh_html.HHHtmlClient или передай токен приложения. "
                     f"Ответ: {response.text[:200]}"
                 )
             if response.status_code == 429 or response.status_code >= 500:
