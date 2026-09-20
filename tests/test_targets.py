@@ -200,3 +200,100 @@ def test_render_targets_lists_cards(conn: sqlite3.Connection) -> None:
     targets.add(conn, "Яндекс", employer_id="1455")
     html = ui_targets.render_targets(conn)
     assert "Яндекс" in html and "Добавить цель" in html and "Следить" in html
+
+
+# --- отбор вакансий внутри цели (B-16) -------------------------------------
+
+
+def seeded(conn: sqlite3.Connection) -> int:
+    """Цель с тремя вакансиями из разных городов и с разным скором."""
+    import targets_hh
+
+    tid = targets.add(conn, "Яндекс", employer_id="1455")
+    target = targets.get(conn, tid)
+    assert target is not None
+    targets_hh.scan(
+        conn, FakeClient(items=[vacancy("1"), vacancy("2"), vacancy("3")]), target
+    )
+    plan = [
+        ("Москва", 80.0, "2026-09-01"),
+        ("Казань", 30.0, "2026-08-01"),
+        ("Урюпинск", 0.0, "2026-07-01"),
+    ]
+    for row, (area, score, day) in zip(targets.vacancies(conn, tid), plan):
+        conn.execute(
+            "UPDATE vacancies SET area = ?, score = ?, published_at = ? WHERE key = ?",
+            (area, score, day, row["key"]),
+        )
+    conn.commit()
+    return tid
+
+
+def test_vacancies_filtered_by_city_and_score(conn: sqlite3.Connection) -> None:
+    # Тысяча вакансий в куче — это то же, что ни одной: нужен отбор.
+    tid = seeded(conn)
+    assert len(targets.vacancies(conn, tid)) == 3
+    only_kazan = targets.vacancies(conn, tid, area="Казань")
+    assert [row["area"] for row in only_kazan] == ["Казань"]
+    good = targets.vacancies(conn, tid, min_score=50.0)
+    assert [row["area"] for row in good] == ["Москва"]
+
+
+def test_vacancies_sorted_by_known_keys_only(conn: sqlite3.Connection) -> None:
+    tid = seeded(conn)
+    targets.seen(conn, tid)
+    by_score = targets.vacancies(conn, tid, sort="score")
+    assert [row["score"] for row in by_score] == [80.0, 30.0, 0.0]
+    # Чужое имя порядка не попадает в SQL, а молча заменяется умолчанием.
+    strange = targets.vacancies(conn, tid, sort="1; DROP TABLE vacancies")
+    assert len(strange) == 3
+    by_area = targets.vacancies(conn, tid, sort="area")
+    assert [row["area"] for row in by_area] == ["Казань", "Москва", "Урюпинск"]
+
+
+def test_vacancies_search_is_a_parameter_not_sql(conn: sqlite3.Connection) -> None:
+    tid = seeded(conn)
+    assert len(targets.vacancies(conn, tid, query="разработчик 2")) == 1
+    # Строка из формы остаётся данными, а не кодом и не джокером.
+    assert targets.vacancies(conn, tid, query="' OR 1=1 --") == []
+    assert targets.vacancies(conn, tid, query="%") == []
+    assert len(targets.vacancies(conn, tid)) == 3
+
+
+def test_areas_counts_cities_of_this_target(conn: sqlite3.Connection) -> None:
+    tid = seeded(conn)
+    assert targets.areas(conn, tid) == [("Казань", 1), ("Москва", 1), ("Урюпинск", 1)]
+
+
+def test_target_page_keeps_steps_and_adds_filters(conn: sqlite3.Connection) -> None:
+    tid = seeded(conn)
+    html = ui_targets.render_target(conn, tid)
+    # Три кнопки шагов остаются как были [CORE-016].
+    for _, label, _hint in ui_targets.STEPS:
+        assert label in html
+    assert 'name="area"' in html and 'name="sort"' in html and 'name="q"' in html
+    assert "Показано 3 из 3" in html
+
+
+def test_chosen_filter_survives_until_reset(conn: sqlite3.Connection) -> None:
+    tid = seeded(conn)
+    note = ui_targets.handle(
+        conn,
+        "/targets/step",
+        {"id": [str(tid)], "step": ["view"], "area": ["Казань"], "min": ["20"]},
+    )
+    # Отбор ничего не запускает, поэтому и сообщать о запуске нечего.
+    assert note == ""
+    html = ui_targets.render_target(conn, tid)
+    assert "Показано 1 из 3" in html and "Сбросить отбор" in html
+    ui_targets.handle(conn, "/targets/step", {"id": [str(tid)], "step": ["view"]})
+    assert "Показано 3 из 3" in ui_targets.render_target(conn, tid)
+
+
+def test_empty_filter_result_explains_itself(conn: sqlite3.Connection) -> None:
+    tid = seeded(conn)
+    ui_targets.handle(
+        conn, "/targets/step", {"id": [str(tid)], "step": ["view"], "min": ["80"], "area": ["Урюпинск"]}
+    )
+    html = ui_targets.render_target(conn, tid)
+    assert "не попала ни одна вакансия" in html
