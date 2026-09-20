@@ -25,6 +25,8 @@ from typing import Any, Mapping
 
 import aitext_rules as R
 
+import injection
+
 log = logging.getLogger(__name__)
 
 STAGE = "ai_text"
@@ -76,7 +78,7 @@ def generated_indexes(
     chosen = {
         index: (text or "")[:MAX_CHARS]
         for index, text in list(texts.items())[:MAX_ITEMS]
-        if len(text or "") >= R.MIN_CHARS
+        if len(text or "") >= R.MIN_CHARS and not injection.scan(text or "").red
     }
     if not chosen:
         return set()

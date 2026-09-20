@@ -74,6 +74,12 @@ triggers:
       - wiki/architecture/deep-research.md
       - docs/deep-research.md
 
+  - id: prompt-injection
+    keywords: [инъекция, промпт-инъекция, prompt injection, скрытый текст, инструкция для ии, ignore previous instructions, невидимые символы, гомоглифы]
+    load:
+      - wiki/architecture/prompt-injection.md
+      - docs/prompt-injection.md
+
   - id: fake-reviews
     keywords: [накрутка, заказные отзывы, фейковые отзывы, fake_score, шингл, дубли отзывов, всплеск отзывов, метка компании]
     load:

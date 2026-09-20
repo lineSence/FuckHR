@@ -62,6 +62,7 @@ import detector
 import detector_llm
 import dossier
 import llm
+import injection_store
 import llm_batch
 import aitext
 import aitext_rules
@@ -157,6 +158,7 @@ def run_once(args: argparse.Namespace) -> int:
     conditions.ensure_schema(conn)
     dossier.ensure_schema(conn)
     company_score_store.ensure_schema(conn)
+    injection_store.ensure_schema(conn)
 
     gateway = build_gateway(conn, not options.use_llm)
     extracted = 0
@@ -218,6 +220,12 @@ def run_once(args: argparse.Namespace) -> int:
                     with_details = False
                 except Exception:  # noqa: BLE001 — вакансия могла быть уже закрыта
                     log.warning("нет деталей по %s, берём черновик", draft.external_id)
+            # Спрятанная в тексте инструкция для ИИ — поступок работодателя,
+            # а не техническая помеха (ADR-020). Запоминаем до скоринга: улика
+            # нужна оценке компании и строке карточки.
+            injection_store.check_text(
+                conn, "vacancy", vacancy.key, vacancy.company or "", vacancy.description
+            )
             marker = market_store.marker_for(conn, vacancy)
             # Оценка описания: только детерминированная часть. Судью здесь не
             # зовём — вызов на каждую вакансию выдачи не окупается [CORE-016].

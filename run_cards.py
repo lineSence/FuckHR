@@ -14,6 +14,7 @@ import company_score_store
 import contact_finds
 import contacts
 import detector
+import injection_store
 import dossier
 import market
 import market_company
@@ -48,6 +49,7 @@ def card_lines(
         money = market_store.load_company(conn, row["company"]) if row["company"] else None
         if money is not None:
             lines += market_company.row_lines(money)
+        lines += injection_store.lines(conn, row["key"])
         lines += detector.load_lines(conn, row["key"])
         # Контакт в карточке: без него владелец не видит, есть ли вообще вход
         # мимо HR-воронки.

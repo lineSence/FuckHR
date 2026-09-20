@@ -55,6 +55,8 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable, Sequence
 
+import injection
+
 log = logging.getLogger(__name__)
 
 CACHE_SCHEMA = """
@@ -179,8 +181,14 @@ def split_items(raw_html: str, url: str, text: str) -> tuple[object, ...]:
 
 
 def strip_tags(page: str) -> str:
-    """HTML → плоский текст с сохранением границ абзацев."""
-    text = DROP_BLOCK_RE.sub(" ", page or "")
+    """HTML → плоский текст с сохранением границ абзацев.
+
+    Скрытые вёрсткой блоки снимаются первыми: после снятия тегов текст
+    «белым по белому» неотличим от обычного, а прячут в нём инструкции для
+    ИИ-ассистента (ADR-020).
+    """
+    visible, _hidden = injection.drop_hidden(page or "")
+    text = DROP_BLOCK_RE.sub(" ", visible)
     text = BREAK_RE.sub("\n", text)
     text = TAG_RE.sub(" ", text)
     text = html_mod.unescape(text)

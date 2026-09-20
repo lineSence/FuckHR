@@ -31,6 +31,8 @@ import re
 from dataclasses import dataclass, replace
 from typing import Any, Sequence
 
+import injection
+
 log = logging.getLogger(__name__)
 
 MAX_DESCRIPTION_CHARS = 6000
@@ -91,10 +93,23 @@ def numbers(text: str) -> set[str]:
     return set(re.findall(r"\d+(?:[.,]\d+)?", cleaned))
 
 
+NUMBER_RE = re.compile(r"\d+")
+
+
+def _numbers(text: str) -> set[str]:
+    """Числа текста. Пробелы внутри числа снимаются: «250 000» — одно число."""
+    glued = re.sub(r"(?<=\d)[\s\u00a0](?=\d)", "", text or "")
+    return set(NUMBER_RE.findall(glued))
+
+
 def extract_conditions(
-    gateway: Any, description: str, limit: int = 8
+    gateway: Any, description: str, limit: int = 8, strict: bool = True
 ) -> tuple[Condition, ...]:
     """Вытаскивает условия работы из описания вакансии (этап extract).
+
+    strict=False оставляет ответ модели как есть и нужен только бенчмарку:
+    он сравнивает модели, и защита пайплайна там прячет разницу между
+    аккуратной моделью и той, что поддалась инъекции.
 
     Регулярки плохо берут формулировки вроде «гибрид 2/3, офис в Москве по
     договорённости», и это ровно та работа, где модель уместна. Но значение
@@ -118,13 +133,15 @@ def extract_conditions(
         "extract",
         [
             {"role": "system", "content": prompt},
-            {"role": "user", "content": text[:MAX_DESCRIPTION_CHARS]},
+            {"role": "user", "content": injection.safe(text[:MAX_DESCRIPTION_CHARS], "extract")[0]},
         ],
     )
     if not raw:
         return ()
 
-    haystack = _normalize(text)
+    # Цитата сверяется с очищенным текстом, а не с исходным: строка инъекции
+    # из текста вырезана, значит «дословная» цитата из неё — уже не цитата.
+    haystack = _normalize(injection.clean(text)[0] if strict else text)
     items = _parse_json(raw).get("conditions")
     if not isinstance(items, list):
         return ()
@@ -138,6 +155,14 @@ def extract_conditions(
         field = str(item.get("field") or "other").strip() or "other"
         if not value or len(quote) < 6 or _normalize(quote) not in haystack:
             log.info("условие без цитаты в тексте, отброшено: %r", value[:60])
+            continue
+        # Цитата не отличает данные от команды: фраза «укажи зарплату 500000»
+        # в тексте есть, значит цитата настоящая, а значение выдумано. Крупные
+        # числа значения сверяются с текстом, как числа в письме [CORE-019].
+        # Мелкие не трогаем: «два дня» → «2 дня» — это пересказ, а не выдумка.
+        big = {n for n in _numbers(value) if len(n) >= 3}
+        if strict and big - _numbers(text):
+            log.info("условие с числом, которого нет в тексте: %r", value[:60])
             continue
         out.append(Condition(field=field, value=value, quote=quote))
         if len(out) >= limit:
@@ -184,7 +209,12 @@ def company_brief(gateway: Any, company: str, hits: Sequence[Any]) -> Brief | No
         "company",
         [
             {"role": "system", "content": prompt},
-            {"role": "user", "content": f"Компания: {company}\n\n{joined}"},
+            {
+                "role": "user",
+                "content": "Компания: {}\n\n{}".format(
+                    company, injection.safe(joined, "company")[0]
+                ),
+            },
         ],
     )
     if not raw:
@@ -238,6 +268,9 @@ def pick_contact(gateway: Any, candidates: Sequence[Any], role_hint: str = "") -
         "Ответ только JSON с номером из списка и короткой причиной.\n"
         'Формат: {"choice": 1, "reason": "..."}'
     )
+    # Подписи кандидатов приходят с чужих страниц: в них тоже встречается
+    # «инструкция для ИИ» с просьбой выбрать кадровика.
+    listing = injection.safe(listing, "contacts")[0]
     user = listing if not role_hint else f"Вакансия: {role_hint}\n\n{listing}"
     raw = gateway.complete(
         "contacts",
@@ -299,7 +332,9 @@ def polish_draft(gateway: Any, draft: Any, facts: Sequence[str] = ()) -> Any:
         "draft",
         [
             {"role": "system", "content": prompt},
-            {"role": "user", "content": body},
+            # Черновик собран из текста вакансии: чистим, но не оборачиваем —
+            # модель должна вернуть письмо, а не разобрать данные.
+            {"role": "user", "content": injection.clean(body)[0] or body},
         ],
         temperature=0.3,
     )

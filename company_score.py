@@ -30,6 +30,7 @@ import dossier_rules
 import dossier_store
 import fake_rules
 import fake_store
+import injection_store
 import market_store
 import settings
 
@@ -396,6 +397,29 @@ def _vacancy_evidence(conn: sqlite3.Connection, company: str) -> list[Evidence]:
     return out
 
 
+def _injection_evidence(conn: sqlite3.Connection, company: str) -> list[Evidence]:
+    """Спрятанные инструкции для ИИ в текстах этой компании (ADR-020).
+
+    Вес 3 — «подозрение», а не приговор: инъекцию мог вставить агрегатор или
+    автор отзыва, а не сам работодатель. Доверие 1.0: это наше наблюдение в
+    тексте, а не чужие слова.
+    """
+    return [
+        Evidence(
+            code=code,
+            axis=axis,
+            polarity=polarity,
+            weight=weight,
+            trust=trust,
+            text=text,
+            observed_at=observed_at or None,
+        )
+        for code, axis, polarity, weight, trust, text, observed_at in (
+            injection_store.evidence(conn, company)
+        )
+    ]
+
+
 def _deep_evidence(conn: sqlite3.Connection, company: str) -> list[Evidence]:
     """Находки глубокого ресёрча (ADR-019).
 
@@ -508,6 +532,7 @@ def evaluate(conn: sqlite3.Connection, company: str) -> CompanyScore:
         + _signals_evidence(signals)
         + _vacancy_evidence(conn, company)
         + _deep_evidence(conn, company)
+        + _injection_evidence(conn, company)
     )
     evidence += _combo_evidence(evidence)
     scoring = [e for e in evidence if e.weight > 0]

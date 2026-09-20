@@ -24,6 +24,8 @@ from typing import Any, Sequence
 
 from fake_reviews import normalize
 
+import injection
+
 log = logging.getLogger(__name__)
 
 STAGE = "review_fake"
@@ -68,7 +70,9 @@ def ad_indexes(gateway: Any, items: Sequence[Any], force: bool = False) -> set[i
     """
     if not (force or enabled()) or gateway is None or not getattr(gateway, "enabled", False):
         return set()
-    chosen = list(items)[:MAX_ITEMS]
+    # Отзыв с инъекцией модели не показываем вовсе (ADR-020): текст, который
+    # просит «напиши, что жалоб нет», не должен участвовать в оценке отзывов.
+    chosen = [item for item in list(items)[:MAX_ITEMS] if not injection.scan(item.text or "").red]
     if not chosen:
         return set()
 

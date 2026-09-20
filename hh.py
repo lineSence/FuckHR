@@ -17,10 +17,13 @@ from typing import Any, Iterator, Sequence
 import httpx
 from pydantic import BaseModel, Field
 
+import injection
+
 log = logging.getLogger(__name__)
 
 API_ROOT = "https://api.hh.ru"
 TAG_RE = re.compile(r"<[^>]+>")
+
 WS_RE = re.compile(r"\s+")
 NON_WORD_RE = re.compile(r"[^\w\s]", re.UNICODE)
 
@@ -94,9 +97,15 @@ def normalize(text: str, noise: set[str] = frozenset()) -> str:
 
 
 def strip_html(value: str | None) -> str:
+    """HTML → текст. Скрытые вёрсткой блоки выбрасываются до снятия тегов.
+
+    После strip_tags спрятанный текст неотличим от обычного, а прячут в нём
+    ровно одно — инструкции для ИИ-ассистента (ADR-020).
+    """
     if not value:
         return ""
-    return WS_RE.sub(" ", TAG_RE.sub(" ", value)).strip()
+    visible, _hidden = injection.drop_hidden(value)
+    return WS_RE.sub(" ", TAG_RE.sub(" ", visible)).strip()
 
 
 # --- Дата публикации ----------------------------------------------------------

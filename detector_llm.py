@@ -19,6 +19,8 @@ from typing import Any, Sequence
 import detector
 from detector import Claim, Finding, Report
 
+import injection
+
 log = logging.getLogger(__name__)
 
 STAGE = "hr_filter"
@@ -61,13 +63,15 @@ def llm_claims(gateway: Any, text: str, limit: int = 5) -> tuple[Claim, ...]:
         STAGE,
         [
             {"role": "system", "content": PROMPT},
-            {"role": "user", "content": text[:6000]},
+            {"role": "user", "content": injection.safe(text[:6000], "hr_filter")[0]},
         ],
     )
     if not raw:
         return ()
 
-    haystack = _normalize(text)
+    # Как и в extract: цитата из вырезанной строки инъекции не считается
+    # цитатой из текста вакансии (ADR-020).
+    haystack = _normalize(injection.clean(text)[0])
     out: list[Claim] = []
     for item in _parse(raw):
         quote = str(item.get("quote") or "").strip()

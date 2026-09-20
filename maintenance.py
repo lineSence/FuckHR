@@ -80,6 +80,13 @@ TARGETS: tuple[tuple[str, str, tuple[str, ...], str, bool], ...] = (
         False,
     ),
     (
+        "injection",
+        "Находки промпт-инъекций",
+        ("injection_hits",),
+        "Находится заново при следующем разборе тех же текстов.",
+        False,
+    ),
+    (
         "deep",
         "Глубокий ресёрч",
         ("deep_research", "deep_findings", "deep_pages"),
@@ -117,6 +124,7 @@ EVERYTHING = (
     "contacts",
     "vacancies",
     "score",
+    "injection",
     "deep",
     "market",
     "history",

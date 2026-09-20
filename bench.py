@@ -106,7 +106,12 @@ def gateway_for(model: str, route: str = llm.ROUTE_PROXY) -> llm.Gateway:
 def run_case(gateway: Any, case: Case) -> Any:
     """Гоняет кейс через ту же функцию пайплайна, что работает в проде."""
     if case.stage == "extract":
-        return llm_tasks.extract_conditions(gateway, case.payload["description"])
+        # strict=False: бенчмарк меряет модель, а не защиту пайплайна. Если
+        # отфильтровать выдуманные числа здесь, аккуратная и поддавшаяся
+        # инъекции модели получат одинаковый балл.
+        return llm_tasks.extract_conditions(
+            gateway, case.payload["description"], strict=False
+        )
     if case.stage == "company":
         return llm_tasks.company_brief(
             gateway, case.payload["company"], case.payload["hits"]

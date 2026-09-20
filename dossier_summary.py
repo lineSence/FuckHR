@@ -20,6 +20,8 @@ from dossier_rules import MAX_LLM_CHARS, MAX_LLM_REVIEWS, RISK_RU
 if TYPE_CHECKING:
     from dossier import Dossier
 
+import injection
+
 log = logging.getLogger(__name__)
 
 
@@ -40,9 +42,19 @@ def summarize(gateway: Any, dossier: "Dossier") -> tuple[str | None, str]:
 
     ordered = sorted(dossier.reviews, key=lambda r: (not r.has_body, -len(r.text)))
     excerpts = []
+    skipped = 0
     for review in ordered[:MAX_LLM_REVIEWS]:
         text = (review.body or review.text).strip()
+        # Отзыв с инъекцией модели не показываем вовсе (ADR-020): один
+        # отбеливающий абзац дешевле накрутки сотни отзывов.
+        if injection.scan(text).red:
+            skipped += 1
+            continue
         excerpts.append("[{}] {}".format(review.site_name, text[:MAX_LLM_CHARS]))
+    if skipped:
+        log.warning("отзывов с инъекцией не отдаём модели: %s", skipped)
+    if not excerpts:
+        return deterministic, "правила"
 
     if dossier.read_count:
         preface = "Ниже тексты отзывов сотрудников о работодателе «{company}»."
