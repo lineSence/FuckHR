@@ -185,3 +185,34 @@ def test_map_is_reachable_from_menu() -> None:
     """Фича, до которой нельзя дойти мышью, для владельца не существует."""
     assert any(path == "/map" for path, _ in ui_core.NAV_ITEMS)
     assert "geo-backfill" in jobs.TASKS
+
+
+def test_backfill_button_lives_on_the_map() -> None:
+    """Кнопка сбора адресов там же, где видна пустота на карте."""
+    conn = make_db()
+    html = ui_map.render_map(conn, {})
+    assert 'action="/map/geo"' in html
+    # Осталась ровно одна вакансия без точки — число написано до нажатия.
+    assert "Осталось 1" in html
+
+
+def test_backfill_task_takes_everything() -> None:
+    """Кнопка берёт все недостающие адреса, а не порцию из GEO_BACKFILL_LIMIT."""
+    _, argv, _ = jobs.TASKS["geo-backfill"]
+    assert argv == ("geo_backfill.py", "--all")
+
+
+def test_run_page_keeps_only_regular_tasks() -> None:
+    """На странице запуска — только то, что гоняется регулярно."""
+    keys = {key for key, _, _ in jobs.task_list()}
+    assert "collect" in keys and "tests" in keys
+    for hidden in (
+        "collect-dry",
+        "outreach",
+        "outreach-dry",
+        "target-scan",
+        "geo-backfill",
+    ):
+        assert hidden not in keys
+        # Из командной строки и из своих разделов они всё равно запускаются.
+        assert hidden in jobs.TASKS
