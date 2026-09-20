@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import re
 import sqlite3
+import time
 from pathlib import Path
 from typing import Sequence
 
@@ -25,8 +26,10 @@ import bench  # noqa: F401 — STAGES нужен вызывающим
 import ui_bench
 from ui_bench import render_bench_form  # реэкспорт: имя осталось прежним
 import contacts
+import embeddings_store
 import jobs
 import llm
+import llm_embed
 import profile_form
 import settings
 import websearch
@@ -163,7 +166,9 @@ BENCH_NAME_RE = re.compile(r"[A-Za-z0-9._:/@-]{1,80}")
 # ———— модель ————
 
 
-def render_llm(conn: sqlite3.Connection, probe: bool = False) -> str:
+def render_llm(
+    conn: sqlite3.Connection, probe: bool = False, embed: bool = False
+) -> str:
     """Какой этап на какую модель уходит — без запуска пайплайна."""
     if not settings.flag("LLM_ENABLED"):
         return (
@@ -241,11 +246,76 @@ def render_llm(conn: sqlite3.Connection, probe: bool = False) -> str:
         except Exception as exc:  # noqa: BLE001 — сеть может лежать, это не повод падать
             parts.append("<div class=danger>{}</div>".format(esc(exc)))
 
+    parts.append(embeddings_block(conn, gateway, embed))
+
     parts.append(
         "<p class=muted>Живой вызов на выдуманном тексте — задача «Проверка модели» "
         'на <a href="/">странице запуска</a>.</p>'
     )
     parts.append(render_bench_form(known=known))
+    return "".join(parts)
+
+
+def embeddings_block(
+    conn: sqlite3.Connection, gateway: llm.Gateway, probe: bool = False
+) -> str:
+    """Эмбеддер отдельным блоком: у него своя модель и свои грабли.
+
+    Проверка «Модель» живым вызовом сюда не доходит: check_llm.py дёргает чат,
+    а `/v1/embeddings` — другая ручка и часто другая модель. Отсюда и отдельная
+    кнопка: один вектор на коротком тексте отвечает сразу на все вопросы —
+    отвечает ли адрес, знает ли сервер это имя модели и какая у неё размерность.
+    """
+    route = gateway.route_for(llm_embed.STAGE)
+    model = llm_embed.model_name(gateway)
+    enabled = settings.embeddings_options().enabled
+    rows = [
+        ["Считать векторы", "да" if enabled else "нет (EMBEDDINGS_ENABLED)"],
+        ["Маршрут", esc(route.name) if route else "нет маршрута"],
+        ["Адрес", esc(route.base_url) if route else "—"],
+        ["Модель", esc(model or "не задана (LLM_STAGE_MODEL_EMBEDDINGS)")],
+    ]
+    for kind, name, count in embeddings_store.counts(conn):
+        rows.append(
+            ["Векторов в базе: {}".format(esc(kind)), "{} · {}".format(count, esc(name))]
+        )
+    parts = ["<h2>Векторы текстов</h2>", table(["Что", "Значение"], rows)]
+
+    if route is not None and route.name == llm.ROUTE_PROXY:
+        parts.append(
+            "<div class=warn>Этап предпочитает локальный адрес, но его нет, "
+            "поэтому векторы уйдут на прокси. Имя модели должно совпадать с "
+            "алиасом из его config.yaml, иначе будет 400.</div>"
+        )
+    if not model:
+        parts.append(
+            "<div class=warn>Имя модели не задано — этап пропускается. Поле "
+            '«Этап embeddings» в <a href="/settings">настройках</a>, значение '
+            "берётся из <code>ollama list</code>.</div>"
+        )
+
+    parts.append(
+        '<p><a href="/llm?embed=1">Проверить эмбеддер живым вызовом</a> '
+        "<span class=muted>(один короткий текст)</span></p>"
+    )
+    if probe:
+        started = time.monotonic()
+        vectors = llm_embed.embed(gateway, ["проверка связи"])
+        spent = time.monotonic() - started
+        if vectors:
+            parts.append(
+                "<div class=ok>{model}: вектор из {dim} чисел за {sec:.1f} с. "
+                "Размерность запоминается с первым вектором и менять модель "
+                "после этого нельзя [LLM-011].</div>".format(
+                    model=esc(model), dim=len(vectors[0]), sec=spent
+                )
+            )
+        else:
+            parts.append(
+                "<div class=danger>Вектор не получен. Причина одной строкой — "
+                "в логе интерфейса: там видно и код ответа, и текст ошибки "
+                "сервера.</div>"
+            )
     return "".join(parts)
 
 
@@ -346,6 +416,7 @@ __all__ = (
     "LIST_HINTS",
     "profile_summary",
     "bench_models",
+    "embeddings_block",
     "start_bench",
     "render_bench_form",
     "render_llm",

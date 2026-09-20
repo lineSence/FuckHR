@@ -157,10 +157,16 @@ def esc(value: object) -> str:
     return html.escape("" if value is None else str(value), quote=True)
 
 
-def page(title: str, body: str, refresh: int = 0) -> str:
+def page(title: str, body: str, refresh: int = 0, refresh_url: str = "/") -> str:
     meta = ""
     if refresh:
-        meta = '<meta http-equiv=refresh content="{}">'.format(int(refresh))
+        # Адрес обязателен. Без него браузер перезагружает текущий адрес, а
+        # страница, отрисованная в ответ на POST, живёт по адресу вроде /run,
+        # где GET-обработчика нет, — и самообновление уводило на «такой
+        # страницы нет».
+        meta = '<meta http-equiv=refresh content="{};url={}">'.format(
+            int(refresh), esc(refresh_url)
+        )
     return (
         "<!doctype html><html lang=ru><head><meta charset=utf-8>"
         '<meta name=viewport content="width=device-width, initial-scale=1">'

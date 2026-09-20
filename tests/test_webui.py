@@ -221,3 +221,58 @@ def test_мёртвые_ключи_hh_api_убраны_из_настроек() -
     """HH_TOKEN и HH_USER_AGENT не читает ни один модуль: HHClient не в пайплайне."""
     assert "HH_TOKEN" not in settings.FIELD_BY_KEY
     assert "HH_USER_AGENT" not in settings.FIELD_BY_KEY
+
+
+def test_самообновление_возвращает_на_свой_адрес() -> None:
+    """Из-за пустого url страница уходила на «такой страницы нет».
+
+    Воспроизведение владельца: нажать задачу, пока идёт сбор. Ответ на POST
+    рисуется по адресу /run, где GET-обработчика нет, а мета-обновление без
+    адреса перезагружало именно его.
+    """
+    import ui_core
+
+    html = ui_core.page("Запуск", "тело", 2, "/")
+    assert 'content="2;url=/"' in html
+    assert ui_core.page("Модель", "тело", 2, "/llm").count('url=/llm') == 1
+    # Без обновления мета-тега нет вовсе.
+    assert "http-equiv=refresh" not in ui_core.page("Запуск", "тело")
+
+
+def test_адреса_форм_не_отвечают_404_на_get() -> None:
+    """F5 и «назад» после POST не должны показывать «такой страницы нет»."""
+    import webui
+
+    assert "/run" in webui.POST_ONLY
+    assert "/bench" in webui.POST_ONLY
+    # Настоящие страницы в список не попали: у них есть GET-обработчик.
+    assert not (webui.POST_ONLY & {"/", "/llm", "/settings"})
+
+
+def test_блок_эмбеддера_виден_на_странице_модели(conn, monkeypatch) -> None:
+    """У эмбеддера своя модель, и проверять её надо отдельно от чата."""
+    import llm
+    import ui_forms
+
+    monkeypatch.setenv("LLM_BASE_URL", "http://127.0.0.1:11434/v1")
+    monkeypatch.setenv("LLM_STAGE_MODEL_EMBEDDINGS", "bge-m3:latest")
+    gateway = llm.Gateway.from_env(conn)
+    html = ui_forms.embeddings_block(conn, gateway)
+
+    assert "Векторы текстов" in html
+    assert "bge-m3:latest" in html
+    assert "/llm?embed=1" in html
+    # Сеть не трогаем: без probe живого вызова нет.
+    assert "вектор из" not in html
+
+
+def test_блок_эмбеддера_объясняет_пустое_имя_модели(conn, monkeypatch) -> None:
+    import llm
+    import ui_forms
+
+    monkeypatch.setenv("LLM_BASE_URL", "http://127.0.0.1:11434/v1")
+    monkeypatch.delenv("LLM_STAGE_MODEL_EMBEDDINGS", raising=False)
+    html = ui_forms.embeddings_block(conn, llm.Gateway.from_env(conn))
+
+    assert "LLM_STAGE_MODEL_EMBEDDINGS" in html
+    assert "class=warn" in html

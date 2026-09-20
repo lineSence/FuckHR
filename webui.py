@@ -108,6 +108,12 @@ from ui_views import (
 
 log = logging.getLogger("webui")
 
+# Адреса, которые существуют только для форм. GET сюда приходит не от ссылки,
+# а от F5 или «назад», и отвечать на это «такой страницы нет» — грубо.
+POST_ONLY = frozenset(
+    {"/run", "/stop", "/loop", "/bench", "/llm/apply", "/intake/apply"}
+)
+
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "FuckHR-webui"
@@ -169,7 +175,7 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == "/":
                 job_id = settings.as_int(one("job"), 0) or None
                 body, refresh = render_run(job_id)
-                self._send(page("Запуск", body, refresh))
+                self._send(page("Запуск", body, refresh, "/"))
                 return
             if parsed.path == "/settings":
                 self._send(page("Настройки", render_settings()))
@@ -225,10 +231,15 @@ class Handler(BaseHTTPRequestHandler):
                     self._send(
                         page(
                             "Модель",
-                            render_llm(conn, one("probe") == "1"),
+                            render_llm(conn, one("probe") == "1", one("embed") == "1"),
                             ui_bench.refresh_seconds(),
+                            "/llm",
                         )
                     )
+                elif parsed.path in POST_ONLY:
+                    # Сюда попадают по F5 или по кнопке «назад» после POST.
+                    # Главная с историей задач полезнее, чем 404.
+                    self._redirect("/")
                 else:
                     self._send(page("Не найдено", "<p>Такой страницы нет.</p>"), 404)
             finally:
@@ -250,7 +261,7 @@ class Handler(BaseHTTPRequestHandler):
                     body, refresh = render_run(
                         None, "<div class=warn>{}</div>".format(esc(exc))
                     )
-                    self._send(page("Запуск", body, refresh))
+                    self._send(page("Запуск", body, refresh, "/"))
                     return
                 self._redirect("/?job={}".format(job.id))
                 return
