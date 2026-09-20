@@ -24,6 +24,8 @@
 
 from __future__ import annotations
 
+import sqlite3
+
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Callable, Mapping, Sequence
@@ -36,8 +38,11 @@ import market_rules
 ANY = ""  # значение «неважно» у выбора
 
 
-def _like(value: str) -> str:
-    return "%{}%".format(value.strip())
+def like(value: str) -> str:
+    """Строка поиска как данные: % и _ от человека — буквы, а не джокеры."""
+    safe = value.strip().replace("\\", "\\\\")
+    safe = safe.replace("%", "\\%").replace("_", "\\_")
+    return "%" + safe + "%"
 
 
 def _days_ago(value: str) -> str:
@@ -107,11 +112,11 @@ VACANCY_FILTERS: tuple[Filter, ...] = (
         "q",
         "Слово в названии или компании",
         "text",
-        lambda v: ("(v.title LIKE ? OR v.company LIKE ?)", (_like(v), _like(v))),
+        lambda v: ("(v.title LIKE ? ESCAPE '\\' OR v.company LIKE ? ESCAPE '\\')", (like(v), like(v))),
         width="220px",
     ),
     Filter("company", "Компания целиком", "text", lambda v: ("v.company = ?", (v,))),
-    Filter("area", "Город", "text", lambda v: ("v.area LIKE ?", (_like(v),))),
+    Filter("area", "Город", "text", lambda v: ("v.area LIKE ? ESCAPE '\\'", (like(v),))),
     Filter(
         "min_score",
         "Скор не ниже",
@@ -309,7 +314,7 @@ COMPANY_FILTERS: tuple[Filter, ...] = (
         "cq",
         "Название",
         "text",
-        lambda v: ("d.company LIKE ?", (_like(v),)),
+        lambda v: ("d.company LIKE ? ESCAPE '\\'", (like(v),)),
         width="220px",
     ),
     Filter(
@@ -510,6 +515,18 @@ def query_string(params: Mapping[str, str], drop: str = "") -> str:
     return urllib.parse.urlencode(clean)
 
 
+def ensure_tables(conn: sqlite3.Connection) -> None:
+    """Фильтры заглядывают в соседние таблицы; на старой базе их может не быть."""
+    # Импорт внутри: хранилища сами тянут правила, а те — этот модуль.
+    import company_score_store
+    import contacts
+    import detector
+    import injection_store
+
+    for store in (contacts, detector, injection_store, company_score_store):
+        store.ensure_schema(conn)
+
+
 __all__ = (
     "ANY",
     "COMPANY_FILTERS",
@@ -521,6 +538,8 @@ __all__ = (
     "VACANCY_PRESETS",
     "VACANCY_SORTS",
     "build_where",
+    "ensure_tables",
+    "like",
     "order_by",
     "preset_of",
     "query_string",
