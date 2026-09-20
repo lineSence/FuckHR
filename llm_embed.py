@@ -29,9 +29,23 @@ log = logging.getLogger("fuckhr")
 
 
 def model_name(gateway: object | None) -> str:
-    """Имя модели, которой считаются векторы. Пусто — считать негде."""
+    """Имя модели, которой считаются векторы. Пусто — считать негде.
+
+    На локальном маршруте `Route.model` — это имя профиля (`embeddings`), а не
+    модели: чат-этапам этого хватает, потому что локальный сервер обычно один
+    и с одной моделью. Эмбеддеру не хватает — Ollama на `model=embeddings`
+    отвечает «model not found». Поэтому локальный маршрут берёт имя из
+    `LLM_STAGE_MODEL_EMBEDDINGS` (поле «Этап embeddings» в настройках).
+    """
     route = getattr(gateway, "route_for", lambda _stage: None)(STAGE)
-    return str(getattr(route, "model", "") or "")
+    if route is None:
+        return ""
+    stage_models = getattr(gateway, "stage_models", {}) or {}
+    override = str(stage_models.get(STAGE, "") or "")
+    if override:
+        return override
+    name = str(getattr(route, "model", "") or "")
+    return "" if name == STAGE else name
 
 
 def embed(gateway: object | None, texts: Sequence[str]) -> list[list[float]] | None:
@@ -43,8 +57,13 @@ def embed(gateway: object | None, texts: Sequence[str]) -> list[list[float]] | N
     if gateway is None or not texts:
         return None
     route = gateway.route_for(STAGE)  # type: ignore[attr-defined]
-    if route is None:
-        log.info("эмбеддинги пропущены: маршрут этапа %s не задан", STAGE)
+    model = model_name(gateway)
+    if route is None or not model:
+        log.info(
+            "эмбеддинги пропущены: не задан маршрут этапа %s или имя модели "
+            "(LLM_STAGE_MODEL_EMBEDDINGS)",
+            STAGE,
+        )
         return None
 
     import httpx
@@ -59,7 +78,7 @@ def embed(gateway: object | None, texts: Sequence[str]) -> list[list[float]] | N
         try:
             response = httpx.post(
                 "{}/embeddings".format(route.base_url),
-                json={"model": route.model, "input": batch},
+                json={"model": model, "input": batch},
                 headers=headers,
                 timeout=getattr(gateway, "timeout", 60.0),
             )
@@ -67,7 +86,7 @@ def embed(gateway: object | None, texts: Sequence[str]) -> list[list[float]] | N
                 log.warning(
                     "эмбеддер %s/%s ответил %s: %s",
                     route.name,
-                    route.model,
+                    model,
                     response.status_code,
                     response.text[:200],
                 )

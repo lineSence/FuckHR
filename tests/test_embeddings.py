@@ -134,3 +134,27 @@ def test_похожие_вакансии_берутся_из_посчитанн�
     found = embeddings_tasks.similar_vacancies(conn, FakeGateway(), "сама")
     assert [key for key, _score in found] == ["похожая"]
     assert embeddings_tasks.similar_vacancies(conn, FakeGateway(), "нет такой") == []
+
+
+def test_локальный_маршрут_требует_имя_модели(monkeypatch: pytest.MonkeyPatch) -> None:
+    """На локальном маршруте Route.model — это профиль «embeddings».
+
+    Ollama на такое имя отвечает «model not found», поэтому имя берётся из
+    LLM_STAGE_MODEL_EMBEDDINGS, а без него этап честно пропускается.
+    """
+
+    class LocalOnly(FakeGateway):
+        class _Route(FakeGateway._Route):
+            model = "embeddings"  # ровно то, что подставляет Gateway.route_for
+
+        stage_models: dict[str, str] = {}
+
+        def route_for(self, stage: str):
+            return self._Route() if stage == "embeddings" else None
+
+    gateway = LocalOnly()
+    assert llm_embed.model_name(gateway) == ""
+    assert llm_embed.embed(gateway, ["текст"]) is None
+
+    gateway.stage_models = {"embeddings": "bge-m3"}
+    assert llm_embed.model_name(gateway) == "bge-m3"
