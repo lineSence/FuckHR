@@ -35,6 +35,11 @@ triggers:
       - wiki/references/contact-discovery.md
       - wiki/rules/outreach.md
 
+  - id: performance
+    keywords: [скорость, ускорить, медленно, паузы, бутылочное горлышко, производительность, сколько идёт прогон]
+    load:
+      - docs/performance.md
+
   - id: targets
     keywords: [цель, цели, таргет, компания вручную, employer_id, слежение за компанией, ИНН, кандидаты работодателя]
     load:

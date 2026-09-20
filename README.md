@@ -96,4 +96,7 @@ hh.ru (HTML поиска, ADR-015) → score.py → db.py (SQLite)
 - [`docs/ai-text.md`](./docs/ai-text.md) — признаки сгенерированного текста
 - [`docs/contacts.md`](./docs/contacts.md) — поиск контактов и письма
 - [`docs/knowledge-lifecycle.md`](./docs/knowledge-lifecycle.md) — как растут знания агента
+- [`docs/profiles.md`](./docs/profiles.md) — несколько профилей поиска
+- [`docs/targets.md`](./docs/targets.md) — цели: изучить выбранную компанию целиком
+- [`docs/performance.md`](./docs/performance.md) — где прогон теряет время (аудит, B-15)
 - [`docs/contributing.md`](./docs/contributing.md) — как вести код и документацию
