@@ -288,3 +288,40 @@ def test_сводка_по_отзывам_не_дорисовывает_цифр
     result = bench.run_case(_gateway({llm.LOCAL: invented}), case)
     score, note = bench_cases.check(case, result)
     assert score == 0.0 and "дорисовала числа" in note
+
+
+def test_локальный_маршрут_гоняет_названную_модель(monkeypatch) -> None:
+    """Без имени в local_models в Ollama уходило `auto:fast` — «model not found»."""
+    import llm
+
+    monkeypatch.setenv("LLM_BASE_URL", "http://127.0.0.1:8080/v1")
+    gateway = bench.gateway_for("qwen3:8b", llm.ROUTE_LOCAL)
+    assert gateway.local_model_for("extract") == ("qwen3:8b", "профиль")
+    route = gateway.route_for("draft")
+    assert route is not None and (route.name, route.model) == (llm.ROUTE_LOCAL, "qwen3:8b")
+
+
+def test_форма_сравнения_переключает_маршрут() -> None:
+    """Локальные модели проверяются на всех кейсах кнопкой, а не только из CLI."""
+    import llm
+    import ui_bench
+
+    html = ui_bench.render_bench_form(
+        known={llm.ROUTE_PROXY: ["gpt-4o-mini"], llm.ROUTE_LOCAL: ["qwen3:8b"]}
+    )
+    assert 'name=route value="local"' in html
+    assert "qwen3:8b" in html and "gpt-4o-mini" in html
+
+
+def test_запуск_передаёт_маршрут(monkeypatch) -> None:
+    import jobs
+    import ui_forms
+
+    seen: dict = {}
+    monkeypatch.setattr(
+        jobs.runner, "start", lambda task, extra=(): seen.update(task=task, extra=list(extra))
+    )
+    assert ui_forms.start_bench({"models": ["qwen3:8b"], "route": ["local"]}) == ""
+    assert seen["extra"][-2:] == ["--route", "local"]
+    ui_forms.start_bench({"models": ["gpt-4o-mini"], "route": ["чужое"]})
+    assert seen["extra"][-2:] == ["--route", "proxy"]

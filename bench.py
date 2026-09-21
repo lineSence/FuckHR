@@ -83,16 +83,19 @@ def gateway_for(model: str, route: str = llm.ROUTE_PROXY) -> llm.Gateway:
 
     personal_via_proxy включён осознанно: кейсы выдуманы и персональных данных
     не содержат, иначе этапы contacts/draft на прокси просто не поехали бы
-    [CORE-012]. Для локального маршрута имя модели берёт сам адрес.
+    [CORE-012]. На локальном маршруте имя ставится в local_models: без этого
+    в Ollama уходило название профиля (`auto:fast`), она отвечала «model not
+    found», и все локальные модели получали одинаковый ноль.
     """
-    models = {profile: model for profile in llm.PROXY_MODEL_ENV}
     if route == llm.ROUTE_LOCAL:
         return llm.Gateway(
             base_url=os.getenv("LLM_BASE_URL") or None,
             api_key=os.getenv("LLM_API_KEY") or None,
+            local_models={profile: model for profile in llm.LOCAL_MODEL_ENV},
             timeout=float(os.getenv("LLM_TIMEOUT", "60")),
             max_calls=10_000,
         )
+    models = {profile: model for profile in llm.PROXY_MODEL_ENV}
     return llm.Gateway(
         proxy_base_url=os.getenv("LLM_PROXY_BASE_URL") or None,
         proxy_api_key=os.getenv("LLM_PROXY_API_KEY") or None,
