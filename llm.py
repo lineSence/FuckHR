@@ -20,7 +20,8 @@
 Если в его config.yaml стоят облачные провайдеры, ФИО уйдут им.
 
 Остальное как было: кэш по хэшу промпта всегда включён [LLM-006], любая ошибка
-возвращает None, а не исключение [CORE-017], [LLM-009].
+возвращает None, а не исключение [CORE-017], [LLM-009]. Сам HTTP живёт в
+`llm_http` [CORE-024]: здесь решается куда идти, там — как сходить.
 
 О каскаде. У этапа теперь не одна модель, а до трёх кандидатов в порядке
 бенча плюс локальный адрес последним слотом (`llm_cascade`, ADR-022). Кэш
@@ -29,15 +30,6 @@
 Повторы к одному кандидату остались только там, где следующего нет: пока
 кандидат в списке не последний, на ошибку сервиса тратится одна попытка,
 а не три.
-
-Об ошибках адреса. Ответы 4xx и 5xx разные по природе, и обращаться с ними надо
-по-разному. 500, 502, 503, таймаут и 429 — состояние мира, оно меняется, повтор
-осмыслен. 400 и 404 — суждение о самом запросе: нет такой модели, не тот формат,
-слишком длинный контекст. Повторять такое три раза — втрое дольше ждать того же
-отказа, поэтому такие ответы признаются окончательными сразу.
-
-И главное: причина отказа живёт в теле ответа, а не в статусе. Без неё запись
-«400 Bad Request» сообщает ровно ничего, поэтому тело читается и попадает в лог.
 
 Настройка прокси:
 
@@ -51,24 +43,34 @@
 Имена берутся из model_name в config.yaml прокси. Если имя для профиля не задано,
 в запрос уйдёт само название профиля (auto:fast, local-only и так далее) — и если
 такого алиаса у прокси нет, он ответит 400. Об этом предупреждает warn_unmapped().
+
+То же самое для локального адреса — раньше туда всегда уходило имя профиля:
+
+    LLM_LOCAL_MODEL_FAST=qwen3:4b
+    LLM_LOCAL_MODEL_SMART=qwen3:8b
+    LLM_LOCAL_MODEL_LOCAL=qwen3:8b
+    LLM_LOCAL_STAGE_MODEL_DRAFT=qwen3:8b
+
+Имя этапа сильнее имени профиля, пусто везде — старое поведение (в запрос
+уходит название профиля). Список живых имён показывает `models(ROUTE_LOCAL)`.
 """
 
 from __future__ import annotations
 
-import hashlib
-import json
 import logging
 import os
 import sqlite3
 import time
 from dataclasses import dataclass
-from typing import Any, Callable, Sequence
+from typing import Callable, Sequence
 
 from llm_profiles import (  # noqa: F401 — публичные имена остаются в llm
     EMBEDDINGS,
     FAST,
     LOCAL,
     LOCAL_FIRST_STAGES,
+    LOCAL_MODEL_ENV,
+    LOCAL_STAGE_MODEL_ENV,
     LONG,
     MAX_CANDIDATES,
     PERSONAL_STAGES,
@@ -85,25 +87,16 @@ from llm_profiles import (  # noqa: F401 — публичные имена ос�
 import llm_cache
 from llm_cache import CACHE_SCHEMA, ensure_cache  # noqa: F401 — публичные имена остаются в llm
 from llm_cascade import Dropped, Route, build_chain, parse_models
+from llm_http import (  # noqa: F401 — публичные имена остаются в llm
+    MAX_ERROR_CHARS,
+    RETRY_STATUSES,
+    ApiError,
+    chat,
+    error_message,
+    fetch_models,
+)
 
 log = logging.getLogger(__name__)
-
-# Коды, при которых повтор имеет смысл: это состояние сервиса, не запроса.
-RETRY_STATUSES = frozenset({408, 409, 425, 429, 500, 502, 503, 504, 529})
-MAX_ERROR_CHARS = 600
-
-
-class ApiError(RuntimeError):
-    """Ответ адреса с кодом ошибки и разобранным телом."""
-
-    def __init__(self, status: int, message: str) -> None:
-        self.status = int(status)
-        self.message = message or "тело ответа пустое"
-        super().__init__("HTTP {}: {}".format(self.status, self.message))
-
-    @property
-    def retryable(self) -> bool:
-        return self.status in RETRY_STATUSES
 
 
 @dataclass
@@ -115,26 +108,14 @@ class Usage:
     degraded: int = 0
 
 
-def error_message(payload: Any, fallback: str = "") -> str:
-    """Вытаскивает человеческую причину из тела ошибки.
-
-    OpenAI-совместимые сервисы отвечают {"error": {"message": ...}}, LiteLLM
-    иногда кладёт текст в detail, а Ollama — просто в error строкой.
-    """
-    if isinstance(payload, dict):
-        for key in ("error", "detail", "message"):
-            value = payload.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.strip()[:MAX_ERROR_CHARS]
-            if isinstance(value, dict):
-                for inner in ("message", "detail", "code", "type"):
-                    text = value.get(inner)
-                    if isinstance(text, str) and text.strip():
-                        return text.strip()[:MAX_ERROR_CHARS]
-            if isinstance(value, list) and value:
-                return json.dumps(value, ensure_ascii=False)[:MAX_ERROR_CHARS]
-        return json.dumps(payload, ensure_ascii=False)[:MAX_ERROR_CHARS]
-    return (fallback or "").strip()[:MAX_ERROR_CHARS]
+def _env_map(names: dict[str, str]) -> dict[str, str]:
+    """{ключ маршрутизации: имя модели} из окружения, пустые выброшены."""
+    out: dict[str, str] = {}
+    for key, env_name in names.items():
+        value = (os.getenv(env_name) or "").strip()
+        if value:
+            out[key] = value
+    return out
 
 
 class Gateway:
@@ -155,6 +136,8 @@ class Gateway:
         stage_models: dict[str, str] | None = None,
         stage_cascades: dict[str, list[str]] | None = None,
         personal_via_proxy: bool = False,
+        local_models: dict[str, str] | None = None,
+        local_stage_models: dict[str, str] | None = None,
     ) -> None:
         self.base_url = (base_url or "").rstrip("/")
         self.api_key = api_key
@@ -162,6 +145,8 @@ class Gateway:
         self.proxy_api_key = proxy_api_key
         self.proxy_models = dict(proxy_models or {})
         self.stage_models = dict(stage_models or {})
+        self.local_models = dict(local_models or {})
+        self.local_stage_models = dict(local_stage_models or {})
         self.stage_cascades = {k: list(v) for k, v in (stage_cascades or {}).items()}
         self.personal_via_proxy = bool(personal_via_proxy)
         self.timeout = timeout
@@ -178,16 +163,6 @@ class Gateway:
 
     @classmethod
     def from_env(cls, conn: sqlite3.Connection | None = None) -> "Gateway":
-        models = {}
-        for profile, name in PROXY_MODEL_ENV.items():
-            value = os.getenv(name)
-            if value:
-                models[profile] = value.strip()
-        stages = {}
-        for stage, name in STAGE_MODEL_ENV.items():
-            value = os.getenv(name)
-            if value:
-                stages[stage] = value.strip()
         cascades = {}
         for stage, name in STAGE_MODELS_ENV.items():
             chain = parse_models(os.getenv(name))
@@ -201,8 +176,10 @@ class Gateway:
             max_calls=int(os.getenv("LLM_MAX_CALLS", "300")),
             proxy_base_url=os.getenv("LLM_PROXY_BASE_URL") or None,
             proxy_api_key=os.getenv("LLM_PROXY_API_KEY") or None,
-            proxy_models=models,
-            stage_models=stages,
+            proxy_models=_env_map(PROXY_MODEL_ENV),
+            stage_models=_env_map(STAGE_MODEL_ENV),
+            local_models=_env_map(LOCAL_MODEL_ENV),
+            local_stage_models=_env_map(LOCAL_STAGE_MODEL_ENV),
             stage_cascades=cascades,
             personal_via_proxy=(os.getenv("LLM_PERSONAL_VIA_PROXY", "") or "").strip()
             in {"1", "true", "yes", "on"},
@@ -237,6 +214,26 @@ class Gateway:
         if name:
             return name, "этап"
         return self._proxy_model(profile_for(stage)), "профиль"
+
+    def local_model_for(self, stage: str) -> tuple[str, str]:
+        """Имя модели на локальном адресе для этапа и откуда оно взялось.
+
+        Порядок тот же, что у прокси: этап сильнее профиля. Каскада здесь нет
+        сознательно: локальный адрес — последний слот цепочки [LLM-010], и
+        перебирать модели на 8 ГБ VRAM значит гонять веса туда-сюда без шансов
+        на другой ответ (wiki/references/local-models.md).
+
+        Пусто везде — в запрос уходит само название профиля, как было до
+        появления этих переменных: шлюз с одной моделью имя игнорирует.
+        """
+        name = self.local_stage_models.get(stage)
+        if name:
+            return name, "этап"
+        profile = profile_for(stage)
+        name = self.local_models.get(profile)
+        if name:
+            return name, "профиль"
+        return profile, "по умолчанию"
 
     def models_for(self, stage: str) -> list[str]:
         """Имена моделей на прокси по порядку: каскад целиком или одно имя."""
@@ -289,7 +286,9 @@ class Gateway:
         входных данных из окружения шлюза [CORE-024].
         """
         local = (
-            Route(ROUTE_LOCAL, self.base_url, self.api_key, profile_for(stage))
+            Route(
+                ROUTE_LOCAL, self.base_url, self.api_key, self.local_model_for(stage)[0]
+            )
             if self.base_url
             else None
         )
@@ -313,9 +312,10 @@ class Gateway:
         out = []
         for stage in STAGE_PROFILES:
             route = self.route_for(stage)
-            source = "профиль"
-            if route is not None and route.is_proxy:
-                source = self.model_for(stage)[1]
+            source = "—"
+            if route is not None:
+                named = self.model_for if route.is_proxy else self.local_model_for
+                source = named(stage)[1]
             out.append(
                 (
                     stage,
@@ -330,28 +330,14 @@ class Gateway:
     def models(self, route: str = ROUTE_PROXY) -> list[str]:
         """Список моделей с адреса (GET /models) — проверка живости.
 
-        Ошибка сети — пустой список, а не исключение: это диагностика, а не работа.
+        Для локального адреса это тот же `ollama list`, только из интерфейса: имена
+        оттуда и ставятся в LLM_LOCAL_MODEL_* и LLM_LOCAL_STAGE_MODEL_*.
         """
-        import httpx
-
-        base = self.proxy_base_url if route == ROUTE_PROXY else self.base_url
-        key = self.proxy_api_key if route == ROUTE_PROXY else self.api_key
-        if not base:
-            return []
-        headers = {"Accept": "application/json"}
-        if key:
-            headers["Authorization"] = f"Bearer {key}"
-        try:
-            response = httpx.get(
-                f"{base}/models", headers=headers, timeout=min(self.timeout, 15.0)
-            )
-            response.raise_for_status()
-            payload = response.json()
-        except Exception as exc:  # noqa: BLE001 — диагностика не должна ронять вызывающего
-            log.warning("адрес %s не отдал список моделей: %s", base, exc)
-            return []
-        items = payload.get("data") or []
-        return [str(i.get("id")) for i in items if isinstance(i, dict) and i.get("id")]
+        if route == ROUTE_PROXY:
+            base, key = self.proxy_base_url, self.proxy_api_key
+        else:
+            base, key = self.base_url, self.api_key
+        return fetch_models(base, key, min(self.timeout, 15.0))
 
     def _cache_get(self, digest: str) -> str | None:
         return llm_cache.get(self.conn, digest)
@@ -362,46 +348,7 @@ class Gateway:
     def _http_call(
         self, route: Route, messages: Sequence[dict[str, str]], temperature: float
     ) -> str:
-        import httpx
-
-        headers = {"Content-Type": "application/json"}
-        if route.api_key:
-            headers["Authorization"] = f"Bearer {route.api_key}"
-        response = httpx.post(
-            f"{route.base_url}/chat/completions",
-            json={
-                "model": route.model,
-                "messages": list(messages),
-                "temperature": temperature,
-            },
-            headers=headers,
-            timeout=self.timeout,
-        )
-        if response.status_code >= 400:
-            # Статус без тела бесполезен: всё по делу — имя модели, лимит контекста,
-            # неверный параметр — лежит в теле ответа.
-            try:
-                payload: Any = response.json()
-            except ValueError:
-                payload = None
-            raise ApiError(
-                response.status_code, error_message(payload, response.text)
-            )
-        # Без этой строки невозможно узнать, какая модель сгенерировала ответ.
-        log.info(
-            "llm %s/%s -> %s",
-            route.name,
-            route.model,
-            response.headers.get("X-Routed-Via")
-            or response.headers.get("x-litellm-model-id")
-            or "неизвестно",
-        )
-        payload = response.json()
-        choices = payload.get("choices") or []
-        if not choices:
-            # Пустой choices бывает при сработавшем фильтре провайдера.
-            raise ApiError(200, error_message(payload, "ответ без choices"))
-        return (choices[0].get("message") or {}).get("content") or ""
+        return chat(route, messages, temperature, self.timeout)
 
     def complete(
         self,
@@ -501,13 +448,18 @@ class Gateway:
                     self.usage.failures += 1
                     self._dropped.add(route.name, route.model, str(exc))
                     if getattr(exc, "status", 0) != 429:
+                        env_name = (
+                            PROXY_MODEL_ENV.get(profile)
+                            if route.is_proxy
+                            else LOCAL_MODEL_ENV.get(profile)
+                        )
                         log.error(
                             "%s отклонил запрос с model=%r — повторы не помогут. "
-                            "Проверь, есть ли такое имя в его config.yaml "
+                            "Проверь, есть ли такое имя у него "
                             "(GET /models), и задай его в %s",
                             route.name,
                             route.model,
-                            PROXY_MODEL_ENV.get(profile, "настройках моделей"),
+                            env_name or "настройках моделей",
                         )
                     return None
                 if attempt == len(tries):
@@ -525,6 +477,8 @@ __all__ = (
     "Gateway",
     "LOCAL",
     "LOCAL_FIRST_STAGES",
+    "LOCAL_MODEL_ENV",
+    "LOCAL_STAGE_MODEL_ENV",
     "LONG",
     "MAX_CANDIDATES",
     "PERSONAL_STAGES",
@@ -542,6 +496,7 @@ __all__ = (
     "build_chain",
     "ensure_cache",
     "error_message",
+    "fetch_models",
     "parse_models",
     "profile_for",
 )

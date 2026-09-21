@@ -31,25 +31,23 @@ log = logging.getLogger("fuckhr")
 def model_name(gateway: object | None) -> str:
     """Имя модели, которой считаются векторы. Пусто — считать негде.
 
-    На локальном маршруте `Route.model` — это имя профиля (`embeddings`), а не
-    модели: чат-этапам этого хватает, потому что локальный сервер обычно один
-    и с одной моделью. Эмбеддеру не хватает — Ollama на `model=embeddings`
-    отвечает «model not found». Поэтому локальный маршрут берёт имя из
-    `LLM_STAGE_MODEL_EMBEDDINGS` (поле «Этап embeddings» в настройках).
+    Имя берётся из маршрута: для прокси это LLM_STAGE_MODEL_EMBEDDINGS или имя
+    профиля, для локального адреса — LLM_LOCAL_STAGE_MODEL_EMBEDDINGS или
+    LLM_LOCAL_MODEL_EMBEDDINGS.
 
-    Этап в `LOCAL_FIRST_STAGES`, поэтому при настроенном `LLM_BASE_URL` имя
-    берётся отсюда почти всегда; на прокси этап уходит, только если локального
-    адреса нет, и тогда имя должно совпадать с алиасом из его `config.yaml`.
+    Когда ничего не задано, `Route.model` равен имени профиля (`embeddings`),
+    а это не имя модели: Ollama на `model=embeddings` отвечает «model not found».
+    Такой ответ считается «имя не задано»; для совместимости проверяется ещё
+    LLM_STAGE_MODEL_EMBEDDINGS — до этой версии локальное имя жило там.
     """
     route = getattr(gateway, "route_for", lambda _stage: None)(STAGE)
     if route is None:
         return ""
-    stage_models = getattr(gateway, "stage_models", {}) or {}
-    override = str(stage_models.get(STAGE, "") or "")
-    if override:
-        return override
     name = str(getattr(route, "model", "") or "")
-    return "" if name == STAGE else name
+    if name and name != STAGE:
+        return name
+    stage_models = getattr(gateway, "stage_models", {}) or {}
+    return str(stage_models.get(STAGE, "") or "")
 
 
 def embed(gateway: object | None, texts: Sequence[str]) -> list[list[float]] | None:
@@ -65,7 +63,7 @@ def embed(gateway: object | None, texts: Sequence[str]) -> list[list[float]] | N
     if route is None or not model:
         log.info(
             "эмбеддинги пропущены: не задан маршрут этапа %s или имя модели "
-            "(LLM_STAGE_MODEL_EMBEDDINGS)",
+            "(LLM_LOCAL_STAGE_MODEL_EMBEDDINGS)",
             STAGE,
         )
         return None

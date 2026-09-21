@@ -202,6 +202,13 @@ def render_llm(
     parts.append(
         table(["Этап", "Профиль", "Маршрут", "Модель", "Имя из"], rows)
     )
+    parts.append(
+        "<p class=muted>«Имя из» — откуда взято имя модели: каскад этапа, имя этапа, "
+        "имя профиля. «По умолчанию» у локального маршрута значит, что в запрос "
+        "уходит название профиля: шлюзу с одной моделью этого хватает, а Ollama с "
+        "несколькими ответит «model not found» — задай LLM_LOCAL_MODEL_* или "
+        "LLM_LOCAL_STAGE_MODEL_*.</p>"
+    )
 
     unmapped = gateway.unmapped_profiles() if gateway.proxy_base_url else []
     if unmapped:
@@ -225,26 +232,15 @@ def render_llm(
         )
 
     parts.append(
-        '<p><a href="/llm?probe=1">Спросить список моделей у прокси</a> '
-        "<span class=muted>(один запрос к /v1/models)</span></p>"
+        '<p><a href="/llm?probe=1">Спросить список моделей</a> '
+        "<span class=muted>(по одному запросу /v1/models на каждый заданный адрес: "
+        "прокси и локальный)</span></p>"
     )
 
     known: list[str] = []
     if probe:
-        try:
-            known = gateway.models()
-            if known:
-                parts.append(
-                    "<div class=ok>Прокси знает {} моделей — они ниже чекбоксами "
-                    "в форме сравнения.</div>".format(len(known))
-                )
-            else:
-                parts.append(
-                    "<div class=warn>Прокси не отдал список моделей. Чаще всего это "
-                    "отсутствующий ключ: без него LiteLLM отвечает 401.</div>"
-                )
-        except Exception as exc:  # noqa: BLE001 — сеть может лежать, это не повод падать
-            parts.append("<div class=danger>{}</div>".format(esc(exc)))
+        block, known = models_probe(gateway)
+        parts.append(block)
 
     parts.append(embeddings_block(conn, gateway, embed))
 
@@ -254,6 +250,64 @@ def render_llm(
     )
     parts.append(render_bench_form(known=known))
     return "".join(parts)
+
+
+def models_probe(gateway: llm.Gateway) -> tuple[str, list[str]]:
+    """Списки моделей с обоих адресов и имена с прокси для формы сравнения.
+
+    Локальный список нужен не меньше проксёвого: имена вроде `qwen3:8b`
+    раньше смотрели только через `ollama list` в терминале, а теперь их есть
+    куда вписать — LLM_LOCAL_MODEL_* и LLM_LOCAL_STAGE_MODEL_*.
+
+    В форму сравнения чекбоксами попадают только имена с прокси: бенч ходит
+    через него, и локальное имя там ответило бы 400.
+    """
+    parts: list[str] = []
+    known: list[str] = []
+    addresses = (
+        (
+            llm.ROUTE_PROXY,
+            "Прокси",
+            gateway.proxy_base_url,
+            "Чаще всего это отсутствующий ключ: без него LiteLLM отвечает 401.",
+            "они ниже чекбоксами в форме сравнения",
+        ),
+        (
+            llm.ROUTE_LOCAL,
+            "Локальный адрес",
+            gateway.base_url,
+            "Проверь, поднят ли сервер и есть ли в LLM_BASE_URL суффикс /v1.",
+            "эти имена ставятся в LLM_LOCAL_MODEL_* и LLM_LOCAL_STAGE_MODEL_*",
+        ),
+    )
+    for route, title, base, why, note in addresses:
+        if not base:
+            continue
+        try:
+            names = gateway.models(route)
+        except Exception as exc:  # noqa: BLE001 — сеть может лежать, это не повод падать
+            parts.append(
+                "<div class=danger>{}: {}</div>".format(esc(title), esc(exc))
+            )
+            continue
+        if not names:
+            parts.append(
+                "<div class=warn>{title} ({base}) не отдал список моделей. {why}</div>".format(
+                    title=esc(title), base=esc(base), why=esc(why)
+                )
+            )
+            continue
+        if route == llm.ROUTE_PROXY:
+            known = names
+        parts.append(
+            "<div class=ok><b>{title}</b> знает {count} моделей — {note}: {names}</div>".format(
+                title=esc(title),
+                count=len(names),
+                note=esc(note),
+                names=esc(", ".join(names[:40])),
+            )
+        )
+    return "".join(parts), known
 
 
 def embeddings_block(
@@ -273,7 +327,7 @@ def embeddings_block(
         ["Считать векторы", "да" if enabled else "нет (EMBEDDINGS_ENABLED)"],
         ["Маршрут", esc(route.name) if route else "нет маршрута"],
         ["Адрес", esc(route.base_url) if route else "—"],
-        ["Модель", esc(model or "не задана (LLM_STAGE_MODEL_EMBEDDINGS)")],
+        ["Модель", esc(model or "не задана (LLM_LOCAL_STAGE_MODEL_EMBEDDINGS)")],
     ]
     for kind, name, count in embeddings_store.counts(conn):
         rows.append(
@@ -289,9 +343,10 @@ def embeddings_block(
         )
     if not model:
         parts.append(
-            "<div class=warn>Имя модели не задано — этап пропускается. Поле "
-            '«Этап embeddings» в <a href="/settings">настройках</a>, значение '
-            "берётся из <code>ollama list</code>.</div>"
+            "<div class=warn>Имя модели не задано — этап пропускается. Задай "
+            "LLM_LOCAL_STAGE_MODEL_EMBEDDINGS в .env или поле «Этап embeddings» в "
+            '<a href="/settings">настройках</a>; значение берётся из '
+            "<code>ollama list</code> или из списка моделей выше.</div>"
         )
 
     parts.append(
@@ -417,6 +472,7 @@ __all__ = (
     "profile_summary",
     "bench_models",
     "embeddings_block",
+    "models_probe",
     "start_bench",
     "render_bench_form",
     "render_llm",
