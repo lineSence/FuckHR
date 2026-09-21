@@ -59,6 +59,7 @@ import db
 import detector
 import detector_llm
 import dossier
+import geo
 import hh_pages
 import llm
 import injection_store
@@ -171,6 +172,7 @@ def run_once(args: argparse.Namespace) -> int:
     new_count = 0
     enriched = 0
     reused_details = 0
+    addressed = 0
     # Сколько карточек не стали качать: даже идеальное описание не вытянуло бы
     # вакансию до порога профиля (PREFILTER_DETAILS_DELTA, B-15).
     skipped_details = 0
@@ -211,10 +213,12 @@ def run_once(args: argparse.Namespace) -> int:
         market_store.drop_stale(conn)
         market_store.recompute(conn)
         total = len(drafts)
+        geo.ensure_schema(conn)  # колонки адреса: один раз, не в цикле
         for position, draft in enumerate(drafts.values(), start=1):
             # Счётчик в квадратных скобках — то, по чему интерфейс рисует полоску.
             log.info("[%s/%s] %s — %s", position, total, draft.title, draft.company)
             vacancy = draft
+            point = None
             # Описание из базы вместо второго похода на hh.ru: на повторном
             # прогоне именно эти запросы съедали почти всё время. Дата публикации
             # сменилась — объявление перепубликовали, описание качаем заново.
@@ -227,8 +231,12 @@ def run_once(args: argparse.Namespace) -> int:
                 draft, bundle, owners.get(draft.key), prefilter.fuzzy, details_delta
             ):
                 try:
-                    vacancy = enrich(draft, client.vacancy(draft.external_id))
+                    detail = client.vacancy(draft.external_id)
+                    vacancy = enrich(draft, detail)
                     enriched += 1
+                    # Точка приехала с той же страницей: запишем, когда
+                    # вакансия окажется в базе.
+                    point = geo.point_of(detail)
                     if not vacancy.description.strip():
                         empty_descriptions += 1
                 except BlockedError:
@@ -291,6 +299,9 @@ def run_once(args: argparse.Namespace) -> int:
                 ai_verdict=ai_verdict,
             ):
                 new_count += 1
+            # Без этого карта живёт только кнопкой дозаполнения.
+            if point is not None and geo.save(conn, vacancy.key, point):
+                addressed += 1
             # Балл каждого профиля живёт на связи: у профилей разные критерии.
             db.save_matches(
                 conn,
@@ -333,6 +344,8 @@ def run_once(args: argparse.Namespace) -> int:
             reused_details,
             enriched,
         )
+    if addressed:
+        log.info("адресов с точкой на карте сохранено: %s", addressed)
     if skipped_details:
         log.info(
             "карточек не качали: %s (до порога не хватало больше %.0f баллов)",

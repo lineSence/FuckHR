@@ -512,7 +512,9 @@ class HHHtmlClient:
             self.exhausted = False
 
     def vacancy(self, vacancy_id: str) -> dict[str, Any]:
-        """Карточка вакансии со страницы: описание и навыки полностью."""
+        """Карточка вакансии: описание, навыки и адрес из одного состояния."""
+        import geo  # noqa: PLC0415 — точка из того же состояния [CORE-016]
+
         body = self.fetch(VACANCY_PREFIX + str(vacancy_id))
         try:
             state = extract_state(body)
@@ -524,7 +526,7 @@ class HHHtmlClient:
             )
             if match:
                 description = strip_html(match.group("html"))
-            return {"description": description, "key_skills": []}
+            return {"description": description, "key_skills": [], "address": None}
 
         nodes = find_vacancy_nodes(state)
         best: dict[str, Any] = {}
@@ -552,6 +554,7 @@ class HHHtmlClient:
         return {
             "description": description,
             "key_skills": [{"name": s} for s in skills],
+            "address": geo.from_state(state, vacancy_id),
             "schedule": {"name": _name_of(_first(best, "workSchedule", "schedule"))},
             "employer": {"name": _name_of(_first(best, "company", "employer"))},
             "published_at": _first(

@@ -13,6 +13,10 @@
 это свойство вакансии, а не отдельная сущность, и своя таблица только добавила бы
 джойн к каждому запросу [CORE-012].
 
+Адрес пишется в базу сразу при сборе: `hh_html.vacancy` отдаёт его вместе с
+описанием из того же состояния страницы, а `run.py` сохраняет. Дозаполнение
+(`geo_backfill.py`) осталось только для вакансий, собранных раньше.
+
 Чего здесь сознательно не делается:
 
 - не выдумывается точка по названию города: сто вакансий в центре Москвы — враньё,
@@ -243,10 +247,15 @@ def address_of(node: dict[str, Any]) -> Point | None:
 
 
 def save(conn: sqlite3.Connection, key: str, point: Point | None) -> bool:
-    """Записывает адрес. True — если появилась точка для карты."""
+    """Записывает адрес. True — если появилась точка для карты.
+
+    Вакансии с таким ключом может не быть: при сборе адрес приезжает раньше,
+    чем вакансия попадает в базу. Тогда обновлять нечего, и ответ False —
+    иначе счётчик в логе обещал бы точки, которых нет.
+    """
     if point is None:
         return False
-    conn.execute(
+    cursor = conn.execute(
         """
         UPDATE vacancies
         SET address = COALESCE(?, address),
@@ -258,7 +267,7 @@ def save(conn: sqlite3.Connection, key: str, point: Point | None) -> bool:
         (point.address, point.lat, point.lng, point.metro, key),
     )
     conn.commit()
-    return point.mappable
+    return bool(cursor.rowcount) and point.mappable
 
 
 def one(conn: sqlite3.Connection, key: str) -> dict[str, Any] | None:
@@ -325,20 +334,18 @@ def vacancy_id(url: str | None) -> str | None:
     return match.group(1) if match else None
 
 
-def from_page(page: str, vacancy: str | None = None) -> Point | None:
-    """Адрес со страницы вакансии. Сломанная страница — это None, а не исключение.
+def from_state(state: Any, vacancy: str | None = None) -> Point | None:
+    """Адрес из уже разобранного состояния страницы.
+
+    Отдельно от `from_page`, потому что при обычном сборе состояние уже
+    разобрано ради описания вакансии: второй разбор той же страницы — это
+    лишняя работа на каждой вакансии прогона [CORE-016].
 
     Два захода потому, что у hh.ru адрес лежит по-разному: иногда внутри узла
     вакансии, иногда отдельной веткой состояния. Первый заход точнее,
     второй — живучее.
     """
     import hh_html  # локально: hh_html тянет httpx, а интерфейс читает только базу
-
-    try:
-        state = hh_html.extract_state(page)
-    except hh_html.ExtractionError as exc:
-        log.warning("состояние страницы не разобралось: %s", exc)
-        return None
 
     nodes = hh_html.find_vacancy_nodes(state)
     chosen: dict[str, Any] | None = None
@@ -366,9 +373,27 @@ def from_page(page: str, vacancy: str | None = None) -> Point | None:
     if point is None and fallback is None:
         log.info(
             "адрес на странице не найден; корневые ключи состояния: %s",
-            list(state)[:12],
+            list(state)[:12] if isinstance(state, dict) else type(state).__name__,
         )
     return point or fallback
+
+
+def from_page(page: str, vacancy: str | None = None) -> Point | None:
+    """Адрес со страницы вакансии. Сломанная страница — это None, а не исключение."""
+    import hh_html
+
+    try:
+        state = hh_html.extract_state(page)
+    except hh_html.ExtractionError as exc:
+        log.warning("состояние страницы не разобралось: %s", exc)
+        return None
+    return from_state(state, vacancy)
+
+
+def point_of(detail: Any) -> Point | None:
+    """Точка из словаря деталей вакансии (`hh_html.vacancy`). Нет — None."""
+    point = (detail or {}).get("address") if isinstance(detail, dict) else None
+    return point if isinstance(point, Point) else None
 
 
 def backfill(
@@ -435,7 +460,9 @@ __all__ = (
     "ensure_schema",
     "find_address_nodes",
     "from_page",
+    "from_state",
     "one",
+    "point_of",
     "pending",
     "save",
     "vacancy_id",
