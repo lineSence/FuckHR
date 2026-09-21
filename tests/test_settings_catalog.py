@@ -47,6 +47,14 @@ OUTSIDE = {
     "REVIEW_FETCH_CACHE_DAYS",
     # Служебный файл состояния канарейки рядом с базой.
     "ALERT_STATE_PATH",
+    # Имена локальных моделей для профилей и этапов. Их берут не из головы, а
+    # из списка на странице «Модель» (кнопка «Спросить список моделей») или из
+    # `ollama list`, и вписывают в .env рядом с адресом локального сервера.
+    # В каталог полей они не попали сознательно: это десяток строк, которые
+    # меняются раз в жизни установки, а settings_fields.py уже уперся в предел
+    # размера файла [CORE-024].
+    *llm.LOCAL_MODEL_ENV.values(),
+    *llm.LOCAL_STAGE_MODEL_ENV.values(),
 }
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -80,6 +88,8 @@ def env_keys_read() -> dict[str, set[str]]:
         *llm.PROXY_MODEL_ENV.values(),
         *llm.STAGE_MODEL_ENV.values(),
         *llm.STAGE_MODELS_ENV.values(),
+        *llm.LOCAL_MODEL_ENV.values(),
+        *llm.LOCAL_STAGE_MODEL_ENV.values(),
     ):
         remember(key, "llm.py")
     return found
