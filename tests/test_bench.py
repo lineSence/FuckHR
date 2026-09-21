@@ -255,14 +255,14 @@ def test_ловушка_про_вилку_ловит_число_а_не_поле
 def test_кейсы_покрывают_все_этапы_с_вызовом_модели() -> None:
     """Этап, который ходит в модель, должен быть в наборе: иначе его не сравнить.
 
-    score и embeddings вызова не делают: скоринг детерминированный [CORE-015],
-    а векторы — не текстовая задача, правилами их не оценить.
+    Вызова не делает только embeddings: векторы — не текстовая задача,
+    правилами их не оценить.
     """
     import llm
 
     covered = {case.stage for case in bench_cases.CASES}
     assert covered == set(bench.STAGES)
-    assert set(llm.STAGE_PROFILES) - covered == {"score", "embeddings"}
+    assert set(llm.STAGE_PROFILES) - covered == {"embeddings"}
 
 
 def test_ловушка_разговора_ловит_догадки() -> None:

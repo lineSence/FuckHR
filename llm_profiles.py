@@ -33,7 +33,6 @@ STAGE_PROFILES: dict[str, str] = {
     "extract": FAST,
     "hr_filter": SMART,
     "company": LONG,
-    "score": SMART,
     "contacts": LOCAL,
     "dossier": LOCAL,
     # review_fake — тексты чужих отзывов, где встречаются имена сотрудников.

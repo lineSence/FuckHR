@@ -71,7 +71,7 @@ def test_таблица_маршрутов_показывает_откуда_и�
     rows = {row[0]: row for row in gateway.describe_routes()}
     assert rows["extract"][3:] == ("qwen3:4b", "профиль")
     assert rows["draft"][3:] == ("qwen3:8b", "этап")
-    assert rows["score"][4] == "по умолчанию"
+    assert rows["company"][4] == "по умолчанию"
 
 
 def test_имена_читаются_из_окружения(monkeypatch) -> None:
