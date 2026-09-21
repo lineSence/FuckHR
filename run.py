@@ -78,6 +78,8 @@ from hh_html import BlockedError, HHHtmlClient
 import run_cards
 import run_loop
 import embeddings_tasks
+import extract_spans
+import stage_gates
 from run_setup import build_gateway, notify_if_broken, setup_logging
 from research import (  # noqa: F401 — реэкспорт для старых вызовов
     MAX_RESEARCH_WORKERS,
@@ -341,10 +343,39 @@ def run_once(args: argparse.Namespace) -> int:
     # Этапы модели по всему собранному разом: сеть ждут параллельно, в базу
     # пишет главный поток.
     if to_extract:
-        for key, items in llm_batch.extract_all(db_path, to_extract).items():
+        # Сначала разметка спанами, если она включена: цитата оттуда дословна
+        # по построению, и на эти вакансии модель не тратится вовсе.
+        by_spans = {
+            vacancy.key: items
+            for vacancy in to_extract
+            for items in (extract_spans.conditions(vacancy.description),)
+            if items
+        }
+        for key, items in by_spans.items():
+            if conditions.store(conn, key, items):
+                extracted += 1
+        rest = stage_gates.keep_for_stage(
+            conn,
+            gateway,
+            "extract",
+            [v for v in to_extract if v.key not in by_spans],
+        )
+        for key, items in llm_batch.extract_all(db_path, rest).items():
             if conditions.store(conn, key, items):
                 extracted += 1
     if to_claim:
+        kept = {
+            vacancy.key
+            for vacancy in stage_gates.keep_for_stage(
+                conn, gateway, "hr_filter", [pair[0] for pair in to_claim]
+            )
+        }
+        # Отчёт детектора сохраняется всегда: гейт экономит вызов модели, а не
+        # выкидывает детерминированные находки [CORE-015].
+        for vacancy, report in to_claim:
+            if vacancy.key not in kept:
+                detector.store(conn, report)
+        to_claim = [pair for pair in to_claim if pair[0].key in kept]
         enriched_reports = llm_batch.claims_all(db_path, to_claim)
         for vacancy, report in to_claim:
             detector.store(conn, enriched_reports.get(vacancy.key, report))

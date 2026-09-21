@@ -172,6 +172,11 @@ triggers:
     load:
       - wiki/workflows/quota-audit.md
 
+  - id: gates
+    keywords: [гейт, пропустить этап, не звать модель, близость к профилю, gliner, спан, классификатор, разметчик, zero-shot, экономия вызовов]
+    load:
+      - docs/gates.md
+
   - id: dataset
     keywords: [датасет, dataset, файнтюн, finetune, дообучение, обучающая выборка, jsonl, colab, unsloth, lora]
     load:
