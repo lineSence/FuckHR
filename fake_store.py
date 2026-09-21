@@ -5,6 +5,8 @@
 - `review_items` — один разобранный отзыв: дата, оценка, `fake_score`, список
   сработавших сигналов и метка. Полный текст не дублируется (он уже лежит в
   `company_reviews.body`), хранится короткая выдержка для интерфейса.
+  Рядом лежит сфера автора (`area`, `area_scope`, `area_hits`, см.
+  `review_area`): код сферы и сработавшие маркеры, но не должность и не автор.
 - `review_hashes` — хэш нормализованного текста и компания, у которой он
   встретился. Это общая таблица на всю базу, и именно она ловит фабрики
   отзывов, работающие на несколько компаний сразу.
@@ -42,6 +44,9 @@ CREATE TABLE IF NOT EXISTS review_items (
     signals     TEXT NOT NULL DEFAULT '[]',
     patterns    TEXT NOT NULL DEFAULT '[]',
     label       TEXT NOT NULL DEFAULT 'clean',
+    area        TEXT NOT NULL DEFAULT 'unknown',
+    area_scope  TEXT NOT NULL DEFAULT 'area',
+    area_hits   TEXT NOT NULL DEFAULT '[]',
     created_at  TEXT NOT NULL,
     UNIQUE (company, url, idx)
 );
@@ -67,10 +72,19 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     # База у владельца одна и живёт месяцами: недостающая колонка не имеет
     # права ронять прогон.
     columns = {row[1] for row in conn.execute("PRAGMA table_info(review_items)")}
-    if "patterns" not in columns:
-        log.info("добавляю колонку patterns в review_items")
+    for name, default in (
+        ("patterns", "'[]'"),
+        ("area", "'unknown'"),
+        ("area_scope", "'area'"),
+        ("area_hits", "'[]'"),
+    ):
+        if name in columns:
+            continue
+        log.info("добавляю колонку %s в review_items", name)
         conn.execute(
-            "ALTER TABLE review_items ADD COLUMN patterns TEXT NOT NULL DEFAULT '[]'"
+            "ALTER TABLE review_items ADD COLUMN {} TEXT NOT NULL DEFAULT {}".format(
+                name, default
+            )
         )
     conn.commit()
 
@@ -110,8 +124,8 @@ def store(
             INSERT INTO review_items (
                 company, url, idx, site, text_hash, excerpt, rating, dated_at,
                 date_precision, has_reply, fake_score, signals, patterns, label,
-                created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                area, area_scope, area_hits, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(company, url, idx) DO UPDATE SET
                 text_hash = excluded.text_hash,
                 excerpt = excluded.excerpt,
@@ -122,7 +136,10 @@ def store(
                 fake_score = excluded.fake_score,
                 signals = excluded.signals,
                 patterns = excluded.patterns,
-                label = excluded.label
+                label = excluded.label,
+                area = excluded.area,
+                area_scope = excluded.area_scope,
+                area_hits = excluded.area_hits
             """,
             (
                 company,
@@ -142,6 +159,11 @@ def store(
                     ensure_ascii=False,
                 ),
                 str(getattr(verdict, "label", "clean")),
+                str(getattr(item, "area", "unknown") or "unknown"),
+                str(getattr(item, "area_scope", "area") or "area"),
+                json.dumps(
+                    list(getattr(item, "area_hits", ()) or ()), ensure_ascii=False
+                ),
                 now,
             ),
         )

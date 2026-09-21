@@ -21,6 +21,8 @@
     none   — даты нет.
 
 Авторов не извлекаем: ни имени, ни ника, ни ссылки на профиль [CORE-012].
+Должность из шапки — исключение, и оно узкое: она нужна для сферы отзыва
+(`review_area`), живёт только в памяти и в базу не уходит [CORE-013].
 """
 
 from __future__ import annotations
@@ -29,6 +31,7 @@ import re
 from dataclasses import dataclass
 from datetime import date, timedelta
 
+import review_area
 import reviewpage
 from dossier_rules import LONE_RATING_RE, RATING_RE, STARS_RE
 
@@ -116,6 +119,10 @@ class ReviewItem:
     dated_at: str | None = None          # ISO-дата
     date_precision: str = "none"         # exact | approx | month | none
     has_reply: bool = False
+    role: str = ""                       # должность из шапки, в базу не уходит
+    area: str = "unknown"                # код сферы, review_area.AREA_RU
+    area_scope: str = "area"             # area | company (тема про всю компанию)
+    area_hits: tuple[str, ...] = ()      # сработавшие маркеры, для объяснимости
 
     @property
     def text(self) -> str:
@@ -316,6 +323,7 @@ def _split_item(
         dated_at=dated_at,
         date_precision=precision,
         has_reply=bool(REPLY_RE.search(plain)),
+        role=review_area.role_in(chunk),
     )
 
 

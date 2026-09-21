@@ -57,6 +57,7 @@ import fake_company
 import aitext_llm
 import embeddings_tasks
 import fake_llm
+import review_area
 import reviewlegit
 import reviewlegit_store
 import fake_reviews
@@ -305,6 +306,7 @@ def analyze(
     site_url: str | None = None,
     items: Sequence[ReviewItem] = (),
     verdicts: Sequence[Verdict] = (),
+    area: str = "",
 ) -> Dossier:
     """Детерминированная часть досье: без сети и без модели.
 
@@ -315,7 +317,7 @@ def analyze(
     items = tuple(items)
     verdicts = tuple(verdicts)
     patterns = find_patterns(reviews)
-    mark = fake_company.evaluate(items, verdicts)
+    mark = fake_company.evaluate(items, verdicts, area=area or review_area.owner_code())
     avg = mark.avg_clean if items else average_rating(reviews)
     return Dossier(
         company=company,
@@ -372,7 +374,11 @@ def items_from_reviews(
         marks = _boilerplate(conn, review.site)
         kept, dropped = reviewlegit.filter_items(page_items, marks)
         for item in kept:
-            out.append(replace(item, index=len(out), site=review.site, url=review.url))
+            out.append(
+                review_area.classify_item(
+                    replace(item, index=len(out), site=review.site, url=review.url)
+                )
+            )
         for item, check in dropped:
             log.info("отброшен фрагмент со страницы %s: %s", review.url, check.why)
         _remember_lines(conn, review.site, company, page_items)

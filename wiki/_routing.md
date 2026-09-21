@@ -125,6 +125,11 @@ triggers:
       - docs/fake-reviews.md
       - wiki/rules/hr-signal-detection.md
 
+  - id: review-area
+    keywords: [сфера отзыва, отдел, по моей сфере, кем работал автора, разбивка отзывов, review_area, REVIEW_AREA]
+    load:
+      - docs/review-area.md
+
   - id: market-salary
     keywords: [рынок, средняя зарплата, медиана, перцентиль, вилка, ниже рынка, выше рынка, срез, market_stats]
     load:

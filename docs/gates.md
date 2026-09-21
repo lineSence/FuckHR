@@ -58,6 +58,20 @@
 .venv\Scripts\pip install gliner
 ```
 
+Веса качаются при первом обращении к модели, то есть посреди прогона. Лучше
+забрать их заранее и по частям: из репозитория разметчика нужны только конфиг и
+`model.safetensors` (1.2 ГБ, второй файл `pytorch_model.bin` — та же модель в
+старом формате), а из `microsoft/mdeberta-v3-base` — только токенизатор
+(4 МБ), веса энкодера уже внутри разметчика.
+
+```powershell
+.venv\Scripts\python -c "from huggingface_hub import snapshot_download as d; d('urchade/gliner_multi-v2.1', allow_patterns=['gliner_config.json','model.safetensors']); d('microsoft/mdeberta-v3-base', allow_patterns=['config.json','spm.model','tokenizer_config.json'])"
+```
+
+Кэш по умолчанию — `%USERPROFILE%\.cache\huggingface`; другой диск задаётся
+переменной `HF_HOME` до запуска. Что скачалось, проверяется без сети:
+`HF_HUB_OFFLINE=1` и команда ниже.
+
 Проверить до включения, ничего не трогая в настройках:
 
 ```powershell

@@ -41,7 +41,8 @@ dossier.build(company)
   → reviewlegit.filter_items   отсев не-отзывов: меню, реклама, отзывы клиентов
   → aitext.assess              признак сгенерированного текста (docs/ai-text.md)
   → fake_reviews.score_items   fake_score по сигналам накрутки, без модели
-  → fake_company.evaluate      метка компании и средняя без заказных отзывов
+  → review_area.classify_item  сфера автора отзыва по словарям (docs/review-area.md)
+  → fake_company.evaluate      метка компании, средняя без заказных и цифра по своей сфере
   → dossier_text.find_patterns словарь маркеров + учёт отрицаний, без модели
   → dossier_summary.summarize  сводка словами (этап dossier), необязательная
   → company_dossier / company_reviews / review_items / review_hashes
@@ -105,6 +106,7 @@ dossier.build(company)
 | `dossier_text.py`, `dossier_summary.py` | разбор текста отзывов и сводка/строки карточки |
 | `reviewlegit.py`, `reviewlegit_rules.py`, `reviewlegit_store.py` | легитимность отзыва, шаблоны площадок, здоровье сбора (`docs/review-quality.md`) |
 | `reviewitems.py` | страница → отдельные отзывы: дата, оценка, плюсы, минусы |
+| `review_area.py` | сфера автора отзыва и тема про компанию целиком (`docs/review-area.md`) |
 | `fake_reviews.py`, `fake_rules.py`, `fake_company.py`, `fake_store.py`, `fake_llm.py` | детекция накрученных отзывов: сигналы, пороги, метка компании, хранение, сигнал модели |
 | `company_score.py`, `company_score_rules.py`, `company_score_store.py` | общая оценка работодателя: оси, улики, вето (`docs/company-score.md`) |
 | `injection.py`, `injection_rules.py`, `injection_store.py` | промпт-инъекции: чистка входа модели, скрытый HTML, улики (`docs/prompt-injection.md`) |

@@ -621,8 +621,11 @@ FIELDS: tuple[Field, ...] = (
 # Импорт снизу: модуль гейтов берёт отсюда Field, и к этой строке он определён.
 from settings_fields_gates import GATE_FIELDS, GROUP_GATES, GROUP_GATES_HINT  # noqa: E402
 
-FIELDS = FIELDS + GATE_FIELDS
+from settings_fields_reviews import AREA_FIELDS, GROUP_AREA, GROUP_AREA_HINT  # noqa: E402
+
+FIELDS = FIELDS + GATE_FIELDS + AREA_FIELDS
 GROUP_HINTS[GROUP_GATES] = GROUP_GATES_HINT
+GROUP_HINTS[GROUP_AREA] = GROUP_AREA_HINT
 
 FIELD_BY_KEY: dict[str, Field] = {field.key: field for field in FIELDS}
 GROUPS: tuple[str, ...] = tuple(dict.fromkeys(field.group for field in FIELDS))

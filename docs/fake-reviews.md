@@ -22,6 +22,7 @@
 | Отсев не-отзывов (меню, реклама, клиентские отзывы) | `reviewlegit`, `docs/review-quality.md` |
 | Страница → отдельные отзывы (дата, оценка, плюсы, минусы, ответ работодателя) | `reviewitems.split_page` |
 | Сигналы уровня отзыва и `fake_score` | `fake_reviews.score_items` |
+| Сфера автора отзыва | `review_area.classify`, `docs/review-area.md` |
 | Агрегаты и метка компании | `fake_company.evaluate` |
 | Хранение отзывов и хэшей | `fake_store` |
 | Необязательный сигнал модели (этап `review_fake`) | `fake_llm.ad_indexes` |

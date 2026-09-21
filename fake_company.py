@@ -20,8 +20,37 @@ from datetime import date
 from typing import Sequence
 
 import fake_rules as R
+import review_area
 from fake_reviews import Verdict, shingles, similarity
 from reviewitems import ReviewItem
+
+
+# Разбивка по сферам имеет смысл только на некоторой выборке: «по вашей сфере
+# 1.0 из 5 по одному отзыву» выглядит как факт, а является шумом.
+AREA_MIN_TOTAL = 5
+AREA_MIN_ITEMS = 2
+
+
+@dataclass(frozen=True)
+class AreaMark:
+    """Отзывы своей сферы отдельно от остальных.
+
+    `avg` считается только по своей сфере и с тем же весом метки, что общая
+    средняя: заказной отзыв не тянет ни в одну сторону. Отзывы про компанию
+    целиком (задержки зарплаты, сокращения) сюда не попадают — они в `wide` и
+    важны независимо от сферы.
+    """
+
+    code: str = ""
+    total: int = 0
+    avg: float | None = None
+    wide: int = 0
+    other: int = 0
+    unknown: int = 0
+
+    @property
+    def label(self) -> str:
+        return review_area.label(self.code)
 
 
 @dataclass(frozen=True)
@@ -41,6 +70,7 @@ class CompanyMark:
     suspect: int = 0
     avg_all: float | None = None
     avg_clean: float | None = None
+    area: AreaMark | None = None
 
     @property
     def label(self) -> str:
@@ -75,6 +105,37 @@ def weighted_average(
 def plain_average(items: Sequence[ReviewItem]) -> float | None:
     values = [item.rating for item in items if item.rating is not None]
     return round(sum(values) / len(values), 2) if values else None
+
+
+def by_area(
+    items: Sequence[ReviewItem], verdicts: Sequence[Verdict], area: str
+) -> AreaMark | None:
+    """Своя сфера отдельной цифрой. Мало данных — None, ничего не показываем."""
+    code = review_area.owner_code(area)
+    if not code or len(items) < AREA_MIN_TOTAL:
+        return None
+    mine: list[ReviewItem] = []
+    wide = other = unknown = 0
+    for item in items:
+        item_area = str(getattr(item, "area", review_area.AREA_UNKNOWN))
+        if str(getattr(item, "area_scope", review_area.SCOPE_AREA)) == review_area.SCOPE_COMPANY:
+            wide += 1
+        elif item_area == code:
+            mine.append(item)
+        elif item_area == review_area.AREA_UNKNOWN:
+            unknown += 1
+        else:
+            other += 1
+    if len(mine) < AREA_MIN_ITEMS:
+        return None
+    return AreaMark(
+        code=code,
+        total=len(mine),
+        avg=weighted_average(mine, verdicts),
+        wide=wide,
+        other=other,
+        unknown=unknown,
+    )
 
 
 def _share_sign(verdicts: Sequence[Verdict]) -> Sign | None:
@@ -174,7 +235,7 @@ def _cross_sign(verdicts: Sequence[Verdict]) -> Sign | None:
 
 
 def evaluate(
-    items: Sequence[ReviewItem], verdicts: Sequence[Verdict]
+    items: Sequence[ReviewItem], verdicts: Sequence[Verdict], area: str = ""
 ) -> CompanyMark:
     """Признаки накрутки и уровень метки. Один признак — подозрение, два — метка."""
     items = tuple(items)
@@ -207,7 +268,16 @@ def evaluate(
         suspect=sum(1 for v in verdicts if v.label == R.LABEL_SUSPECT),
         avg_all=plain_average(items),
         avg_clean=weighted_average(items, verdicts),
+        area=by_area(items, verdicts, area),
     )
 
 
-__all__ = ("CompanyMark", "Sign", "evaluate", "plain_average", "weighted_average")
+__all__ = (
+    "AreaMark",
+    "CompanyMark",
+    "Sign",
+    "by_area",
+    "evaluate",
+    "plain_average",
+    "weighted_average",
+)

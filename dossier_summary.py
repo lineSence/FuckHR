@@ -104,6 +104,7 @@ def format_summary(dossier: "Dossier") -> str:
         parts.append("тексты страниц не прочитаны, только выдача поиска")
     if dossier.avg_rating is not None:
         parts.append("средняя оценка {:.1f} из 5".format(dossier.avg_rating))
+    parts += _area_parts(dossier)
     parts += _fake_parts(dossier)
     red = dossier.red_flags
     green = dossier.green_flags
@@ -120,6 +121,23 @@ def format_summary(dossier: "Dossier") -> str:
     if not red and not green:
         parts.append("повторяющихся сюжетов не видно")
     return ". ".join(parts) + "."
+
+
+def _area_parts(dossier: "Dossier") -> list[str]:
+    """Своя сфера отдельной строкой: средняя по вывеске и средняя по своим.
+
+    Расхождение информативнее любой из цифр: оно означает, что в твоём
+    направлении дела идут иначе, чем в среднем по компании.
+    """
+    area = getattr(dossier.mark, "area", None)
+    if area is None or not area.total:
+        return []
+    line = "{}: {} отзыв(ов)".format(area.label, area.total)
+    if area.avg is not None:
+        line += ", средняя {:.1f} из 5".format(area.avg)
+    if area.wide:
+        line += "; ещё {} — про компанию целиком".format(area.wide)
+    return [line]
 
 
 def _fake_parts(dossier: "Dossier") -> list[str]:
@@ -150,6 +168,12 @@ def format_lines(dossier: "Dossier", limit: int = 3) -> list[str]:
     ]
     if dossier.avg_rating is not None:
         lines[0] += " · оценка {:.1f}".format(dossier.avg_rating)
+    area = getattr(dossier.mark, "area", None)
+    if area is not None and area.total:
+        line = "— {}: {} отзыв(ов)".format(area.label, area.total)
+        if area.avg is not None:
+            line += " · оценка {:.1f}".format(area.avg)
+        lines.append(line)
     if dossier.mark.flagged:
         lines.append(
             "— {}: оценке площадки верить нельзя".format(fake_rules.MARK_FLAG_LABEL)
