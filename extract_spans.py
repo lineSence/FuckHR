@@ -138,6 +138,59 @@ def split(texts: Sequence[tuple[str, str]]) -> tuple[dict[str, tuple[Condition, 
     return done, rest
 
 
+def main(argv=None) -> int:
+    """Проверка разметчика до включения в прогоне.
+
+        python extract_spans.py --text "Формат работы гибридный..."
+        python extract_spans.py --key hh:123 --force
+
+    `--force` обходит GLINER_ENABLED: сначала смотрим, что модель находит, и
+    только потом ставим галочку в настройках.
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Условия работы спанами (GLiNER)")
+    parser.add_argument("--text", default="", help="текст вакансии прямо в командной строке")
+    parser.add_argument("--key", default="", help="ключ вакансии из базы")
+    parser.add_argument("--force", action="store_true", help="не смотреть на GLINER_ENABLED")
+    args = parser.parse_args(argv)
+
+    from dotenv import load_dotenv
+
+    load_dotenv()
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    if args.force:
+        os.environ["GLINER_ENABLED"] = "1"
+
+    text = args.text
+    if args.key:
+        import db
+
+        conn = db.connect(settings.get("DB_PATH", "data/fuckhr.sqlite3"))
+        row = conn.execute(
+            "SELECT description FROM vacancies WHERE key = ?", (args.key,)
+        ).fetchone()
+        conn.close()
+        if row is None:
+            print("нет такой вакансии: {}".format(args.key))
+            return 2
+        text = str(row[0] or "")
+    if not text.strip():
+        print("нечего размечать: задай --text или --key")
+        return 2
+
+    print("модель: {} · порог: {} · включено: {}".format(
+        model_name(), threshold(), enabled()
+    ))
+    items = conditions(text)
+    if not items:
+        print("условий не размечено — этап уйдёт обычной модели")
+        return 0
+    for item in items:
+        print("  {:<8} {:<28} «{}»".format(item.field, item.value, item.quote))
+    return 0
+
+
 __all__ = (
     "DEFAULT_MODEL",
     "LABELS",
@@ -148,3 +201,7 @@ __all__ = (
     "split",
     "threshold",
 )
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
