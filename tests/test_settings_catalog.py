@@ -45,6 +45,12 @@ OUTSIDE = {
     "REVIEW_FETCH_CHARS",
     "REVIEW_FETCH_PAUSE",
     "REVIEW_FETCH_CACHE_DAYS",
+    # Кэш весов Hugging Face: переменные самой библиотеки, а не наша настройка.
+    # Их читают и загрузчик весов, и разметчик — менять их на странице настроек
+    # нельзя, иначе значение в .env разошлось бы с тем, что видит huggingface_hub.
+    "HF_HOME",
+    "HF_HUB_CACHE",
+    "HUGGINGFACE_HUB_CACHE",
     # Служебный файл состояния канарейки рядом с базой.
     "ALERT_STATE_PATH",
     # Адрес тайлов карты: значение по умолчанию — OSM, а меняют его раз в

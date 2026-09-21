@@ -87,6 +87,7 @@ from ui_core import (
 )
 import ui_bench
 import ui_dataset
+import ui_stages
 from ui_forms import (
     bench_models,
     profile_summary,
@@ -279,6 +280,7 @@ class Handler(BaseHTTPRequestHandler):
                         page(
                             "Модель",
                             render_llm(conn, one("probe") == "1", one("embed") == "1")
+                            + ui_stages.render_stages(conn)
                             + ui_dataset.render_dataset(conn),
                             ui_bench.refresh_seconds(),
                             "/llm",

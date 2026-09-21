@@ -63,6 +63,43 @@ def threshold() -> float:
     return max(0.1, min(0.95, settings.as_float(os.getenv("GLINER_THRESHOLD"), 0.5)))
 
 
+def installed() -> bool:
+    """Стоит ли пакет. Импорта модели не делаем: он тянет torch в память."""
+    from importlib.util import find_spec  # noqa: PLC0415
+
+    try:
+        return find_spec("gliner") is not None
+    except (ImportError, ValueError):  # noqa: PERF203 — битый пакет тоже «нет»
+        return False
+
+
+def cache_dir() -> str:
+    """Каталог кэша весов Hugging Face по тем же переменным, что у самой библиотеки."""
+    # Имена переменных — литералами, а не списком: так их видит и человек, и
+    # проверка каталога настроек (tests/test_settings_catalog.py).
+    explicit = (os.getenv("HF_HUB_CACHE") or "").strip() or (
+        os.getenv("HUGGINGFACE_HUB_CACHE") or ""
+    ).strip()
+    if explicit:
+        return explicit
+    home = (os.getenv("HF_HOME") or "").strip()
+    if home:
+        return os.path.join(home, "hub")
+    return os.path.join(os.path.expanduser("~"), ".cache", "huggingface", "hub")
+
+
+def weights_ready(name: str = "") -> bool:
+    """Скачаны ли веса. Смотрим каталог кэша, в сеть не ходим [CORE-016]."""
+    folder = "models--" + (name or model_name()).replace("/", "--")
+    path = os.path.join(cache_dir(), folder, "snapshots")
+    if not os.path.isdir(path):
+        return False
+    for entry in os.scandir(path):
+        if entry.is_dir() and any(os.scandir(entry.path)):
+            return True
+    return False
+
+
 def load(name: str = "") -> Any:
     """Модель в память, один раз на процесс. Нет пакета — None, не исключение."""
     global _model, _model_name
@@ -193,13 +230,16 @@ def main(argv=None) -> int:
 
 __all__ = (
     "DEFAULT_MODEL",
+    "cache_dir",
     "LABELS",
     "conditions",
     "enabled",
+    "installed",
     "load",
     "model_name",
     "split",
     "threshold",
+    "weights_ready",
 )
 
 
