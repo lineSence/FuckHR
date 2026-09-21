@@ -237,7 +237,7 @@ def render_llm(
         "прокси и локальный)</span></p>"
     )
 
-    known: list[str] = []
+    known: dict[str, list[str]] = {}
     if probe:
         block, known = models_probe(gateway)
         parts.append(block)
@@ -252,18 +252,18 @@ def render_llm(
     return "".join(parts)
 
 
-def models_probe(gateway: llm.Gateway) -> tuple[str, list[str]]:
+def models_probe(gateway: llm.Gateway) -> tuple[str, dict[str, list[str]]]:
     """Списки моделей с обоих адресов и имена с прокси для формы сравнения.
 
     Локальный список нужен не меньше проксёвого: имена вроде `qwen3:8b`
     раньше смотрели только через `ollama list` в терминале, а теперь их есть
     куда вписать — LLM_LOCAL_MODEL_* и LLM_LOCAL_STAGE_MODEL_*.
 
-    В форму сравнения чекбоксами попадают только имена с прокси: бенч ходит
-    через него, и локальное имя там ответило бы 400.
+    В форму сравнения попадают имена с обоих адресов: у бенча есть
+    переключатель маршрута, и локальные модели гоняются по тем же кейсам.
     """
     parts: list[str] = []
-    known: list[str] = []
+    known: dict[str, list[str]] = {}
     addresses = (
         (
             llm.ROUTE_PROXY,
@@ -297,8 +297,7 @@ def models_probe(gateway: llm.Gateway) -> tuple[str, list[str]]:
                 )
             )
             continue
-        if route == llm.ROUTE_PROXY:
-            known = names
+        known[route] = names
         parts.append(
             "<div class=ok><b>{title}</b> знает {count} моделей — {note}: {names}</div>".format(
                 title=esc(title),
@@ -392,7 +391,10 @@ def start_bench(form: dict) -> str:
             "Пиши их через запятую, как в config.yaml прокси.</div>"
         )
         return render_bench_form(note)
-    extra = ["--models", ",".join(models), "--repeat", str(repeat)]
+    route = (form.get("route") or [""])[0]
+    if route not in (llm.ROUTE_PROXY, llm.ROUTE_LOCAL):
+        route = llm.ROUTE_PROXY
+    extra = ["--models", ",".join(models), "--repeat", str(repeat), "--route", route]
     if stages:
         extra += ["--stages", ",".join(stages)]
     try:
