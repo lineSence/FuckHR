@@ -172,6 +172,11 @@ triggers:
     load:
       - wiki/workflows/quota-audit.md
 
+  - id: dataset
+    keywords: [датасет, dataset, файнтюн, finetune, дообучение, обучающая выборка, jsonl, colab, unsloth, lora]
+    load:
+      - docs/dataset.md
+
   - id: rules-general
     keywords: [правило, конвенция, стиль, запрет]
     load:

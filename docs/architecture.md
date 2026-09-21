@@ -118,6 +118,7 @@ dossier.build(company)
 | `outreach.py`, `outreach_draft.py` | прогон этапа писем и сборка текста черновика |
 | `llm.py`, `llm_profiles.py`, `llm_cascade.py`, `llm_cache.py`, `llm_tasks.py`, `check_llm.py` | шлюз к моделям, карта этапов и профилей, каскад фолбэка, кэш ответов, задачи этапов, диагностика |
 | `bench.py`, `bench_cases.py`, `bench_hard.py`, `bench_metrics.py`, `ui_bench.py` | сравнение моделей: базовые и сложные кейсы, веса уровней, отдельные колонки (`docs/model-bench.md`) |
+| `dataset_core.py`, `dataset_export.py`, `ui_dataset.py` | датасет для дообучения: перехватчик шлюза, примеры из своей базы, кнопка сборки (`docs/dataset.md`) |
 | `bot.py` | карточки и тревоги в Telegram: выключатель отправки, темп, тихие часы |
 | `canary.py` | тревога, когда прогон сломался, с суточным cooldown |
 | `maintenance.py` | очистка кэшей и данных по целям, с отметкой необратимых |

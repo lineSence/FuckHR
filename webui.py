@@ -86,6 +86,7 @@ from ui_core import (
     text_field,
 )
 import ui_bench
+import ui_dataset
 from ui_forms import (
     bench_models,
     profile_summary,
@@ -122,7 +123,10 @@ log = logging.getLogger("webui")
 # Адреса, которые существуют только для форм. GET сюда приходит не от ссылки,
 # а от F5 или «назад», и отвечать на это «такой страницы нет» — грубо.
 POST_ONLY = frozenset(
-    {"/run", "/stop", "/loop", "/bench", "/llm/apply", "/intake/apply", "/map/geo"}
+    {
+        "/run", "/stop", "/loop", "/bench", "/dataset", "/llm/apply",
+        "/intake/apply", "/map/geo",
+    }
 )
 
 
@@ -274,7 +278,8 @@ class Handler(BaseHTTPRequestHandler):
                     self._send(
                         page(
                             "Модель",
-                            render_llm(conn, one("probe") == "1", one("embed") == "1"),
+                            render_llm(conn, one("probe") == "1", one("embed") == "1")
+                            + ui_dataset.render_dataset(conn),
                             ui_bench.refresh_seconds(),
                             "/llm",
                         )
@@ -320,6 +325,16 @@ class Handler(BaseHTTPRequestHandler):
                         self._send(page("Карта", body))
                     finally:
                         conn.close()
+                    return
+                self._redirect("/?job={}".format(job_id))
+                return
+
+            if parsed.path == "/dataset":
+                # Сборка идёт минутами, поэтому уходим на страницу запуска с
+                # логом — как «Адреса для карты» и «Шаг по цели».
+                job_id, problem = ui_dataset.start_dataset(form)
+                if job_id is None:
+                    self._send(page("Модель", ui_dataset.refused(problem)))
                     return
                 self._redirect("/?job={}".format(job_id))
                 return
