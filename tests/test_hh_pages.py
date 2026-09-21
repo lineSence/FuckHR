@@ -77,8 +77,16 @@ def test_известная_страница_останавливает_обхо
     # Перепубликация — факт для детектора (ADR-009), его терять нельзя.
     republished = vacancy.model_copy(update={"published_at": "2026-09-20T10:00:00+03:00"})
     assert hh_pages.page_is_known(conn, [republished]) is False
-    # Новая вакансия на странице тоже держит обход открытым.
-    fresh = vacancy.model_copy(update={"external_id": "2", "url": "https://hh.ru/vacancy/2"})
+    # Новая вакансия на странице тоже держит обход открытым. Ключ дедупа
+    # считается по паре (компания, название), поэтому другой external_id новой
+    # вакансии не делает — меняем название.
+    fresh = vacancy.model_copy(
+        update={
+            "external_id": "2",
+            "url": "https://hh.ru/vacancy/2",
+            "title": "Оператор 1С в ночную смену",
+        }
+    )
     assert hh_pages.page_is_known(conn, [vacancy, fresh]) is False
     conn.close()
 

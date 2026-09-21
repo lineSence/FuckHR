@@ -171,7 +171,10 @@ def test_отказ_эмбеддера_гасит_пару_маршрут_мод
     """
 
     class Refusing(FakeGateway):
-        stage_models = {"embeddings": "bge-m3:latest"}
+        # Имя берётся из маршрута, а не из stage_models: до маршрута очередь
+        # доходит только когда там пусто (llm_embed.model_name).
+        class _Route(FakeGateway._Route):
+            model = "bge-m3:latest"
 
         def __init__(self) -> None:
             self.rejected: list[tuple[str, str, str]] = []

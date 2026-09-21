@@ -272,7 +272,10 @@ def test_блок_эмбеддера_объясняет_пустое_имя_мо
 
     monkeypatch.setenv("LLM_BASE_URL", "http://127.0.0.1:11434/v1")
     monkeypatch.delenv("LLM_STAGE_MODEL_EMBEDDINGS", raising=False)
+    monkeypatch.delenv("LLM_LOCAL_STAGE_MODEL_EMBEDDINGS", raising=False)
     html = ui_forms.embeddings_block(conn, llm.Gateway.from_env(conn))
 
-    assert "LLM_STAGE_MODEL_EMBEDDINGS" in html
+    # Локальное имя модели живёт в своём ключе: подсказка должна называть тот,
+    # который и правда читается шлюзом.
+    assert "LLM_LOCAL_STAGE_MODEL_EMBEDDINGS" in html
     assert "class=warn" in html

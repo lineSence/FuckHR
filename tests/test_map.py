@@ -11,6 +11,7 @@ from __future__ import annotations
 import sqlite3
 
 import geo
+import geo_query
 import jobs
 import ui_core
 import ui_map
@@ -111,19 +112,23 @@ def test_address_of_string_and_missing() -> None:
 
 
 def test_points_and_coverage() -> None:
+    # Отбор переехал в geo_query и берёт условия из filters.py, как список
+    # вакансий: имена параметров теперь те же, что в адресной строке.
     conn = make_db()
     assert geo.coverage(conn) == (2, 3)
-    assert len(geo.points(conn)) == 2
-    assert [p["key"] for p in geo.points(conn, min_score=60.0)] == ["hh:1"]
-    assert [p["key"] for p in geo.points(conn, area="Казань")] == ["hh:2"]
-    assert [p["key"] for p in geo.points(conn, query="Python")] == ["hh:1"]
+    assert len(geo_query.points(conn, {})) == 2
+    assert [p["key"] for p in geo_query.points(conn, {"min_score": "60"})] == ["hh:1"]
+    assert [p["key"] for p in geo_query.points(conn, {"area": "Казань"})] == ["hh:2"]
+    assert [p["key"] for p in geo_query.points(conn, {"q": "Python"})] == ["hh:1"]
 
 
 def test_points_treat_percent_as_text() -> None:
     """Процент в запросе — буква, а не джокер LIKE."""
     conn = make_db()
-    assert [p["key"] for p in geo.points(conn, query="100%")] == ["hh:2"]
-    assert geo.points(conn, query="%") == []
+    assert [p["key"] for p in geo_query.points(conn, {"q": "100%"})] == ["hh:2"]
+    # Один знак процента — это поиск знака процента, а не «покажи всё»:
+    # находится только вакансия, у которой он есть в названии.
+    assert [p["key"] for p in geo_query.points(conn, {"q": "%"})] == ["hh:2"]
 
 
 def test_one_and_areas() -> None:
