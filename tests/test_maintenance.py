@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import sqlite3
+
 import pytest
 
 import db
@@ -89,3 +91,34 @@ def test_сжатие_базы_работает_после_очистки(conn, 
     maintenance.wipe(conn, ("vacancies",))
     maintenance.vacuum(conn)
     assert maintenance.counts(conn)["vacancies"] == 0
+
+
+def test_очистка_вакансий_забирает_производные_таблицы():
+    """Таблица, которая считается из вакансий, не должна их переживать."""
+    import detector
+    import source_store
+
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    db.init_schema(conn)
+    detector.ensure_schema(conn)
+    source_store.ensure_schema(conn)
+    conn.execute(
+        "INSERT INTO vacancies (key, external_id, title, company, url, source,"
+        " first_seen_at, last_seen_at) VALUES"
+        " ('k1', '1', 't', 'c', 'u', 'hh.ru', '2026-01-01', '2026-01-01')"
+    )
+    conn.execute(
+        "INSERT INTO vacancy_signals (key, created_at, flags, payload)"
+        " VALUES ('k1', '2026-01-01', '[]', '{}')"
+    )
+    conn.execute(
+        "INSERT INTO vacancy_profiles (key, profile_id, score, matched_at)"
+        " VALUES ('k1', 'p1', 10.0, '2026-01-01')"
+    )
+    source_store.remember_many(conn, [("k1", "hh.ru", "1", "")])
+
+    maintenance.wipe(conn, ["vacancies"])
+
+    for table in ("vacancies", "vacancy_signals", "vacancy_profiles", "vacancy_sources"):
+        assert conn.execute("SELECT COUNT(*) FROM {}".format(table)).fetchone()[0] == 0

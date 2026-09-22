@@ -29,8 +29,15 @@ def save(form: Mapping[str, Sequence[str]]) -> list[str]:
 
 
 def render_sources(conn: sqlite3.Connection, note: str = "") -> str:
-    """Форма выбора площадок и что каждая принесла."""
+    """Форма выбора площадок и что каждая принесла.
+
+    Перед подсчётом снимаем разметку с вакансий, которых в базе больше нет:
+    иначе после очистки базы («Вакансии» в настройках, `rebuild.py`, ручное
+    удаление) таблица продолжала показывать вчерашние цифры — статистика
+    собранного, которого уже нет.
+    """
     chosen = set(sources.selected())
+    source_store.drop_orphans(conn)
     counts = source_store.counts(conn)
     unique = source_store.unique_counts(conn)
 

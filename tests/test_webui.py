@@ -279,3 +279,22 @@ def test_блок_эмбеддера_объясняет_пустое_имя_мо
     # который и правда читается шлюзом.
     assert "LLM_LOCAL_STAGE_MODEL_EMBEDDINGS" in html
     assert "class=warn" in html
+
+
+def test_колонка_площадки_в_списке(conn, make_vacancy) -> None:
+    """Видно, откуда вакансия, и что она есть не на одной площадке."""
+    import source_store
+
+    conditions.ensure_schema(conn)
+    contacts.ensure_schema(conn)
+    db.upsert_vacancy(conn, make_vacancy(external_id="1", source="hh.ru"), 90.0, [])
+    key = conn.execute("SELECT key FROM vacancies").fetchone()["key"]
+    source_store.remember_many(
+        conn, [(key, "hh.ru", "1", ""), (key, "superjob", "9", "")]
+    )
+
+    html = webui.render_vacancies(conn, 0.0, 10)
+
+    assert "Площадка" in html
+    assert "hh.ru" in html
+    assert "+1" in html and "SuperJob" in html

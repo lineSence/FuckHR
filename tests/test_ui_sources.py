@@ -28,6 +28,28 @@ def test_block_lists_every_site_and_metric():
     assert "Только здесь" in html
 
 
+def test_metric_resets_when_vacancies_are_wiped():
+    """Очистили базу — метрика обнулилась: она про то, что есть сейчас."""
+    import maintenance
+
+    conn = base()
+    conn.execute(
+        "INSERT INTO vacancies (key, external_id, title, company, url, source,"
+        " first_seen_at, last_seen_at) VALUES"
+        " ('k1', '1', 't', 'c', 'u', 'hh.ru', '2026-01-01', '2026-01-01')"
+    )
+    conn.commit()
+    source_store.remember_many(conn, [("k1", "hh.ru", "1", ""), ("k2", "trudvsem", "2", "")])
+
+    maintenance.wipe(conn, ["vacancies"])
+    assert source_store.counts(conn) == {}
+
+    # И даже если вакансии удалили в обход очистки, страница не врёт.
+    source_store.remember_many(conn, [("k3", "rabota", "3", "")])
+    ui_sources.render_sources(conn)
+    assert source_store.counts(conn) == {}
+
+
 def test_site_without_key_is_disabled(monkeypatch):
     monkeypatch.setenv("SUPERJOB_KEY", "")
     html = ui_sources.render_sources(base())

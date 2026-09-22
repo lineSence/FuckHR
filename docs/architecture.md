@@ -138,12 +138,12 @@ dossier.build(company)
 | `intake.py`, `ui_intake.py` | разговор о поиске: свободный текст владельца → критерии поиска и блоки резюме |
 | `embeddings.py`, `llm_embed.py`, `embeddings_store.py`, `embeddings_tasks.py` | векторы текстов: перефразированные отзывы и похожие вакансии (`docs/embeddings.md`) |
 | `settings.py`, `settings_fields.py` | чтение и запись `.env`, каталог полей настроек |
-| `ui_views.render_settings` | страница настроек: группы подкатами, живой поиск по ключу, названию и подсказке |
+| `ui_settings.render_settings` | страница настроек: группы подкатами, живой поиск по ключу, названию и подсказке |
 
 ## Хранилище
 
 Один файл SQLite (`data/fuckhr.sqlite3`). Таблицы: `intake_log`, `vacancies`, `vacancy_snapshots`, `vacancy_conditions`,
-`hr_signals`, `company_dossier`, `company_reviews`, `contacts`, `resumes`, `resume_blocks`,
+`vacancy_signals`, `vacancy_profiles`, `vacancy_sources`, `company_dossier`, `company_reviews`, `contacts`, `resumes`, `resume_blocks`,
 `resume_versions`, `review_items`, `review_hashes`, `site_lines`, `site_health`, `market_observations`, `market_stats`, `company_market`, `company_score`,
 `search_cache`, `page_cache`, `llm_cache`, `embeddings`.
 
