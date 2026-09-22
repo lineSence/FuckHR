@@ -79,3 +79,39 @@ def test_dump_failure_scrubs_secrets_and_prunes(tmp_path):
     for _ in range(3):
         hh_html.dump_failure(page, "no state", tmp_path, keep=2)
     assert len(list(tmp_path.glob("*.html"))) == 2
+
+
+def test_404_за_концом_выдачи_не_роняет_обход() -> None:
+    """hh.ru отдаёт 404 на странице за последней — это конец, а не сбой."""
+    client = hh_html.HHHtmlClient(pause=0.0, pause_min=0.0, failure_dir=None)
+    pages = [page_with_state([NODE]), page_with_state([dict(NODE, vacancyId=222)])]
+
+    def fake_fetch(url: str, params: dict | None = None, attempts: int = 3) -> str:
+        page = int((params or {}).get("page", 0))
+        if page >= len(pages):
+            raise hh_html.MissingPageError("hh.ru: страницы нет (404)")
+        return pages[page]
+
+    client.fetch = fake_fetch  # type: ignore[method-assign]
+    try:
+        found = [v.external_id for v in client.search("специалист 1с")]
+    finally:
+        client.close()
+    assert found == ["111", "222"]
+    assert client.exhausted is True
+
+
+def test_fetch_превращает_404_в_missing_page(monkeypatch: pytest.MonkeyPatch) -> None:
+    import httpx
+
+    client = hh_html.HHHtmlClient(pause=0.0, pause_min=0.0, failure_dir=None)
+
+    def fake_get(url: str, params: dict | None = None) -> httpx.Response:
+        return httpx.Response(404, text="not found", request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(client._client, "get", fake_get)
+    try:
+        with pytest.raises(hh_html.MissingPageError):
+            client.fetch("https://hh.ru/vacancy/1")
+    finally:
+        client.close()

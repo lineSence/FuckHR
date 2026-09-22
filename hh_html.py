@@ -79,6 +79,10 @@ class ExtractionError(RuntimeError):
     """Страница пришла, но вакансии из неё достать не удалось."""
 
 
+class MissingPageError(RuntimeError):
+    """hh.ru ответил 404/410: страницы нет. За концом выдачи это норма."""
+
+
 def scrub(page: str, secrets: Iterable[str] = ()) -> str:
     """Убирает из страницы наши cookie и похожие на токены значения."""
     for secret in secrets:
@@ -275,8 +279,8 @@ CARD_LINK_RE = re.compile(r'href="(https://[^"]*?/vacancy/(\d+)[^"]*)"[^>]*>(?P<
 def parse_cards_fallback(page: str) -> list[Vacancy]:
     """Грубый резерв: только ссылка и заголовок из разметки.
 
-    Скоринг без вилки и описания будет бедным, но прогон не умрёт целиком:
-    детали потом доберутся со страницы вакансии.
+    Скоринг без вилки будет бедным, но прогон не умрёт: детали доберутся
+    потом со страницы вакансии.
     """
     out: dict[str, Vacancy] = {}
     for match in CARD_LINK_RE.finditer(page):
@@ -289,10 +293,11 @@ def parse_cards_fallback(page: str) -> list[Vacancy]:
 
 
 class HHHtmlClient:
-    """Один поток, паузы с дрожанием, собственный backoff. Скромность дешевле бана.
+    """Один поток, паузы с дрожанием, свой backoff. Скромность дешевле бана.
 
-    Клиент сам считает признаки нездоровья (pages_fetched, fallback_pages, empty_pages,
-    blocked, failures) — по ним прогон решает, писать ли владельцу (canary.py).
+    Клиент считает признаки нездоровья (pages_fetched, fallback_pages,
+    empty_pages, blocked, failures) — по ним прогон решает, писать ли
+    владельцу (canary.py).
     """
 
     def __init__(
@@ -305,10 +310,9 @@ class HHHtmlClient:
         failure_dir: str | Path | None = FAILURE_DIR,
         cache: Any | None = None,
     ) -> None:
-        # Пауза адаптивная: HH_PAUSE — верхняя граница и точка возврата, а не
-        # постоянная величина. На чистых ответах она снижается до HH_PAUSE_MIN,
-        # на 403/429/капче возвращается к максимуму. Раньше каждый из тысячи
-        # запросов ждал одинаковые «безопасные» 2–3 секунды.
+        # Пауза адаптивная: HH_PAUSE — верхняя граница и точка возврата. На
+        # чистых ответах она снижается до HH_PAUSE_MIN, на 403/429/капче
+        # возвращается к максимуму.
         self.pause_max = max(0.0, float(pause))
         self.pause_min = max(0.0, min(float(pause_min), self.pause_max))
         self.pause = self.pause_max
@@ -321,8 +325,8 @@ class HHHtmlClient:
         self.cache = cache
         # Сколько раз обход остановился на полностью известной странице.
         self.known_stops = 0
-        # Дошли ли до конца выдачи в последнем search: по нему прогон
-        # отличает «вакансии кончились» от «упёрлись в свой потолок».
+        # Дошли ли до конца выдачи в последнем search: отличает
+        # «вакансии кончились» от «упёрлись в свой потолок».
         self.exhausted = False
         self.blocked = False
         self.failures: list[str] = []
@@ -413,6 +417,9 @@ class HHHtmlClient:
                 time.sleep(delay)
                 delay *= 2
                 continue
+            if response.status_code in (404, 410):
+                # Нет страницы: конец выдачи, снятая вакансия, битая ссылка.
+                raise MissingPageError(f"hh.ru: страницы нет ({response.status_code}) {url}")
             response.raise_for_status()
             self.pages_fetched += 1
             self._ease()
@@ -433,14 +440,12 @@ class HHHtmlClient:
         """max_pages=0 — идти до конца выдачи.
 
         Потолка страниц по умолчанию нет: при лимите в тысячу вакансий три
-        страницы отдавали половину. Обход всё равно конечен — hh.ru отдаёт
-        пустую страницу, а при зацикливании выдачи страница приходит без единого
-        нового id, и это тоже конец.
-
-        `known_page` — третий конец (B-15): страница целиком уже в базе. Выдача
-        отсортирована по дате публикации, значит дальше лежит только более старое,
-        и платить за него паузами незачем. Вакансии со страницы всё равно отдаются:
-        «видна в выдаче» — факт, который нужен истории (ADR-009).
+        страницы отдавали половину. Обход конечен — концом считается пустая
+        страница, страница без единого нового id (выдача пошла по кругу),
+        404 за последней страницей и `known_page` (B-15): страница целиком в
+        базе, а выдача отсортирована по дате, значит дальше только старее.
+        Вакансии со страницы всё равно отдаются: «видна в выдаче» — факт для
+        истории (ADR-009).
         """
         from hh_pages import cache_key  # локально: hh_pages тянет настройки
 
@@ -468,7 +473,13 @@ class HHHtmlClient:
                 log.info("страница %s: взята из кэша прогона", page)
                 vacancies = list(cached)
             else:
-                body = self.fetch(SEARCH_URL, params)
+                try:
+                    body = self.fetch(SEARCH_URL, params)
+                except MissingPageError:
+                    # hh.ru отдаёт 404 на странице за последней — выдача кончилась.
+                    log.info("страница %s за концом выдачи (404), дальше нечего брать", page)
+                    self.exhausted = True
+                    break
                 try:
                     nodes = find_vacancy_nodes(extract_state(body))
                     vacancies = [node_to_vacancy(n) for n in nodes if _first(n, "vacancyId", "id")]
@@ -481,7 +492,7 @@ class HHHtmlClient:
 
                 vacancies = [v for v in vacancies if v.external_id and v.title]
                 if not vacancies and page == 0:
-                    # Пустая первая страница по широкому запросу — повод посмотреть глазами.
+                    # Пустая первая страница — повод посмотреть глазами.
                     self.empty_pages += 1
                     self._dump(body, "empty-search")
                 if self.cache is not None:
