@@ -169,3 +169,37 @@ def test_searxng_html_вместо_json_не_роняет_этап(monkeypatch: 
     )
     assert provider.search("АКМЕ") == []
     assert provider.usage.failures == 1
+
+
+def test_протухший_кэш_поиска_идёт_в_сеть(conn: sqlite3.Connection) -> None:
+    """Вечный кэш делал пересборку досье бессмысленной: ссылки приходили те же."""
+    calls: list[str] = []
+
+    def transport(provider: str, query: str, limit: int) -> list[websearch.Hit]:
+        calls.append(query)
+        return _hits()
+
+    provider = websearch.SearchProvider(api_key="k", conn=conn, transport=transport)
+    provider.search("АКМЕ тимлид")
+    conn.execute(
+        "UPDATE search_cache SET created_at = ?",
+        ("2000-01-01T00:00:00+00:00",),
+    )
+    provider.search("АКМЕ тимлид")
+    assert len(calls) == 2
+
+
+def test_refresh_обходит_кэш_поиска(conn: sqlite3.Connection) -> None:
+    calls: list[str] = []
+
+    def transport(provider: str, query: str, limit: int) -> list[websearch.Hit]:
+        calls.append(query)
+        return _hits()
+
+    warm = websearch.SearchProvider(api_key="k", conn=conn, transport=transport)
+    warm.search("АКМЕ тимлид")
+    again = websearch.SearchProvider(
+        api_key="k", conn=conn, transport=transport, refresh=True
+    )
+    again.search("АКМЕ тимлид")
+    assert len(calls) == 2

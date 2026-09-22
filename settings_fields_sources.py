@@ -8,12 +8,36 @@
 
 from __future__ import annotations
 
-from settings_fields import FLOAT, INT, SECRET, TEXT, Field
+from settings_fields import FLOAT, GROUP_SEARCH, GROUP_SOURCE, INT, SECRET, TEXT, Field
 
 GROUP_SOURCES = "Другие площадки"
 GROUP_SOURCES_HINT = "какие агрегаторы входят в сбор и чем они платят"
 
+# Поле про кэш страниц hh.ru живёт в этом файле, а не в основном каталоге:
+# тот упёрся в 25 КБ [CORE-024]. Группа у него прежняя — «Источник вакансий».
+HH_CACHE_FIELD = Field(
+    "HH_SEARCH_CACHE_MINUTES",
+    "Сколько минут помнить страницу выдачи",
+    GROUP_SOURCE,
+    FLOAT,
+    "10",
+    "В режиме цикла соседние прогоны качали одни и те же первые страницы "
+    "заново. Ноль — помнить только внутри одного прогона, как раньше.",
+)
+
+SEARCH_CACHE_FIELD = Field(
+    "SEARCH_CACHE_DAYS",
+    "Сколько дней помнить выдачу поиска",
+    GROUP_SEARCH,
+    INT,
+    "14",
+    "Кэш поиска был вечным: досье считалось устаревшим через месяц и "
+    "пересобиралось из тех же самых ссылок. Ноль — не протухает никогда.",
+)
+
 SOURCE_FIELDS: tuple[Field, ...] = (
+    HH_CACHE_FIELD,
+    SEARCH_CACHE_FIELD,
     Field(
         "SOURCE_SITES",
         "Площадки в сборе",

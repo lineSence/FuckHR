@@ -51,7 +51,7 @@ import logging
 import os
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable, Sequence
 
@@ -68,6 +68,21 @@ CREATE TABLE IF NOT EXISTS search_cache (
     created_at TEXT NOT NULL
 );
 """
+
+# Срок годности кэша поиска. Выдача по «отзывы о компании» за две недели
+# меняется мало, а вечный кэш делал пересборку досье бессмысленной.
+CACHE_DAYS = 14
+
+
+def _fresh(created_at: str, days: int) -> bool:
+    try:
+        when = datetime.fromisoformat(str(created_at))
+    except (TypeError, ValueError):
+        return False
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) - when <= timedelta(days=days)
+
 
 SEARXNG = "searxng"
 TAVILY = "tavily"
@@ -238,6 +253,8 @@ class SearchProvider:
         time_range: str = "",
         safesearch: int = 0,
         pages: int = 1,
+        cache_days: int = CACHE_DAYS,
+        refresh: bool = False,
     ) -> None:
         if provider not in PROVIDERS:
             raise ValueError(f"неизвестный провайдер поиска: {provider}")
@@ -262,12 +279,17 @@ class SearchProvider:
             self.time_range = ""
         self.safesearch = int(safesearch)
         self.pages = max(1, int(pages))
+        self.cache_days = max(0, int(cache_days))
+        # «Собрать заново» обходит кэш: иначе кнопка повторяет прошлый ответ.
+        self.refresh = bool(refresh)
         self.usage = Usage()
         if conn is not None:
             ensure_cache(conn)
 
     @classmethod
-    def from_env(cls, conn: sqlite3.Connection | None = None) -> "SearchProvider":
+    def from_env(
+        cls, conn: sqlite3.Connection | None = None, refresh: bool = False
+    ) -> "SearchProvider":
         def number(name: str, default: str) -> float:
             raw = (os.getenv(name) or "").strip() or default
             try:
@@ -290,6 +312,8 @@ class SearchProvider:
             time_range=os.getenv("SEARCH_TIME_RANGE") or "",
             safesearch=int(number("SEARCH_SAFESEARCH", "0")),
             pages=int(number("SEARCH_PAGES", "1")),
+            cache_days=int(number("SEARCH_CACHE_DAYS", str(CACHE_DAYS))),
+            refresh=refresh,
         )
 
     @property
@@ -343,12 +367,17 @@ class SearchProvider:
         ]
 
     def _cache_get(self, digest: str) -> list[Hit] | None:
-        if self.conn is None:
+        if self.conn is None or self.refresh:
             return None
         row = self.conn.execute(
-            "SELECT response FROM search_cache WHERE hash = ?", (digest,)
+            "SELECT response, created_at FROM search_cache WHERE hash = ?", (digest,)
         ).fetchone()
         if row is None:
+            return None
+        # Срок годности. Без него кэш был вечным: досье считалось устаревшим
+        # через месяц и пересобиралось, а ссылки приходили те же, что в первый
+        # раз, — пересборка ничего не обновляла.
+        if self.cache_days and not _fresh(row[1], self.cache_days):
             return None
         try:
             payload = json.loads(row[0])

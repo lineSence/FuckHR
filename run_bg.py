@@ -180,7 +180,13 @@ class Research:
             log.debug("досье на %s свежее, пропускаем", company)
             return False
         self.futures[company] = self.pool.submit(
-            research._research_one, self.db_path, company, site_url, self.use_llm, 5
+            research._research_one,
+            self.db_path,
+            company,
+            site_url,
+            self.use_llm,
+            5,
+            self.force,
         )
         return True
 

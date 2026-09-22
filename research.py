@@ -33,7 +33,12 @@ def research_workers() -> int:
 
 
 def _research_one(
-    db_path: Path, company: str, site_url: str | None, use_llm: bool, limit: int
+    db_path: Path,
+    company: str,
+    site_url: str | None,
+    use_llm: bool,
+    limit: int,
+    force: bool = False,
 ) -> dossier.Dossier:
     """Работа одного потока: своё соединение, свой провайдер, свой шлюз.
 
@@ -44,13 +49,21 @@ def _research_one(
     """
     conn = db.connect(db_path)
     try:
-        provider = websearch.SearchProvider.from_env(conn)
+        # «Собрать заново» обходит кэш поиска и кэш страниц: иначе кнопка
+        # пересобирает досье из тех же самых страниц [CORE-016 наоборот —
+        # здесь владелец сознательно платит за свежесть].
+        provider = websearch.SearchProvider.from_env(conn, refresh=force)
         gateway: llm.Gateway | None = None
         if use_llm:
             candidate = llm.Gateway.from_env(conn)
             gateway = candidate if candidate.enabled else None
         return dossier.build(
-            company, provider, gateway=gateway, site_url=site_url, limit=limit
+            company,
+            provider,
+            gateway=gateway,
+            site_url=site_url,
+            limit=limit,
+            force=force,
         )
     finally:
         conn.close()
@@ -98,7 +111,9 @@ def research_companies(
     done = 0
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="dossier") as pool:
         futures = {
-            pool.submit(_research_one, db_path, company, site_url, use_llm, 5): company
+            pool.submit(
+                _research_one, db_path, company, site_url, use_llm, 5, force
+            ): company
             for company, site_url in todo.items()
         }
         for future in as_completed(futures):

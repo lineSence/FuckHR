@@ -87,6 +87,17 @@ def test_страница_читается_один_раз_и_кладётся_�
     assert f.usage.cached == 1
 
 
+def test_refresh_читает_страницу_заново(conn):
+    """Разобранные отзывы лежат в кэше вместе с текстом: без обхода кэша
+    починенный разбор к старым страницам не применяется."""
+    transport = Транспорт()
+    фетчер(transport, conn=conn).fetch("https://dreamjob.ru/c/1")
+    свежий = фетчер(transport, conn=conn, refresh=True)
+    свежий.fetch("https://dreamjob.ru/c/1")
+    assert len(transport.calls) == 2
+    assert свежий.usage.cached == 0
+
+
 def test_потолок_страниц_соблюдается():
     transport = Транспорт()
     f = фетчер(transport, max_pages=1)

@@ -57,7 +57,7 @@ def test_досье_ставится_в_очередь_один_раз_и_сох
     db.init_schema(conn)
     asked: list[str] = []
 
-    def fake_one(db_path, company, site_url, use_llm, limit):
+    def fake_one(db_path, company, site_url, use_llm, limit, force=False):
         asked.append(company)
         return dossier.Dossier(company=company, risk=dossier.RISK_UNKNOWN)
 

@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import sqlite3
+import time
 from typing import Any, Callable, Iterable, Sequence
 
 import settings
@@ -30,17 +31,20 @@ log = logging.getLogger("fuckhr")
 
 
 class PageCache:
-    """Страницы выдачи одного прогона.
+    """Страницы выдачи в памяти процесса, со сроком годности.
 
-    Кэш намеренно живёт в памяти и только на время прогона: страница выдачи
-    стареет за часы, а на диске она превратилась бы в ещё один источник
-    несвежих данных.
+    На диск не пишется: страница выдачи стареет за часы, а в базе она стала бы
+    ещё одним источником несвежих данных. Но и жить ровно один прогон ей не
+    обязательно: в режиме цикла соседние прогоны идут через пять минут и
+    качают ровно те же первые страницы заново. Отсюда срок годности в минутах
+    (`HH_SEARCH_CACHE_MINUTES`) и общий кэш процесса.
     """
 
-    def __init__(self, enabled: bool = True) -> None:
+    def __init__(self, enabled: bool = True, ttl: float = 0.0) -> None:
         self.enabled = enabled
+        self.ttl = max(0.0, float(ttl))
         self.hits = 0
-        self._pages: dict[str, dict[int, list[Any]]] = {}
+        self._pages: dict[str, dict[int, tuple[float, list[Any]]]] = {}
 
     def get(self, key: str, page: int) -> list[Any] | None:
         if not self.enabled:
@@ -48,13 +52,18 @@ class PageCache:
         found = self._pages.get(key, {}).get(page)
         if found is None:
             return None
+        stamp, vacancies = found
+        if self.ttl and time.monotonic() - stamp > self.ttl:
+            # Протухла — забываем, чтобы не держать память между циклами.
+            del self._pages[key][page]
+            return None
         self.hits += 1
-        return list(found)
+        return list(vacancies)
 
     def put(self, key: str, page: int, vacancies: Iterable[Any]) -> None:
         if not self.enabled:
             return
-        self._pages.setdefault(key, {})[page] = list(vacancies)
+        self._pages.setdefault(key, {})[page] = (time.monotonic(), list(vacancies))
 
 
 def cache_key(params: dict[str, Any]) -> str:
@@ -63,9 +72,26 @@ def cache_key(params: dict[str, Any]) -> str:
     return json.dumps(rest, sort_keys=True, ensure_ascii=False, default=str)
 
 
-def search_cache() -> PageCache:
+# Один кэш на процесс: прогоны в режиме цикла живут в нём же, и второй круг
+# через пять минут не платит за те же первые страницы.
+_SHARED: "PageCache | None" = None
+
+
+def cache_minutes() -> float:
+    """Сколько минут страница выдачи считается свежей. Ноль — только этот прогон."""
+    return max(0.0, settings.as_float(os.getenv("HH_SEARCH_CACHE_MINUTES"), 10.0))
+
+
+def search_cache(shared: bool = True) -> PageCache:
     """Кэш по настройке. Выключенный кэш — это просто пустой объект."""
-    return PageCache(enabled=settings.flag("HH_SEARCH_CACHE"))
+    global _SHARED
+    enabled = settings.flag("HH_SEARCH_CACHE")
+    ttl = cache_minutes() * 60.0
+    if not shared or not ttl:
+        return PageCache(enabled=enabled, ttl=ttl)
+    if _SHARED is None or _SHARED.enabled != enabled or _SHARED.ttl != ttl:
+        _SHARED = PageCache(enabled=enabled, ttl=ttl)
+    return _SHARED
 
 
 def page_is_known(conn: sqlite3.Connection | None, vacancies: Sequence[Any]) -> bool:
@@ -146,6 +172,7 @@ def worth_details(
 
 __all__ = (
     "PageCache",
+    "cache_minutes",
     "cache_key",
     "details_delta",
     "known_page_checker",

@@ -50,6 +50,29 @@ def test_повторный_запрос_берётся_из_кэша_прого
     assert cache.hits >= 1
 
 
+def test_протухшая_страница_выдачи_качается_заново() -> None:
+    """Кэш переживает прогон, но не сутки: срок годности в минутах."""
+    cache = hh_pages.PageCache(ttl=600.0)
+    cache.put("ключ", 0, ["вакансия"])
+    assert cache.get("ключ", 0) == ["вакансия"]
+    cache._pages["ключ"][0] = (cache._pages["ключ"][0][0] - 601.0, ["вакансия"])
+    assert cache.get("ключ", 0) is None
+
+
+def test_кэш_выдачи_общий_на_процесс(monkeypatch) -> None:
+    """В режиме цикла соседние прогоны не качают те же первые страницы."""
+    monkeypatch.setenv("HH_SEARCH_CACHE", "1")
+    monkeypatch.setenv("HH_SEARCH_CACHE_MINUTES", "10")
+    hh_pages._SHARED = None
+    первый = hh_pages.search_cache()
+    первый.put("ключ", 0, ["вакансия"])
+    assert hh_pages.search_cache().get("ключ", 0) == ["вакансия"]
+    # Нулевой срок годности возвращает старое поведение: кэш на один прогон.
+    monkeypatch.setenv("HH_SEARCH_CACHE_MINUTES", "0")
+    assert hh_pages.search_cache().get("ключ", 0) is None
+    hh_pages._SHARED = None
+
+
 def test_без_кэша_страницы_качаются_заново() -> None:
     client, calls = _client(None)
     try:

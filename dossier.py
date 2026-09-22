@@ -539,11 +539,12 @@ def build(
     limit: int = 5,
     fetcher: object | None = None,
     conn: object | None = None,
+    force: bool = False,
 ) -> Dossier:
-    """Полный сбор по одной компании: поиск → страницы отзывов → разбор → сводка.
+    """Сбор по компании: поиск → страницы отзывов → разбор → сводка.
 
-    Сетевые ошибки не выбрасываются: провайдер возвращает пустой список, а
-    недоступная страница — пустой текст. Досье получается беднее, но собирается.
+    Сетевые ошибки не выбрасываются: провайдер вернёт пустой список,
+    недоступная страница — пустой текст. `force` — обойти кэш.
     """
     company = (company or "").strip()
     if not company:
@@ -561,7 +562,9 @@ def build(
 
     if fetcher is None:
         # Кэш страниц живёт в той же базе, что и кэш поиска.
-        fetcher = reviewpage.PageFetcher.from_env(conn=getattr(provider, "conn", None))
+        fetcher = reviewpage.PageFetcher.from_env(
+            conn=getattr(provider, "conn", None), refresh=force
+        )
 
     if conn is None:
         conn = getattr(provider, "conn", None)

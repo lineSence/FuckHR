@@ -275,6 +275,7 @@ class PageFetcher:
         proxy: str = "",
         transport: Callable[[str], str] | None = None,
         dump_path: str | None = None,
+        refresh: bool = False,
     ) -> None:
         self.enabled = bool(enabled)
         self.conn = conn
@@ -290,6 +291,10 @@ class PageFetcher:
         self.proxy = (proxy or "").strip()
         self.transport = transport
         self.dump_path = (dump_path or "").strip() or None
+        # «Собрать заново» должно значить «заново»: иначе кнопка возвращает те
+        # же страницы из кэша, и починенный разбор к ним не применяется —
+        # разобранные отзывы лежат в кэше вместе с текстом.
+        self.refresh = bool(refresh)
         self.usage = FetchUsage()
         # Отдельные отзывы прочитанных страниц: url → кортеж ReviewItem.
         self.items: dict[str, tuple[object, ...]] = {}
@@ -297,7 +302,9 @@ class PageFetcher:
             ensure_cache(conn)
 
     @classmethod
-    def from_env(cls, conn: sqlite3.Connection | None = None) -> "PageFetcher":
+    def from_env(
+        cls, conn: sqlite3.Connection | None = None, refresh: bool = False
+    ) -> "PageFetcher":
         def number(name: str, default: str) -> float:
             raw = (os.getenv(name) or "").strip() or default
             try:
@@ -318,10 +325,11 @@ class PageFetcher:
             site_pages=int(number("REVIEW_SITE_PAGES", "2")),
             proxy=(os.getenv("REVIEW_FETCH_PROXY") or "").strip(),
             dump_path=os.getenv("REVIEW_DUMP_PATH"),
+            refresh=refresh,
         )
 
     def _cache_get(self, url: str) -> str | None:
-        if self.conn is None:
+        if self.conn is None or self.refresh:
             return None
         row = self.conn.execute(
             "SELECT text, fetched_at, items FROM page_cache WHERE url = ?", (url,)
