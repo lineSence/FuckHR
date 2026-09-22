@@ -316,7 +316,9 @@ def areas(conn: sqlite3.Connection) -> list[tuple[str, int]]:
     return [(row["area"], int(row["total"])) for row in rows]
 
 
-def pending(conn: sqlite3.Connection, limit: int = 100) -> list[sqlite3.Row]:
+def pending(
+    conn: sqlite3.Connection, limit: int = 100, keys: Sequence[str] | None = None
+) -> list[sqlite3.Row]:
     """Вакансии без точки: сначала самые интересные по скору.
 
     Только вакансии с hh.ru. Дозаполнение открывает `hh.ru/vacancy/<id>`, а id
@@ -324,14 +326,24 @@ def pending(conn: sqlite3.Connection, limit: int = 100) -> list[sqlite3.Row]:
     и на карте появился бы её адрес, выданный за наш. Лучше пустая карта, чем
     правдоподобно неверная [CORE-019].
     """
+    where = "(lat IS NULL OR lng IS NULL) AND COALESCE(source, '') = 'hh.ru'"
+    args: list[object] = []
+    if keys is not None:
+        # Шаг по цели добирает адреса только своим вакансиям: чужие — дело
+        # обычного сбора, и тратить на них паузы hh.ru здесь незачем.
+        if not keys:
+            return []
+        where += " AND key IN ({})".format(",".join("?" * len(keys)))
+        args.extend(keys)
+    args.append(max(1, int(limit)))
     return conn.execute(
         """
         SELECT key, url, title FROM vacancies
-        WHERE (lat IS NULL OR lng IS NULL) AND COALESCE(source, '') = 'hh.ru' 
+        WHERE {}
         ORDER BY COALESCE(score, 0) DESC, last_seen_at DESC
         LIMIT ?
-        """,
-        (max(1, int(limit)),),
+        """.format(where),
+        args,
     ).fetchall()
 
 
@@ -403,7 +415,10 @@ def point_of(detail: Any) -> Point | None:
 
 
 def backfill(
-    conn: sqlite3.Connection, client: Any, limit: int = 100
+    conn: sqlite3.Connection,
+    client: Any,
+    limit: int = 100,
+    keys: Sequence[str] | None = None,
 ) -> tuple[int, int]:
     """Добирает адреса для уже собранных вакансий. Возвращает (точек, попыток).
 
@@ -412,7 +427,7 @@ def backfill(
     """
     import hh_html
 
-    rows = pending(conn, limit)
+    rows = pending(conn, limit, keys)
     filled = 0
     tried = 0
     addressed = 0

@@ -157,6 +157,16 @@ def test_pending_skips_mapped_and_alien_sites() -> None:
     assert [row["key"] for row in geo.pending(conn)] == ["hh:3"]
 
 
+def test_pending_can_be_limited_to_given_keys() -> None:
+    """Шаг по цели добирает адреса только своим вакансиям."""
+    conn = make_db()
+    assert [row["key"] for row in geo.pending(conn, keys=["hh:3", "hh:9"])] == ["hh:3"]
+    # Ключи есть, но не те: ходить в сеть незачем.
+    assert geo.pending(conn, keys=["hh:1"]) == []
+    # Пустой список — цель без вакансий, тоже без запросов.
+    assert geo.pending(conn, keys=[]) == []
+
+
 def test_vacancy_id() -> None:
     assert geo.vacancy_id("https://hh.ru/vacancy/12345?from=x") == "12345"
     assert geo.vacancy_id("https://hh.ru/employer/1") is None
