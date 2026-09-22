@@ -28,6 +28,9 @@ log = logging.getLogger(__name__)
 SEARCH_URL = "https://hh.ru/search/vacancy"
 VACANCY_PREFIX = "https://hh.ru/vacancy/"
 
+# hh.ru не возвращает результаты глубже 2000 позиций.
+HH_MAX_SEARCH_RESULTS = 2000
+
 # Обычные браузерные заголовки. Без Accept-Language hh.ru охотнее показывает капчу.
 BROWSER_HEADERS = {
     "User-Agent": (
@@ -293,7 +296,18 @@ class HHHtmlClient:
         max_pages: int = 3,
         extra: dict[str, Any] | None = None,
     ) -> Iterator[Vacancy]:
-        for page in range(max_pages):
+        # hh.ru сообщает об ошибке при запросе за пределами первых 2000 результатов.
+        # Не отправляем такой запрос: считаем этот предел концом выдачи.
+        max_search_pages = (HH_MAX_SEARCH_RESULTS + per_page - 1) // per_page
+        pages_to_fetch = min(max_pages, max_search_pages)
+        if max_pages > pages_to_fetch:
+            log.info(
+                "hh.ru: конец доступной выдачи на %s-й странице (лимит %s результатов)",
+                pages_to_fetch,
+                HH_MAX_SEARCH_RESULTS,
+            )
+
+        for page in range(pages_to_fetch):
             params: dict[str, Any] = {
                 "text": text,
                 "search_period": period,
@@ -319,7 +333,7 @@ class HHHtmlClient:
             vacancies = [v for v in vacancies if v.external_id and v.title]
             log.info("страница %s: вакансий %s", page, len(vacancies))
             yield from vacancies
-            if not vacancies:
+            if len(vacancies) < per_page:
                 break
 
     def vacancy(self, vacancy_id: str) -> dict[str, Any]:
