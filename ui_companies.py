@@ -26,6 +26,7 @@ import fake_rules
 import fake_store
 import market_rules
 import market_store
+import profiles
 import reviewlegit_store
 from ui_cleanup import CONFIRM_WORD, apply_cleanup, render_cleanup
 from ui_core import details, esc, sort_head, sort_pick, table
@@ -226,10 +227,29 @@ def render_companies(
             "сканировании — по тем компаниям, чьи вакансии прошли порог. Нужен "
             'настроенный поиск: смотри страницу «Поиск».</div>'
         )
+    # Почему компаний меньше, чем вакансий: порогов два. В список вакансий
+    # попадает всё, что прошло предфильтр, а досье собирается только по тем,
+    # что прошли порог профиля — за досье платят запросы поиска и время.
+    threshold = profiles.dossier_threshold()
+    vacancies = int(
+        conn.execute("SELECT COUNT(*) FROM vacancies").fetchone()[0] or 0
+    )
     summary = (
         "<p class=muted>Досье: {total} · с красными флагами: {red} · без единого "
         "отзыва: {empty} · под фильтр подошло: {found}</p>"
-    ).format(total=total, red=red, empty=empty, found=found)
+        "<p class=muted>Порогов два: в списке вакансий — всё, что прошло "
+        "предфильтр ({vacancies} шт.), досье — только компании вакансий от "
+        '{threshold:.0f} баллов (<a href="/profile">порог профиля</a>, '
+        '<a href="/vacancies?min_score={threshold:.0f}">эти вакансии</a>). '
+        "За досье платят запросы поиска, поэтому оно не на всех.</p>"
+    ).format(
+        total=total,
+        red=red,
+        empty=empty,
+        found=found,
+        threshold=threshold,
+        vacancies=vacancies,
+    )
     health = reviewlegit_store.health_line(reviewlegit_store.health(conn))
     if health:
         # Отброшенное показывается числом: поломку разбора иначе видно только
@@ -517,9 +537,12 @@ def render_company(
     row = dossier.load(conn, name)
     if row is None:
         return (
-            '<div class=warn>Досье на «{}» ещё не собрано.</div>'
+            '<div class=warn>Досье на «{name}» ещё не собрано. Оно собирается '
+            "автоматически, но только по компаниям вакансий от {threshold:.0f} "
+            "баллов: остальные лежат в списке, а запросы поиска на них не "
+            "тратятся.</div>"
             '<p><a href="/companies">К списку компаний</a></p>'
-        ).format(esc(name))
+        ).format(name=esc(name), threshold=profiles.dossier_threshold())
 
     rating = "—"
     if row["avg_rating"] is not None:

@@ -331,3 +331,17 @@ def test_карточка_называет_свою_площадку(conn, make_
     assert "открыть на Работа.ру" in html
     assert "открыть на Zarplata.ru" in html
     assert "открыть на hh.ru" not in html
+
+
+def test_список_называет_порог_досье(conn, make_vacancy, monkeypatch) -> None:
+    """«19 вакансий, а досье 5» — это два разных порога, и об этом надо сказать."""
+    import profiles
+
+    monkeypatch.setattr(profiles, "dossier_threshold", lambda: 45.0)
+    conditions.ensure_schema(conn)
+    contacts.ensure_schema(conn)
+    db.upsert_vacancy(conn, make_vacancy(external_id="1"), 42.0, [])
+
+    html = webui.render_vacancies(conn, 0.0, 10)
+
+    assert "от 45 баллов" in html

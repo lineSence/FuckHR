@@ -448,6 +448,15 @@ def run_once(args: argparse.Namespace) -> int:
     # Досье на компании. Идёт после hh.ru и до отправки карточек: без него в
     # карточке не будет самой полезной строки.
     researched: dict[str, dossier.Dossier] = {}
+    # Строка про два порога: в базу попадает всё, что прошло предфильтр, а
+    # досье и контакты — только то, что прошло порог профиля. Без этой строки
+    # «вакансий 19, досье 5» выглядит как потеря данных.
+    log.info(
+        "в очередь на досье: компаний %s из %s вакансий прогона (порог профиля %.0f)",
+        len(to_research),
+        len(drafts),
+        profiles.min_threshold(bundle),
+    )
     if to_research:
         researched = research_companies(
             conn, db_path, to_research, use_llm=options.use_llm

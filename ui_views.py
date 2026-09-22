@@ -30,6 +30,7 @@ import aitext
 import market
 import market_rules
 import outreach
+import profiles
 import settings
 import source_store
 import sources
@@ -239,15 +240,20 @@ def render_vacancies(
         + ui_filters.sort_line(filters.VACANCY_SORTS, query, "/vacancies")
     )
 
+    # Порог профиля здесь же: без него «19 вакансий, а досье 5» выглядит
+    # поломкой, хотя это два разных порога (docs/dossier.md).
+    threshold = profiles.dossier_threshold()
     summary = (
         "<p class=muted>В базе {vacancies} вакансий · под фильтр подошло "
-        "{found} · показано {shown} · прямых контактов {direct} из {total}.</p>"
+        "{found} · показано {shown} · прямых контактов {direct} из {total}. "
+        "Досье, контакты и письма — только от {threshold:.0f} баллов.</p>"
     ).format(
         vacancies=stats.get("vacancies", 0),
         found=found,
         shown=len(rows),
         direct=direct,
         total=total,
+        threshold=threshold,
     )
 
     if not rows:
