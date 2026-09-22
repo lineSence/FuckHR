@@ -39,6 +39,7 @@ from typing import Sequence
 
 log = logging.getLogger("jobs")
 
+# Поток исходной консоли. Web UI может работать с перенаправленным stdout.\n# Сохраняем реальный терминал, чтобы лог задачи всё равно был виден в консоли.\nCONSOLE = sys.__stdout__ if sys.__stdout__ is not None else sys.stdout\n
 ROOT = Path(__file__).resolve().parent
 LOG_DIR = ROOT / "data" / "jobs"
 MAX_LINES = 4000
@@ -298,10 +299,15 @@ class Runner:
         if not self.echo:
             return
         try:
-            sys.stdout.write("[{}] {}\n".format(job.task, line))
-            sys.stdout.flush()
+            CONSOLE.write("[{}] {}\n".format(job.task, line))
+            CONSOLE.flush()
         except Exception:  # noqa: BLE001 — терминал — удобство, а не обязательство
-            pass
+            # Финальная попытка через текущий stdout для нестандартных сред.
+            try:
+                sys.stdout.write("[{}] {}\n".format(job.task, line))
+                sys.stdout.flush()
+            except Exception:
+                pass
 
     def _append(self, job: Job, line: str, handle: object | None) -> None:
         counter = parse_progress(line)
