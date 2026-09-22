@@ -17,6 +17,12 @@
   цель выбрана руками, и «не подходит по скору» здесь не повод прятать;
 - письмо по-прежнему пишется от вакансии, а не от компании [OUT-004].
 
+Дополнение 20.09.2026 (B-16): у крупной компании вакансий бывает тысяча — из
+разных городов и с любым скором. «Показываем все» остаётся правдой про
+хранение, но глазам нужен отбор: город, порог скора, слово в названии и
+порядок (VAC_SORTS). Это отбор на экране, а не правило сбора: ни одна
+вакансия из базы не исчезает.
+
 Здесь только хранилище и правила. Сеть — в `hh_employer.py`, шаги —
 в `target_scan.py`, страница — в `ui_targets.py`.
 """
@@ -39,6 +45,20 @@ EXPECTED_MAX = 10
 # Слежение — раз в сутки. Чаще бессмысленно: вакансии не появляются ежечасно,
 # а каждый лишний обход это риск капчи [CORE-014].
 WATCH_HOURS = 24
+
+# Порядок вакансий внутри цели. Из браузера приходит только имя ключа, в SQL
+# подставляется выражение отсюда: строка из формы в ORDER BY не попадает
+# никогда. Обратного порядка нет намеренно — у скора и даты осмысленно только
+# убывание, у города и названия только алфавит [CORE-025].
+VAC_SORTS = {
+    "fresh": "tv.fresh DESC, v.published_at DESC",
+    "score": "COALESCE(v.score, 0) DESC, v.published_at DESC",
+    "date": "v.published_at DESC",
+    "area": "COALESCE(v.area, '') COLLATE NOCASE, v.published_at DESC",
+    "title": "v.title COLLATE NOCASE",
+}
+
+VAC_SORT_DEFAULT = "fresh"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS company_targets (
@@ -223,20 +243,75 @@ def link(conn: sqlite3.Connection, target_id: int, keys: list[str]) -> int:
     return len(fresh)
 
 
-def vacancies(conn: sqlite3.Connection, target_id: int) -> list[sqlite3.Row]:
-    """Все вакансии цели: порог профиля здесь не применяется (решение владельца)."""
+def _like(value: str) -> str:
+    """Шаблон для LIKE: % и _ из поля поиска — обычные символы, не джокеры."""
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def vacancies(
+    conn: sqlite3.Connection,
+    target_id: int,
+    sort: str = VAC_SORT_DEFAULT,
+    area: str = "",
+    min_score: float = 0.0,
+    query: str = "",
+) -> list[sqlite3.Row]:
+    """Вакансии цели, при желании отобранные городом, скором и словом.
+
+    Порог профиля по-прежнему не применяется: цель выбрана руками. Отбор тут
+    про глаза владельца, а не про правила сбора — у компании на тысячу
+    вакансий «показаны все» означает «не найти ни одной». Вызов без
+    аргументов ведёт себя как раньше: весь список, новые сверху.
+
+    Имя порядка приходит из браузера, поэтому в SQL подставляется не оно,
+    а выражение из VAC_SORTS; чужое имя молча заменяется умолчанием.
+    """
     ensure_schema(conn)
+    order = VAC_SORTS.get(str(sort or ""), VAC_SORTS[VAC_SORT_DEFAULT])
+    where = ["tv.target_id = ?"]
+    params: list[object] = [int(target_id)]
+    if area:
+        where.append("COALESCE(v.area, '') = ?")
+        params.append(area)
+    if min_score:
+        where.append("COALESCE(v.score, 0) >= ?")
+        params.append(float(min_score))
+    text = (query or "").strip()
+    if text:
+        where.append("v.title LIKE ? ESCAPE '\\'")
+        params.append("%" + _like(text) + "%")
     cur = conn.execute(
         """
         SELECT v.*, tv.fresh AS fresh, tv.found_at AS found_at
           FROM target_vacancies tv
           JOIN vacancies v ON v.key = tv.key
+         WHERE {where}
+         ORDER BY {order}
+        """.format(where=" AND ".join(where), order=order),
+        params,
+    )
+    return list(cur.fetchall())
+
+
+def areas(conn: sqlite3.Connection, target_id: int) -> list[tuple[str, int]]:
+    """Города вакансий цели со счётчиком, самые населённые сверху.
+
+    Список городов берётся из самих вакансий, а не из справочника: в отборе
+    должно быть ровно то, что реально есть у этой компании.
+    """
+    ensure_schema(conn)
+    cur = conn.execute(
+        """
+        SELECT COALESCE(v.area, '') AS area, COUNT(*) AS total
+          FROM target_vacancies tv
+          JOIN vacancies v ON v.key = tv.key
          WHERE tv.target_id = ?
-         ORDER BY tv.fresh DESC, v.published_at DESC
+         GROUP BY COALESCE(v.area, '')
+         ORDER BY total DESC, area COLLATE NOCASE
         """,
         (int(target_id),),
     )
-    return list(cur.fetchall())
+    return [(row["area"] or "", int(row["total"])) for row in cur.fetchall()]
 
 
 def counts(conn: sqlite3.Connection, target_id: int) -> tuple[int, int]:
@@ -299,9 +374,12 @@ __all__ = (
     "EXPECTED_MAX",
     "SCHEMA",
     "Target",
+    "VAC_SORTS",
+    "VAC_SORT_DEFAULT",
     "WATCH_HOURS",
     "add",
     "all_targets",
+    "areas",
     "by_company",
     "counts",
     "due",

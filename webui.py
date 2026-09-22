@@ -2,20 +2,25 @@
 
 Здесь четыре вещи, которые раньше жили в терминале:
 
-- запуск: сбор, письма, проверка модели и тесты — кнопками, с полоской и живым
+- запуск: сбор, проверка модели и тесты — кнопками, с полоской и живым
   логом; тот же вывод дублируется в терминал, где запущен интерфейс;
 - настройки: весь .env формой, профили поиска карточками и подробные параметры поиска;
-- выдача: вакансии, условия, HR-флаги, досье на компании, контакты, выдача
+- выдача: вакансии, условия, HR-флаги, карта, досье на компании, контакты, выдача
   поиска, маршруты модели;
 - очистка: удаление накопленных данных по целям, с подтверждением там, где
   потеря необратима.
 
-В командной строке остаётся только запуск самих программ: python run.py и
-python outreach.py без флагов, параметры они берут из .env. Так же их запускает
-планировщик Windows, и настройки у них одни и те же.
+На странице запуска только то, что гоняется регулярно. Задачи, привязанные к
+своим данным — шаг по цели, сбор адресов для карты — запускаются из своих
+разделов, где видно, зачем они нужны. Отладочные прогоны без записи и подготовка
+писем остаются в командной строке: python run.py --dry-run, python outreach.py.
+
+В командной строке остаётся и запуск самих программ: python run.py без флагов,
+параметры они берут из .env. Так же их запускает планировщик Windows, и настройки
+у них одни и те же.
 
 Файл сознательно тонкий: здесь только сервер и маршруты. Страницы живут в
-`ui_views.py`, `ui_forms.py`, `ui_resume.py` и `ui_companies.py`, раздел профилей
+`ui_views.py`, `ui_forms.py`, `ui_resume.py`, `ui_map.py` и `ui_companies.py`, раздел профилей
 целиком — в `webui_profile.py` и `ui_profiles.py`,
 общие детали — в `ui_core.py`. Имена страниц проброшены сюда же, чтобы
 webui.render_vacancies и подобные продолжали работать.
@@ -28,6 +33,10 @@ webui.render_vacancies и подобные продолжали работать
 - на диск пишет только .env, profile.yaml и логи задач;
 - без новых зависимостей: http.server из стандартной библиотеки справляется с одним
   пользователем.
+
+Карта сама по себе эти границы не двигает: сервер отдаёт точки из базы, в сеть
+ходит только браузер — за тайлами и Leaflet. Сбор адресов со страницы карты — это
+та же фоновая задача из jobs.TASKS, что и из CLI.
 
 Запуск:
     python webui.py                 # http://127.0.0.1:8765
@@ -90,6 +99,7 @@ from ui_forms import (
     start_bench,
 )
 import ui_injections
+import ui_map
 import ui_research
 import ui_targets
 import ui_run
@@ -112,7 +122,7 @@ log = logging.getLogger("webui")
 # Адреса, которые существуют только для форм. GET сюда приходит не от ссылки,
 # а от F5 или «назад», и отвечать на это «такой страницы нет» — грубо.
 POST_ONLY = frozenset(
-    {"/run", "/stop", "/loop", "/bench", "/llm/apply", "/intake/apply"}
+    {"/run", "/stop", "/loop", "/bench", "/llm/apply", "/intake/apply", "/map/geo"}
 )
 
 
@@ -127,6 +137,15 @@ class Handler(BaseHTTPRequestHandler):
         payload = body.encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def _send_json(self, body: str, status: int = 200) -> None:
+        """Единственный не-HTML ответ: точки карты грузятся отдельно от страницы."""
+        payload = body.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)
@@ -177,14 +196,26 @@ class Handler(BaseHTTPRequestHandler):
                     self._send(
                         page(
                             "Вакансии",
-                            render_vacancies(conn, 0.0, limit, "score", flat(params)),
+                            ui_map.hint(conn)
+                            + render_vacancies(conn, 0.0, limit, "score", flat(params)),
                         )
                     )
+                elif parsed.path == "/map":
+                    # Карта читает те же вакансии, что и список: отдельного сбора
+                    # для неё нет, точки — это адреса из базы.
+                    self._send(page("Карта", ui_map.render_map(conn, flat(params))))
+                elif parsed.path == "/map/points.json":
+                    # Точки отдельным ответом: страница открывается сразу, а метки
+                    # приезжают следом и только если Leaflet загрузился.
+                    self._send_json(ui_map.points_json(conn, flat(params)))
                 elif parsed.path == "/vacancy":
                     # GET ничего не запускает: сбор черновика дёргает внешний
                     # поиск и модель, и обновление страницы жгло бы бюджет
                     # SEARCH_MAX_CALLS/LLM_MAX_CALLS [CORE-016].
-                    body = render_vacancy(conn, one("key"), with_draft=False)
+                    key = one("key")
+                    body = ui_map.link(conn, key) + render_vacancy(
+                        conn, key, with_draft=False
+                    )
                     self._send(page("Вакансия", body))
                 elif parsed.path == "/companies":
                     # Компании и контакты — один раздел: канал без работодателя
@@ -276,6 +307,21 @@ class Handler(BaseHTTPRequestHandler):
                     self._send(page("Запуск", body, refresh, "/"))
                     return
                 self._redirect("/?job={}".format(job.id))
+                return
+
+            if parsed.path == "/map/geo":
+                # Сбор всех недостающих адресов. Из браузера не приходит ни
+                # одного аргумента: команда целиком взята из jobs.TASKS [CORE-023].
+                job_id, problem = ui_map.start_backfill()
+                if job_id is None:
+                    conn = open_db()
+                    try:
+                        body = ui_map.render_map(conn, {}, problem)
+                        self._send(page("Карта", body))
+                    finally:
+                        conn.close()
+                    return
+                self._redirect("/?job={}".format(job_id))
                 return
 
             if parsed.path == "/bench":
@@ -424,7 +470,9 @@ class Handler(BaseHTTPRequestHandler):
                 key = (form.get("key") or [""])[0]
                 conn = open_db()
                 try:
-                    body = render_vacancy(conn, key, with_draft=True)
+                    body = ui_map.link(conn, key) + render_vacancy(
+                        conn, key, with_draft=True
+                    )
                     self._send(page("Вакансия", body))
                 finally:
                     conn.close()
@@ -487,6 +535,7 @@ __all__ = (
     "Handler",
     "NAV",
     "NAV_ITEMS",
+    "POST_ONLY",
     "STYLE",
     "apply_cleanup",
     "area_field",
