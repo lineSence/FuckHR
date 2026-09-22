@@ -29,6 +29,7 @@ import contacts
 import embeddings_store
 import jobs
 import llm
+import llm_profiles
 import llm_embed
 import profile_form
 import settings
@@ -185,22 +186,39 @@ def render_llm(
             )
         )
 
+    values = settings.load()
     rows = []
     for stage, profile, route, model, source in gateway.describe_routes():
         marker = ""
         if stage in llm.PERSONAL_STAGES and route == llm.ROUTE_PROXY:
             marker = ' <span class=pill>персональные данные уходят наружу</span>'
+        # Поле правит ту настройку, которая на этом маршруте и работает:
+        # держать 24 поля отдельным списком в настройках — гарантированный
+        # разъезд между тем, что видно, и тем, что применяется (docs/ui-map.md).
+        env = (
+            llm_profiles.STAGE_MODEL_ENV.get(stage, "")
+            if route == llm.ROUTE_PROXY
+            else llm_profiles.LOCAL_STAGE_MODEL_ENV.get(stage, "")
+        )
+        field = esc(model or "не задана")
+        if env:
+            field = (
+                '<input type=text name="{env}" value="{value}" size=22 '
+                'placeholder="{model}"><div class=hint>{env}</div>'
+            ).format(env=esc(env), value=esc(values.get(env, "")), model=esc(model or ""))
         rows.append(
             [
                 esc(stage),
                 esc(profile),
                 esc(route) + marker,
-                esc(model or "не задана"),
+                field,
                 esc(source),
             ]
         )
+    parts.append('<form method=post action="/llm/stages">')
+    parts.append(table(["Этап", "Профиль", "Маршрут", "Модель", "Имя из"], rows))
     parts.append(
-        table(["Этап", "Профиль", "Маршрут", "Модель", "Имя из"], rows)
+        "<p><button class=secondary>Сохранить модели по этапам</button></p></form>"
     )
     parts.append(
         "<p class=muted>«Имя из» — откуда взято имя модели: каскад этапа, имя этапа, "
@@ -208,6 +226,11 @@ def render_llm(
         "уходит название профиля: шлюзу с одной моделью этого хватает, а Ollama с "
         "несколькими ответит «model not found» — задай LLM_LOCAL_MODEL_* или "
         "LLM_LOCAL_STAGE_MODEL_*.</p>"
+    )
+    parts.append(
+        "<p class=muted>Пустое поле модели — этап берёт модель своего профиля. "
+        "Поле правит настройку того маршрута, который у этапа сейчас: сменишь "
+        "маршрут — правится другая.</p>"
     )
 
     unmapped = gateway.unmapped_profiles() if gateway.proxy_base_url else []

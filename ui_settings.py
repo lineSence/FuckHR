@@ -236,6 +236,15 @@ def render_settings(saved: Sequence[str] = ()) -> str:
     parts.append(review_sites_block(values))
 
     for position, (group, fields) in enumerate(settings.groups()):
+        if group == settings.GROUP_LLM_STAGES:
+            # Модели по этапам живут в таблице маршрутов: там видно, какой
+            # этап куда идёт. Два места для одних и тех же 24 полей разъедутся
+            # (docs/ui-map.md).
+            parts.append(
+                '<p class=muted>Модели по этапам — в таблице маршрутов на '
+                '<a href="/llm">странице модели</a>: поле стоит в строке этапа.</p>'
+            )
+            continue
         opened = position == 0
         parts.append(
             (

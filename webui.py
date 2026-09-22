@@ -60,6 +60,7 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import jobs
+import llm_profiles
 import llm
 import settings
 from ui_companies import (
@@ -129,7 +130,7 @@ POST_ONLY = frozenset(
     {
         "/run", "/stop", "/loop", "/bench", "/dataset", "/llm/apply",
         "/intake/apply", "/map/geo", "/sources", "/runopts", "/cookie",
-        "/area", "/deep",
+        "/area", "/deep", "/llm/stages",
     }
 )
 
@@ -358,6 +359,21 @@ class Handler(BaseHTTPRequestHandler):
                     finally:
                         conn.close()
                     return
+                self._redirect("/llm")
+                return
+
+            if parsed.path == "/llm/stages":
+                # Имена ключей сверяются с закрытым списком: из браузера
+                # приходит только то, что мы сами нарисовали в таблице.
+                allowed = set(llm_profiles.STAGE_MODEL_ENV.values()) | set(
+                    llm_profiles.LOCAL_STAGE_MODEL_ENV.values()
+                )
+                updates = {
+                    key: (values or [""])[0].strip()
+                    for key, values in form.items()
+                    if key in allowed
+                }
+                settings.save(updates)
                 self._redirect("/llm")
                 return
 

@@ -210,8 +210,11 @@ def test_страница_настроек_складывается_в_подк�
     """
     html = ui_views.render_settings()
 
-    # Групп каталога плюс один блок галочек «искать отзывы только на».
-    assert html.count("<details class=setgroup") == len(settings.GROUPS) + 1
+    # Групп каталога плюс блок галочек «искать отзывы только на», минус
+    # «Модель по этапам»: она уехала в таблицу маршрутов.
+    assert html.count("<details class=setgroup") == len(settings.GROUPS)
+    assert settings.GROUP_LLM_STAGES not in html
+    assert 'href="/llm"' in html
     assert "Искать отзывы только на" in html
     assert html.count(" open>") == 1  # раскрыт только первый подкат
     assert 'id="setq"' in html or "id=setq" in html
@@ -485,3 +488,19 @@ def test_консоль_лога_держит_прокрутку(monkeypatch) ->
     body, refresh = ui_run.render_run()
     assert "id=log" in body and "sessionStorage" in body
     assert refresh == 2
+
+
+def test_модель_этапа_правится_в_строке_таблицы(conn, monkeypatch) -> None:
+    import llm_profiles
+    import ui_forms
+
+    monkeypatch.setattr(settings, "flag", lambda key: key == "LLM_ENABLED")
+    html = ui_forms.render_llm(conn)
+    # Поле стоит в строке этапа и правит настройку того маршрута, который сейчас.
+    assert 'action="/llm/stages"' in html
+    assert any(
+        'name="{}"'.format(env) in html
+        for env in llm_profiles.LOCAL_STAGE_MODEL_ENV.values()
+    ) or any(
+        'name="{}"'.format(env) in html for env in llm_profiles.STAGE_MODEL_ENV.values()
+    )
