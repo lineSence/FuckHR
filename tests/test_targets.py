@@ -12,6 +12,7 @@ import pytest
 
 import db
 import hh_employer
+import hh_html
 import targets
 import ui_targets
 from hh import Vacancy
@@ -23,6 +24,17 @@ EMPLOYER_PAGE = """
 <a href="/employer/1455">Яндекс</a>
 <a href="/vacancy/999">не работодатель</a>
 """
+
+# Страница после редизайна: ссылок в разметке нет, всё в JSON состояния.
+STATE_PAGE = (
+    '<template id="HH-Lux-InitialState">'
+    '{"employerSearch": {"employers": ['
+    '{"id": 1455, "name": "\\u042f\\u043d\\u0434\\u0435\\u043a\\u0441", '
+    '"vacanciesCount": 100, "areaName": "\\u041c\\u043e\\u0441\\u043a\\u0432\\u0430"}, '
+    '{"id": 3529, "name": "\\u0421\\u0431\\u0435\\u0440", "vacanciesCount": 7}'
+    "]}}"
+    "</template>"
+)
 
 
 class FakeClient:
@@ -43,6 +55,17 @@ class FakeClient:
         pass
 
 
+class BlockedClient(FakeClient):
+    """hh.ru показывает капчу вместо выдачи."""
+
+    def fetch(self, url: str, params: dict | None = None) -> str:
+        raise hh_html.BlockedError("капча на странице поиска")
+
+    def search(self, text, period=0, max_pages=0, extra=None):
+        raise hh_html.BlockedError("капча на странице поиска")
+        yield  # pragma: no cover
+
+
 @pytest.fixture()
 def conn() -> sqlite3.Connection:
     conn = db.connect(":memory:")
@@ -51,13 +74,16 @@ def conn() -> sqlite3.Connection:
     return conn
 
 
-def vacancy(external_id: str, company: str = "Яндекс") -> Vacancy:
+def vacancy(
+    external_id: str, company: str = "Яндекс", company_id: str | None = None
+) -> Vacancy:
     return Vacancy(
         source="hh",
         external_id=external_id,
         url="https://hh.ru/vacancy/" + external_id,
         title="Python разработчик " + external_id,
         company=company,
+        company_id=company_id,
         description="текст",
     )
 
@@ -76,9 +102,42 @@ def test_candidates_deduplicated() -> None:
     assert [(e.id, e.name) for e in found] == [("1455", "Яндекс"), ("3529", "Сбербанк")]
 
 
+def test_candidates_read_page_state() -> None:
+    # Ссылок в разметке нет — работодатели берутся из состояния страницы.
+    found = hh_employer.candidates(FakeClient(STATE_PAGE), "Яндекс")
+    assert [(e.id, e.name) for e in found] == [("1455", "Яндекс"), ("3529", "Сбер")]
+
+
+def test_candidates_fall_back_to_vacancy_search() -> None:
+    # Страница поиска компаний непонятная, но выдача вакансий работает.
+    client = FakeClient(
+        "<html>ничего</html>",
+        items=[vacancy("1", company_id="1455"), vacancy("2", company_id="1455")],
+    )
+    found = hh_employer.candidates(client, "Яндекс")
+    assert [(e.id, e.name) for e in found] == [("1455", "Яндекс")]
+    assert ("search", {"search_field": "company_name"}) in client.calls
+
+
 def test_candidates_survive_broken_page() -> None:
     # Редизайн hh.ru — это пустой список, а не падение страницы.
     assert hh_employer.candidates(FakeClient("<html>ничего</html>"), "Яндекс") == []
+
+
+def test_captcha_is_not_reported_as_empty_result(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # «Не нашлось» на капче заставляет владельца править название вместо cookie.
+    monkeypatch.setattr(ui_targets, "_client", lambda: BlockedClient())
+    note = ui_targets.add_from_input(conn, "Яндекс")
+    assert "hh.ru не пускает" in note
+    assert targets.all_targets(conn) == []
+
+
+def test_inn_target_explains_next_step(conn: sqlite3.Connection) -> None:
+    note = ui_targets.add_from_input(conn, "7736207543")
+    assert "ИНН" in note and "Ресёрч" in note.replace("ресёрч", "Ресёрч")
+    assert len(targets.all_targets(conn)) == 1
 
 
 def test_add_updates_without_duplicating(conn: sqlite3.Connection) -> None:

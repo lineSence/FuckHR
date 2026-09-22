@@ -9,8 +9,8 @@
 запросы и своё время.
 
 В браузер не уходит ничего, кроме id цели. Название компании для подпроцесса
-берётся из базы: строку из формы владелец вводит свободную, и в argv ей не
-место.
+берётся из базы: строку из формы владелец вводит свободную, и в argv ей
+не место.
 """
 
 from __future__ import annotations
@@ -49,13 +49,17 @@ def _client() -> object:
 
 def add_from_input(conn: sqlite3.Connection, text: str) -> str:
     """Название, ссылка или ИНН → цель либо список кандидатов на выбор."""
+    from hh_html import BlockedError
+
     ask = hh_employer.parse_input(text)
     if ask.kind == "inn":
         # По ИНН hh.ru не ищется: это ключ к реестрам, а не к работодателю.
         targets.add(conn, text.strip(), inn=ask.value, source="inn")
         return (
-            "Цель добавлена по ИНН. Названия работодателя на hh.ru у неё пока нет: "
-            "найди его по имени, чтобы собрать вакансии."
+            "Цель добавлена по ИНН. На hh.ru по ИНН ничего не ищется — это ключ к "
+            "реестрам, а не к работодателю. Запусти у цели «Глубокий ресёрч», а "
+            "чтобы собрать вакансии, добавь ту же компанию ещё раз по названию "
+            "или ссылке — цель не раздвоится, а дополнится."
         )
     client = _client()
     try:
@@ -66,16 +70,28 @@ def add_from_input(conn: sqlite3.Connection, text: str) -> str:
         else:
             options = hh_employer.candidates(client, ask.value)
             if not options:
-                return "На hh.ru такой компании не нашлось. Проверь название или дай ссылку."
+                return (
+                    "На hh.ru такой компании не нашлось. Проверь название или дай "
+                    "ссылку на страницу компании или на любую её вакансию. Если "
+                    "компания точно есть на hh.ru, сырая страница поиска лежит в "
+                    "data/failures — по ней видно, что именно отдал hh.ru."
+                )
             if len(options) == 1:
                 found = options[0]
             else:
                 _CANDIDATES[ask.value] = options
                 return ""
+    except BlockedError as exc:
+        # Молчаливое «не нашлось» на капче — худший ответ: владелец начнёт
+        # править название вместо того, чтобы обновить cookie [CORE-014].
+        return "hh.ru не пускает: {}".format(exc)
     finally:
         getattr(client, "close", lambda: None)()
     if found is None:
-        return "Страница компании не открылась: попробуй ещё раз или дай название."
+        return (
+            "Страница компании не открылась или имя с неё не вынулось: попробуй "
+            "ещё раз или добавь по названию."
+        )
     targets.add(
         conn, found.name, employer_id=found.id, site=found.link, source=ask.kind
     )

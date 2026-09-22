@@ -7,14 +7,13 @@
 Источник данных — HTML страниц hh.ru: публичный API закрыт с апреля 2026
 (ADR-015). Запускается из Task Scheduler через pythonw.exe (ADR-014).
 
-Настроек в командной строке больше нет. Сколько собирать, по какому профилю,
-ходить ли за описаниями и использовать ли модель — всё это живёт в .env и
-правится в веб-интерфейсе (webui.py). Флаги --dry-run и --verbose остались:
-это не настройки, а режим одного запуска.
+Настроек в командной строке нет: сколько собирать, по какому профилю, ходить ли
+за описаниями и звать ли модель — всё живёт в .env и правится в веб-интерфейсе
+(webui.py). Флаги --dry-run и --verbose остались: это режим запуска, а не
+настройки.
 
-Что означает лимит (RUN_LIMIT). Он ограничивает именно сбор: как только
-набралось N вакансий, прошедших предфильтр, остальные страницы и запросы не
-запрашиваются.
+RUN_LIMIT ограничивает именно сбор: как только набралось N вакансий, прошедших
+предфильтр, остальные страницы и запросы не запрашиваются.
 
 У прогона шесть обязанностей:
 1. собрать и отправить карточки;
@@ -24,12 +23,11 @@
 5. найти рабочие контакты по этим же вакансиям (outreach.collect_contacts);
 6. пожаловаться, если сам сломался (canary.py), а не тихо вернуть ноль.
 
-Почему досье собирается параллельно и после порога — см. research.py. Порог
-здесь главный фильтр цены: досье собирается только по тем конторам, чей оффер
-вообще интересен.
+Порог здесь главный фильтр цены: досье собирается только по тем конторам, чей
+оффер вообще интересен. Почему параллельно и почему после порога — research.py.
 
-Контакты ищутся здесь, письма — нет. Наличие рабочего канала — такой же факт
-о вакансии, как скор и HR-флаги, и он нужен в карточке сразу. А черновик письма
+Контакты ищутся здесь, письма — нет. Наличие рабочего канала — такой же факт о
+вакансии, как скор и HR-флаги, и он нужен в карточке сразу. А черновик письма
 готовится кнопкой рядом с вакансией или запуском outreach.py: письмо — решение
 человека, а не побочный эффект ночного сканирования ([OUT-006], ADR-012).
 
@@ -61,6 +59,7 @@ import db
 import detector
 import detector_llm
 import dossier
+import hh_pages
 import llm
 import injection_store
 import llm_batch
@@ -170,6 +169,10 @@ def run_once(args: argparse.Namespace) -> int:
     new_count = 0
     enriched = 0
     reused_details = 0
+    # Сколько карточек не стали качать: даже идеальное описание не вытянуло бы
+    # вакансию до порога профиля (PREFILTER_DETAILS_DELTA, B-15).
+    skipped_details = 0
+    details_delta = hh_pages.details_delta()
     to_extract: list[Any] = []
     to_claim: list[tuple[Any, Any]] = []
     empty_descriptions = 0
@@ -188,6 +191,7 @@ def run_once(args: argparse.Namespace) -> int:
         cookie=os.getenv("HH_COOKIE") or None,
         proxy=os.getenv("HH_PROXY") or None,
         failure_dir=settings.get("FAILURE_DIR", "data/failures"),
+        cache=hh_pages.search_cache(),
     )
     try:
         seen, drafts, owners = profiles.collect_all(
@@ -209,16 +213,17 @@ def run_once(args: argparse.Namespace) -> int:
             # Счётчик в квадратных скобках — то, по чему интерфейс рисует полоску.
             log.info("[%s/%s] %s — %s", position, total, draft.title, draft.company)
             vacancy = draft
-            # Описание из базы вместо второго похода на hh.ru. Карточка вакансии
-            # стоит паузы в пару секунд, и на повторном прогоне именно эти
-            # запросы съедали почти всё время. Дата публикации сменилась —
-            # значит объявление переопубликовали, описание качаем заново.
+            # Описание из базы вместо второго похода на hh.ru: на повторном
+            # прогоне именно эти запросы съедали почти всё время. Дата публикации
+            # сменилась — объявление перепубликовали, описание качаем заново.
             cached = db.cached_details(conn, draft.key) if with_details else None
             if cached and (not draft.published_at or cached[2] == draft.published_at):
                 text, skills, _published = cached
                 vacancy = draft.model_copy(update={"description": text, "skills": skills})
                 reused_details += 1
-            elif with_details:
+            elif with_details and hh_pages.worth_details(
+                draft, bundle, owners.get(draft.key), prefilter.fuzzy, details_delta
+            ):
                 try:
                     vacancy = enrich(draft, client.vacancy(draft.external_id))
                     enriched += 1
@@ -231,6 +236,8 @@ def run_once(args: argparse.Namespace) -> int:
                     with_details = False
                 except Exception:  # noqa: BLE001 — вакансия могла быть уже закрыта
                     log.warning("нет деталей по %s, берём черновик", draft.external_id)
+            elif with_details:
+                skipped_details += 1
             # Спрятанная в тексте инструкция для ИИ — поступок работодателя,
             # а не техническая помеха (ADR-020). Запоминаем до скоринга: улика
             # нужна оценке компании и строке карточки.
@@ -253,7 +260,7 @@ def run_once(args: argparse.Namespace) -> int:
                 if chosen is not None
                 else Verdict(0.0, [], rejected=True, reject_reason="не подошла ни одному профилю")
             )
-            # Слепок пишется для всего, даже для отклоныённого: история публикаций
+            # Слепок пишется для всего, даже для отклонённого: история публикаций
             # нужна детектору независимо от нашего интереса (ADR-009, ADR-010).
             db.add_snapshot(conn, vacancy)
             if verdict.rejected:
@@ -290,17 +297,15 @@ def run_once(args: argparse.Namespace) -> int:
             )
             log.info("    скор %.1f", verdict.score)
 
-            # Порог пройдён — компания идёт в очередь на изучение. Сам поиск запускается
-            # после обхода hh.ru: мешать его с постраничным сбором — значит сбить паузы
-            # и приблизить капчу.
+            # Порог пройдён — компания идёт в очередь на изучение. Сам поиск идёт
+            # после обхода hh.ru: мешать его с постраничным сбором — значит сбить
+            # паузы и приблизить капчу.
             if profiles.passed(bundle, matches) and vacancy.company:
                 to_research.setdefault(vacancy.company, getattr(vacancy, "site_url", None))
                 to_contact.append(vacancy.key)
 
-            # Этап extract. Только для вакансий, прошедших скоринг: гонять модель
-            # по отклонённым — жечь бюджет вызовов ради данных, которые никто не прочтёт.
-            # Сами вызовы идут после обхода, пулом: ожидание шлюза внутри цикла
-            # останавливало сбор на секунды и сбивало ритм пауз hh.ru.
+            # Этап extract. Только для вакансий, прошедших скоринг, и пулом после
+            # обхода: ожидание шлюза внутри цикла сбивало ритм пауз hh.ru.
             if gateway is not None and vacancy.description.strip():
                 to_extract.append(vacancy)
 
@@ -326,6 +331,12 @@ def run_once(args: argparse.Namespace) -> int:
             reused_details,
             enriched,
         )
+    if skipped_details:
+        log.info(
+            "карточек не качали: %s (до порога не хватало больше %.0f баллов)",
+            skipped_details,
+            details_delta,
+        )
 
     # Этапы модели по всему собранному разом: сеть ждут параллельно, в базу
     # пишет главный поток.
@@ -344,8 +355,7 @@ def run_once(args: argparse.Namespace) -> int:
         db.touch_seen(conn, seen.keys())
 
     # Вторая половина истории: что исчезло из выдачи. Только после чистого
-    # прогона без лимита: при капче, сломанном парсере или оборванном по лимиту
-    # сборе мы бы «закрыли» живые вакансии разом и испортили историю.
+    # прогона без лимита — иначе «закроем» живые вакансии разом.
     partial = bool(options.limit) and len(drafts) >= options.limit
     if not blocked and not partial and not client.fallback_pages and seen:
         db.deactivate_missing(conn, seen.keys())
@@ -353,21 +363,19 @@ def run_once(args: argparse.Namespace) -> int:
         log.info("сбор оборван лимитом — пропавшие вакансии не отмечаем")
 
     # Векторы (ADR-021) — до досье: перефразированные отзывы ловятся уже в этом
-    # же прогоне, а не со следующего. Этап выключен по умолчанию и без
-    # эмбеддера просто ничего не делает [CORE-017].
+    # же прогоне. Этап выключен по умолчанию и без эмбеддера ничего не делает
+    # [CORE-017].
     embeddings_tasks.index_vacancies(conn, gateway)
 
-    # Досье на компании. Идёт после hh.ru и до отправки карточек: без него в карточке
-    # не будет самой полезной строки — стоит ли вообще связываться с этими людьми.
+    # Досье на компании. Идёт после hh.ru и до отправки карточек: без него в
+    # карточке не будет самой полезной строки.
     researched: dict[str, dossier.Dossier] = {}
     if to_research:
         researched = research_companies(
             conn, db_path, to_research, use_llm=options.use_llm
         )
 
-    # Контакты ищутся здесь же, сразу после досье: наличие рабочего канала —
-    # такой же факт о вакансии, как скор и HR-флаги, и он нужен в карточке до
-    # всякого письма. Письма отсюда не готовятся ([OUT-006], ADR-012).
+    # Контакты — сразу после досье: канал нужен в карточке до всякого письма.
     if to_contact:
         provider = websearch.SearchProvider.from_env(conn)
         if not provider.enabled:
