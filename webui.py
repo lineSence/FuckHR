@@ -87,6 +87,7 @@ from ui_core import (
 )
 import ui_bench
 import ui_dataset
+import ui_sources
 import ui_stages
 from ui_forms import (
     bench_models,
@@ -126,7 +127,7 @@ log = logging.getLogger("webui")
 POST_ONLY = frozenset(
     {
         "/run", "/stop", "/loop", "/bench", "/dataset", "/llm/apply",
-        "/intake/apply", "/map/geo",
+        "/intake/apply", "/map/geo", "/sources",
     }
 )
 
@@ -184,7 +185,12 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/":
                 job_id = settings.as_int(one("job"), 0) or None
-                body, refresh = render_run(job_id)
+                # База нужна одному блоку — выбору площадок и их метрике.
+                conn = open_db()
+                try:
+                    body, refresh = render_run(job_id, conn=conn)
+                finally:
+                    conn.close()
                 self._send(page("Запуск", body, refresh, "/"))
                 return
             if parsed.path == "/settings":
@@ -403,6 +409,19 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == "/loop":
                 ui_run.save_loop(form)
                 self._redirect("/")
+                return
+
+            if parsed.path == "/sources":
+                saved = ui_sources.save(form)
+                note = "<div class=ok>Площадки сохранены: {}</div>".format(
+                    esc(", ".join(saved) or "без изменений")
+                )
+                conn = open_db()
+                try:
+                    body, refresh = render_run(None, note, conn=conn)
+                finally:
+                    conn.close()
+                self._send(page("Запуск", body, refresh, "/"))
                 return
 
             if parsed.path == "/stop":

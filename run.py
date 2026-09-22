@@ -71,6 +71,8 @@ import market_store
 import llm_tasks
 import outreach
 import settings
+import source_store
+import sources
 import targets_hh
 import websearch
 from collector import collect  # noqa: F401 — реэкспорт: сбор живёт в collector.py
@@ -202,6 +204,24 @@ def run_once(args: argparse.Namespace) -> int:
             client, bundle, options.limit, prefilter, conn=conn
         )
         log.info("увидели: %s, прошло предфильтр: %s", len(seen), len(drafts))
+        # Другие площадки: свой обход, свои паузы, ключ дедупа тот же. Вакансия,
+        # найденная и здесь и на hh.ru, остаётся одной записью — площадка уходит
+        # в vacancy_sources, а этапы модели платятся один раз [CORE-016].
+        extra_seen, extra_drafts, extra_owners = sources.collect_external(
+            bundle, options.limit, prefilter, conn=conn, known=tuple(seen)
+        )
+        if extra_seen:
+            for key, draft in extra_seen.items():
+                seen.setdefault(key, draft)
+            for key, draft in extra_drafts.items():
+                drafts.setdefault(key, draft)
+            for key, ids in extra_owners.items():
+                owners.setdefault(key, []).extend(ids)
+            log.info(
+                "другие площадки: увидели %s, добавили в прогон %s",
+                len(extra_seen),
+                len(extra_drafts),
+            )
         # Цели со слежением (ADR-025): отдельный обход по employer_id, не чаще
         # раза в сутки на цель. Компания выбрана владельцем, поэтому её
         # вакансии сохраняются целиком, без предфильтра и порога.
@@ -214,6 +234,7 @@ def run_once(args: argparse.Namespace) -> int:
         market_store.recompute(conn)
         total = len(drafts)
         geo.ensure_schema(conn)  # колонки адреса: один раз, не в цикле
+        source_store.ensure_schema(conn)
         for position, draft in enumerate(drafts.values(), start=1):
             # Счётчик в квадратных скобках — то, по чему интерфейс рисует полоску.
             log.info("[%s/%s] %s — %s", position, total, draft.title, draft.company)
@@ -302,6 +323,11 @@ def run_once(args: argparse.Namespace) -> int:
             # Без этого карта живёт только кнопкой дозаполнения.
             if point is not None and geo.save(conn, vacancy.key, point):
                 addressed += 1
+            # Где именно видели вакансию: главная ссылка в vacancies одна, а
+            # площадок может быть несколько.
+            source_store.remember(
+                conn, vacancy.key, vacancy.source, vacancy.external_id, vacancy.url
+            )
             # Балл каждого профиля живёт на связи: у профилей разные критерии.
             db.save_matches(
                 conn,
