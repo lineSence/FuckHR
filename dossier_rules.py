@@ -21,6 +21,12 @@ REVIEW_SITES: tuple[tuple[str, str, float], ...] = (
     ("orabote.top", "О работе", 0.9),
     ("antijob.net", "Antijob", 0.7),
     ("career.habr.com", "Хабр Карьера", 0.9),
+    # Обе отдают отзывы машинной разметкой schema.org и потому читаются
+    # надёжнее прочих. Доверие ниже: у jobtrue.ru формулировки повторяют
+    # Dream Job, и часть отзывов там, похоже, пересобрана с чужих площадок —
+    # цену этого мы ещё не знаем (docs/review-sites.md).
+    ("jobtrue.ru", "Job True", 0.5),
+    ("hrlike.ru", "HRlike", 0.5),
     ("habr.com", "Хабр", 0.6),
     ("glassdoor.com", "Glassdoor", 0.8),
 )
@@ -35,6 +41,8 @@ REVIEW_SITES: tuple[tuple[str, str, float], ...] = (
 QUERY_SITES: tuple[str, ...] = (
     "dreamjob.ru",
     "pravda-sotrudnikov.ru",
+    "jobtrue.ru",
+    "hrlike.ru",
     "career.habr.com",
 )
 

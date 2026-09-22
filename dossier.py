@@ -357,6 +357,8 @@ def items_from_reviews(
 
     pages = getattr(fetcher, "items", None) or {}
     out: list[ReviewItem] = []
+    seen_text: set[str] = set()
+    twins = 0
     for review in reviews:
         page_items = list(pages.get(review.url, ()))  # type: ignore[union-attr]
         if not page_items:
@@ -375,6 +377,15 @@ def items_from_reviews(
         marks = _boilerplate(conn, review.site)
         kept, dropped = reviewlegit.filter_items(page_items, marks)
         for item in kept:
+            # Один и тот же отзыв приходит с двух площадок: часть сайтов
+            # пересобирает чужие отзывы. Дважды посчитанный отзыв портит и
+            # среднюю оценку, и детекцию накрутки — «группа похожих» ловит
+            # как раз копии.
+            key = " ".join(str(getattr(item, "text", "")).lower().split())[:200]
+            if key in seen_text:
+                twins += 1
+                continue
+            seen_text.add(key)
             out.append(
                 review_area.classify_item(
                     replace(item, index=len(out), site=review.site, url=review.url)
@@ -391,6 +402,8 @@ def items_from_reviews(
             dropped=len(dropped),
             no_date=sum(1 for i in kept if not getattr(i, "dated_at", None)),
         )
+    if twins:
+        log.info("копий одного отзыва на разных площадках: %s", twins)
     return tuple(out)
 
 
