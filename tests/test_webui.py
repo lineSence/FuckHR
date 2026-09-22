@@ -439,3 +439,49 @@ def test_поле_cookie_появляется_только_при_капче() -
     assert ui_run.cookie_block(Job(["страница 3: вакансий 50"])) == ""
     block = ui_run.cookie_block(Job(["hh.ru требует капчу или блокирует запросы"]))
     assert "name=cookie" in block and "class=warn" in block
+
+
+def test_фильтр_только_изменённые_отмечает_поля(monkeypatch) -> None:
+    import ui_settings
+
+    field = settings.FIELD_BY_KEY["RUN_LIMIT"]
+    assert ui_settings.changed(field, "30") is False  # значение по умолчанию
+    assert ui_settings.changed(field, "") is False
+    assert ui_settings.changed(field, "50") is True
+
+    monkeypatch.setattr(settings, "load", lambda path=None: {"RUN_LIMIT": "50"})
+    html = ui_settings.render_settings()
+    assert "id=setdiff" in html and 'data-changed="1"' in html
+
+
+def test_установочные_настройки_собраны_в_одну_группу() -> None:
+    names = dict(settings.groups())
+    assert "Установка" in names
+    keys = {field.key for field in names["Установка"]}
+    assert {"DB_PATH", "LOG_PATH", "HH_PAUSE", "RESEARCH_WORKERS"} <= keys
+    # Пауза цикла спрашивается на главной вместе с самим циклом.
+    assert "RUN_LOOP_PAUSE" not in keys
+
+
+def test_консоль_лога_держит_прокрутку(monkeypatch) -> None:
+    import jobs
+    import ui_run
+
+    class Job:
+        id = 1
+        title = "Сбор"
+        status = "идёт"
+        duration = 1.0
+        lines = ["строка"]
+        running = True
+        task = "collect"
+        progress = None
+
+        def tail(self, count: int) -> list[str]:
+            return self.lines
+
+    monkeypatch.setattr(jobs.runner, "last", lambda: Job())
+    monkeypatch.setattr(jobs.runner, "history", lambda: [])
+    body, refresh = ui_run.render_run()
+    assert "id=log" in body and "sessionStorage" in body
+    assert refresh == 2

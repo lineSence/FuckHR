@@ -94,6 +94,33 @@ def loop_form() -> str:
     )
 
 
+# Мета-обновление перезагружает документ целиком, и браузер отматывает и
+# страницу, и консоль в начало: следить за живым логом становится нельзя.
+# Скрипт помнит обе позиции между обновлениями и, если консоль была внизу,
+# держит её внизу — у бегущего лога это ожидаемое поведение.
+CONSOLE_JS = """
+<script>
+(function () {
+  var log = document.getElementById("log");
+  var store = window.sessionStorage;
+  if (!log || !store) { return; }
+  var bottom = store.getItem("logbottom") !== "0";
+  var at = parseInt(store.getItem("logtop") || "0", 10);
+  log.scrollTop = bottom ? log.scrollHeight : at;
+  log.addEventListener("scroll", function () {
+    var near = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+    store.setItem("logbottom", near ? "1" : "0");
+    store.setItem("logtop", String(log.scrollTop));
+  });
+  var page = parseInt(store.getItem("pagetop") || "0", 10);
+  if (page) { window.scrollTo(0, page); }
+  window.addEventListener("scroll", function () {
+    store.setItem("pagetop", String(window.scrollY));
+  });
+})();
+</script>
+"""
+
 # По этим словам в логе последнего прогона видно, что hh.ru закрылся капчей.
 BLOCK_MARKS = ("капч", "blockederror", "блокирует запросы")
 
@@ -277,10 +304,11 @@ def render_run(
             )
 
     parts.append(
-        "<pre class=console>{}</pre>".format(
+        '<pre class=console id=log>{}</pre>'.format(
             esc("\n".join(job.tail(400)) or "ждём вывод…")
         )
     )
+    parts.append(CONSOLE_JS)
     parts.append(
         "<p class=muted>Тот же вывод идёт в терминал, где запущен webui.py, и в файл "
         "внутри data/jobs.</p>"
@@ -305,6 +333,7 @@ def render_run(
 
 
 __all__ = (
+    "CONSOLE_JS",
     "cookie_block",
     "loop_form",
     "options_form",

@@ -1,15 +1,14 @@
 """Каталог настроек: какие поля бывают, как подписаны и в какой группе.
 
-Вынесено из settings.py по [CORE-024]: сам каталог не знает ни про .env, ни про
-формы — это данные, а не логика. Публичные имена остаются доступны через
-settings, чтобы вызывающие не переучивались.
+Вынесено из settings.py по [CORE-024]: каталог не знает ни про .env, ни про
+формы — это данные, а не логика. Публичные имена доступны через settings.
 """
 
 from __future__ import annotations
 
 import llm
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 TEXT = "text"
 SECRET = "secret"
@@ -62,7 +61,6 @@ GROUP_HINTS: dict[str, str] = {
     GROUP_LLM_STAGES: "имя модели для отдельного этапа, если профиля мало",
     GROUP_EMBED: "семантические дубли отзывов и похожие вакансии",
     GROUP_SEARCH: "провайдер поиска и потолки запросов",
-    GROUP_PATHS: "база, лог, дампы сбоев",
 }
 
 # Порядок важен: в таком виде поля рисуются на странице настроек.
@@ -590,7 +588,7 @@ FIELDS: tuple[Field, ...] = (
         GROUP_PATHS,
         TEXT,
         "data/fuckhr.sqlite3",
-        "SQLite со всем состоянием: вакансии, слепки истории, досье, оценки, контакты.",
+        "SQLite со всем: вакансии, слепки, досье, оценки, контакты.",
     ),
     Field(
         "LOG_PATH",
@@ -606,7 +604,7 @@ FIELDS: tuple[Field, ...] = (
         GROUP_PATHS,
         TEXT,
         "data/failures",
-        "Хранятся последние 5 файлов: по ним видно, вёрстка hh.ru поменялась или это капча.",
+        "Хранятся 5 последних: по ним видно, вёрстка hh.ru или капча.",
     ),
     Field(
         "ALERT_COOLDOWN_HOURS",
@@ -614,16 +612,24 @@ FIELDS: tuple[Field, ...] = (
         GROUP_PATHS,
         INT,
         "24",
-        "Канарейка не повторяет одну и ту же тревогу чаще этого срока.",
+        "Канарейка не повторяет одну тревогу чаще этого срока.",
     ),
 )
 
-# Импорт снизу: дополнительные каталоги берут отсюда Field, и к этой строке он
-# определён. Сами группы живут в settings_fields_*.py [CORE-024].
+# Импорт снизу: дополнительные каталоги берут отсюда Field [CORE-024].
 from settings_fields_extra import EXTRA_FIELDS, EXTRA_HINTS  # noqa: E402
 
 FIELDS = FIELDS + EXTRA_FIELDS
 GROUP_HINTS.update(EXTRA_HINTS)
+
+from settings_fields_install import GROUP_INSTALL, INSTALL_HINT, is_install  # noqa: E402
+
+GROUP_HINTS[GROUP_INSTALL] = INSTALL_HINT
+# Пути, потолки и темп запросов ставят один раз при установке: на странице
+# настроек они только удлиняют список (docs/ui-map.md).
+FIELDS = tuple(f for f in FIELDS if not is_install(f.key)) + tuple(
+    replace(f, group=GROUP_INSTALL) for f in FIELDS if is_install(f.key)
+)
 
 FIELD_BY_KEY: dict[str, Field] = {field.key: field for field in FIELDS}
 GROUPS: tuple[str, ...] = tuple(dict.fromkeys(field.group for field in FIELDS))

@@ -19,6 +19,7 @@ SETTINGS_SEARCH = """
 <div class=field>
 <input type=search id=setq autocomplete=off
  placeholder="Поиск по настройкам: название, ключ или слово из подсказки">
+<label><input type=checkbox id=setdiff> только изменённые</label>
 <div class=hint id=setq-note>Группы свёрнуты: разверни нужную или начни искать.</div>
 </div>
 """
@@ -28,40 +29,67 @@ SETTINGS_SEARCH_JS = """
 <script>
 (function () {
   var box = document.getElementById("setq");
+  var only = document.getElementById("setdiff");
   var note = document.getElementById("setq-note");
   var groups = [].slice.call(document.querySelectorAll("details.setgroup"));
   function apply() {
     var q = box.value.trim().toLowerCase();
+    // «Только изменённые» — ответ на вопрос «что я тут накрутил полгода назад»,
+    // с которым в настройки приходят чаще, чем за конкретным полем.
+    var diff = only.checked;
+    var narrow = Boolean(q) || diff;
     var found = 0;
     groups.forEach(function (group) {
       var shown = 0;
       [].slice.call(group.querySelectorAll("[data-find]")).forEach(function (field) {
-        var hit = !q || field.dataset.find.indexOf(q) >= 0;
+        var hit = (!q || field.dataset.find.indexOf(q) >= 0)
+          && (!diff || field.dataset.changed === "1");
         field.hidden = !hit;
         if (hit) { shown += 1; }
       });
-      group.hidden = Boolean(q) && !shown;
+      group.hidden = narrow && !shown;
       // Пустой запрос возвращает исходное состояние, а не «всё открыто»:
       // иначе после стирания строки страница остаётся километровой.
-      group.open = q ? shown > 0 : group.dataset.open === "1";
+      group.open = narrow ? shown > 0 : group.dataset.open === "1";
       found += shown;
     });
-    if (!q) {
+    if (!narrow) {
       note.textContent = "Группы свёрнуты: разверни нужную или начни искать.";
+    } else if (!found) {
+      note.textContent = diff && !q
+        ? "Ни одна настройка не отличается от значения по умолчанию."
+        : "Ничего не нашлось.";
     } else {
-      note.textContent = found ? "Найдено настроек: " + found : "Ничего не нашлось.";
+      note.textContent = "Найдено настроек: " + found;
     }
   }
   box.addEventListener("input", apply);
+  only.addEventListener("change", apply);
   apply();
 })();
 </script>
 """
 
 
+def changed(field: "settings.Field", current: str) -> bool:
+    """Отличается ли значение от значения по умолчанию.
+
+    Секрет считается изменённым по факту наличия: сравнивать его с пустым
+    значением по умолчанию можно, а показывать — нет.
+    """
+    if field.is_secret:
+        return bool(current.strip())
+    if field.kind == settings.BOOL:
+        return settings.as_bool(current, settings.as_bool(field.default)) != (
+            settings.as_bool(field.default)
+        )
+    return bool(current.strip()) and current.strip() != field.default.strip()
+
+
 def settings_field(field: "settings.Field", current: str) -> str:
     """Одна настройка в форме. data-find — то, по чему её ищет строка поиска."""
     found = " ".join((field.label, field.key, field.help, field.group)).lower()
+    mark = ' data-changed="1"' if changed(field, current) else ""
 
     if field.kind == settings.BOOL:
         on = settings.as_bool(current, settings.as_bool(field.default))
@@ -73,10 +101,14 @@ def settings_field(field: "settings.Field", current: str) -> str:
             label=esc(field.label),
         )
         return (
-            '<div class=field data-find="{found}">{control}'
+            '<div class=field data-find="{found}"{mark}>{control}'
             "<div class=hint>{key} · {hint}</div></div>"
         ).format(
-            found=esc(found), control=control, key=esc(field.key), hint=esc(field.help)
+            found=esc(found),
+            mark=mark,
+            control=control,
+            key=esc(field.key),
+            hint=esc(field.help),
         )
 
     if field.is_secret:
@@ -95,12 +127,13 @@ def settings_field(field: "settings.Field", current: str) -> str:
         step = ' step="any"'
 
     return (
-        '<div class=field data-find="{found}"><label>{label}</label>'
+        '<div class=field data-find="{found}"{mark}><label>{label}</label>'
         '<input type="{input_type}" name="{key}" value="{value}" '
         'placeholder="{placeholder}"{step}>'
         "<div class=hint>{key} · {hint}</div></div>"
     ).format(
         found=esc(found),
+        mark=mark,
         label=esc(field.label),
         input_type=input_type,
         key=esc(field.key),
@@ -233,6 +266,7 @@ def render_settings(saved: Sequence[str] = ()) -> str:
 
 
 __all__ = (
+    "changed",
     "render_settings",
     "review_sites_block",
     "review_sites_value",
