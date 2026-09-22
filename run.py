@@ -63,7 +63,6 @@ import geo
 import hh_pages
 import llm
 import injection_store
-import llm_batch
 import aitext
 import aitext_rules
 import market_company
@@ -78,11 +77,10 @@ import websearch
 from collector import collect  # noqa: F401 — реэкспорт: сбор живёт в collector.py
 from hh import Vacancy, enrich
 from hh_html import BlockedError, HHHtmlClient
+import run_bg
 import run_cards
 import run_loop
 import embeddings_tasks
-import extract_spans
-import stage_gates
 from run_setup import build_gateway, notify_if_broken, setup_logging
 from research import (  # noqa: F401 — реэкспорт для старых вызовов
     MAX_RESEARCH_WORKERS,
@@ -179,8 +177,10 @@ def run_once(args: argparse.Namespace) -> int:
     # вакансию до порога профиля (PREFILTER_DETAILS_DELTA, B-15).
     skipped_details = 0
     details_delta = hh_pages.details_delta()
-    to_extract: list[Any] = []
-    to_claim: list[tuple[Any, Any]] = []
+    # Этапы модели и досье считаются в фоне, пока главный поток ждёт паузы
+    # hh.ru на карточках вакансий (run_bg).
+    stages = run_bg.Stages(db_path, options.use_llm)
+    research_job = run_bg.Research(conn, db_path, options.use_llm)
     empty_descriptions = 0
     blocked = False
     with_details = options.details
@@ -348,13 +348,16 @@ def run_once(args: argparse.Namespace) -> int:
             # после обхода hh.ru: мешать его с постраничным сбором — значит сбить
             # паузы и приблизить капчу.
             if profiles.passed(bundle, matches) and vacancy.company:
-                to_research.setdefault(vacancy.company, getattr(vacancy, "site_url", None))
+                site_url = getattr(vacancy, "site_url", None)
+                if vacancy.company not in to_research:
+                    to_research[vacancy.company] = site_url
+                    research_job.submit(vacancy.company, site_url)
                 to_contact.append(vacancy.key)
 
             # Этап extract. Только для вакансий, прошедших скоринг, и пулом после
             # обхода: ожидание шлюза внутри цикла сбивало ритм пауз hh.ru.
             if gateway is not None and vacancy.description.strip():
-                to_extract.append(vacancy)
+                stages.extract(vacancy)
 
             # Детектор запускается сразу после слепка: история уже включает
             # текущий прогон, и вывод не отстаёт от карточки на один запуск.
@@ -363,7 +366,7 @@ def run_once(args: argparse.Namespace) -> int:
                 if gateway is not None and detector_opts.use_llm_claims:
                     # Этап hr_filter: модель только отмечает утверждения, вердикт у всех
                     # таких пунктов — «недостаточно данных» (detector_llm.with_llm_claims).
-                    to_claim.append((vacancy, report))
+                    stages.claim(vacancy, report)
                 else:
                     detector.store(conn, report)
     except BlockedError as exc:
@@ -387,45 +390,13 @@ def run_once(args: argparse.Namespace) -> int:
             details_delta,
         )
 
-    # Этапы модели по всему собранному разом: сеть ждут параллельно, в базу
-    # пишет главный поток.
-    if to_extract:
-        # Сначала разметка спанами, если она включена: цитата оттуда дословна
-        # по построению, и на эти вакансии модель не тратится вовсе.
-        by_spans = {
-            vacancy.key: items
-            for vacancy in to_extract
-            for items in (extract_spans.conditions(vacancy.description),)
-            if items
-        }
-        for key, items in by_spans.items():
-            if conditions.store(conn, key, items):
-                extracted += 1
-        rest = stage_gates.keep_for_stage(
-            conn,
-            gateway,
-            "extract",
-            [v for v in to_extract if v.key not in by_spans],
-        )
-        for key, items in llm_batch.extract_all(db_path, rest).items():
-            if conditions.store(conn, key, items):
-                extracted += 1
-    if to_claim:
-        kept = {
-            vacancy.key
-            for vacancy in stage_gates.keep_for_stage(
-                conn, gateway, "hr_filter", [pair[0] for pair in to_claim]
-            )
-        }
-        # Отчёт детектора сохраняется всегда: гейт экономит вызов модели, а не
-        # выкидывает детерминированные находки [CORE-015].
-        for vacancy, report in to_claim:
-            if vacancy.key not in kept:
-                detector.store(conn, report)
-        to_claim = [pair for pair in to_claim if pair[0].key in kept]
-        enriched_reports = llm_batch.claims_all(db_path, to_claim)
-        for vacancy, report in to_claim:
-            detector.store(conn, enriched_reports.get(vacancy.key, report))
+    # Этапы модели: порции считались в фоне, здесь только запись в базу.
+    stage_conditions, stage_claims = stages.collect()
+    for key, items in stage_conditions.items():
+        if conditions.store(conn, key, items):
+            extracted += 1
+    for report in stage_claims.values():
+        detector.store(conn, report)
 
     # Отметка «видели сегодня» нужна и для отклонённых вакансий, иначе они будут
     # считаться пропавшими сразу после первого прогона.
@@ -445,9 +416,8 @@ def run_once(args: argparse.Namespace) -> int:
     # [CORE-017].
     embeddings_tasks.index_vacancies(conn, gateway)
 
-    # Досье на компании. Идёт после hh.ru и до отправки карточек: без него в
-    # карточке не будет самой полезной строки.
-    researched: dict[str, dossier.Dossier] = {}
+    # Досье на компании собирались в фоне, пока шёл сбор; здесь их дожидаются
+    # и сохраняют. Без досье в карточке не будет самой полезной строки.
     # Строка про два порога: в базу попадает всё, что прошло предфильтр, а
     # досье и контакты — только то, что прошло порог профиля. Без этой строки
     # «вакансий 19, досье 5» выглядит как потеря данных.
@@ -458,10 +428,7 @@ def run_once(args: argparse.Namespace) -> int:
         len(drafts),
         profiles.min_threshold(bundle),
     )
-    if to_research:
-        researched = research_companies(
-            conn, db_path, to_research, use_llm=options.use_llm
-        )
+    researched = research_job.collect()
 
     # Контакты — сразу после досье: канал нужен в карточке до всякого письма.
     if to_contact:
