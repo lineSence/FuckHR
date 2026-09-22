@@ -34,6 +34,7 @@ import aitext_rules
 import company_score_rules as CSR
 import injection_rules
 import market_rules
+import sources
 
 ANY = ""  # значение «неважно» у выбора
 
@@ -207,6 +208,30 @@ VACANCY_FILTERS: tuple[Filter, ...] = (
             ("any", "хоть какой"),
             ("direct", "не угаданный"),
             ("none", "нет совсем"),
+        ),
+    ),
+    # Площадка, на которой вакансия нашлась. Значения — те же, что в
+    # `vacancies.source`, плюс «есть на нескольких»: одна вакансия, висящая
+    # сразу на четырёх сайтах, — это сама по себе улика (docs/sources.md).
+    Filter(
+        "source",
+        "Площадка",
+        "choice",
+        _choice(
+            {
+                **{
+                    site.source: "v.source = '{}'".format(site.source)
+                    for site in sources.SITES
+                },
+                "many": (
+                    "(SELECT COUNT(*) FROM vacancy_sources s WHERE s.key = v.key) > 1"
+                ),
+            }
+        ),
+        options=(
+            (ANY, "любая"),
+            *((site.source, site.label) for site in sources.SITES),
+            ("many", "есть на нескольких"),
         ),
     ),
     Filter(
@@ -523,7 +548,15 @@ def ensure_tables(conn: sqlite3.Connection) -> None:
     import detector
     import injection_store
 
-    for store in (contacts, detector, injection_store, company_score_store):
+    import source_store
+
+    for store in (
+        contacts,
+        detector,
+        injection_store,
+        company_score_store,
+        source_store,
+    ):
         store.ensure_schema(conn)
 
 

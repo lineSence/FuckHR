@@ -13,7 +13,7 @@ hh.ru, сайты отзывов, свой SearXNG, Telegram и адреса м�
 ## Цепочка одного прогона (`run.py`)
 
 ```
-hh.ru (HTML поиска, ADR-015)
+hh.ru (HTML поиска, ADR-015) + другие площадки (docs/sources.md)
   → зарплатные наблюдения до предфильтра (market.py → market_observations)
   → предфильтр и скоринг (score.py, без модели; метка рынка даёт вес market)
   → страница вакансии (hh_html.py) при включённых деталях
@@ -105,6 +105,7 @@ dossier.build(company)
 | `dossier.py` | досье: сборка, риск, реэкспорт имён |
 | `dossier_text.py`, `dossier_summary.py` | разбор текста отзывов и сводка/строки карточки |
 | `reviewlegit.py`, `reviewlegit_rules.py`, `reviewlegit_store.py` | легитимность отзыва, шаблоны площадок, здоровье сбора (`docs/review-quality.md`) |
+| `sources.py`, `source_store.py`, `src_*.py` | другие площадки вакансий: реестр, разметка «где видели», адаптеры (`docs/sources.md`) |
 | `reviewitems.py` | страница → отдельные отзывы: дата, оценка, плюсы, минусы |
 | `review_area.py` | сфера автора отзыва и тема про компанию целиком (`docs/review-area.md`) |
 | `fake_reviews.py`, `fake_rules.py`, `fake_company.py`, `fake_store.py`, `fake_llm.py` | детекция накрученных отзывов: сигналы, пороги, метка компании, хранение, сигнал модели |

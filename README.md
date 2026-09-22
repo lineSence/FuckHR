@@ -42,7 +42,9 @@ Task Scheduler (pythonw.exe)
         ↓
 run.py — один прогон, последовательный, без оркестратора
         ↓
-hh.ru (HTML поиска, ADR-015) → score.py → db.py (SQLite)
+hh.ru (HTML поиска, ADR-015) + SuperJob, Работа России, Zarplata.ru, Работа.ру
+        ↓                      (docs/sources.md, галочки на главной)
+                     score.py → db.py (SQLite)
         ↓                                      ↓
   detector.py (история публикаций)      dossier.py + websearch.py + reviewpage.py
                                        + fake_reviews.py (накрученные отзывы)

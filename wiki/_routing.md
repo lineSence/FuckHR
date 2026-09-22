@@ -130,6 +130,11 @@ triggers:
     load:
       - docs/review-area.md
 
+  - id: sources
+    keywords: [источник вакансий, площадка, агрегатор, superjob, суперджоб, trudvsem, работа россии, zarplata, зарплата ру, rabota, работа ру, авито, мультиисточник, дубли между сайтами]
+    load:
+      - docs/sources.md
+
   - id: market-salary
     keywords: [рынок, средняя зарплата, медиана, перцентиль, вилка, ниже рынка, выше рынка, срез, market_stats]
     load:

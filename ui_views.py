@@ -225,10 +225,7 @@ def filtered_vacancies(
     # Фильтры заглядывают в соседние таблицы (контакты, инъекции, сигналы,
     # оценки компаний). На базе, собранной версией без них, страница не должна
     # падать: CREATE IF NOT EXISTS дешевле, чем обработка «no such table».
-    contacts.ensure_schema(conn)
-    detector.ensure_schema(conn)
-    injection_store.ensure_schema(conn)
-    company_score_store.ensure_schema(conn)
+    filters.ensure_tables(conn)
     where, args, active = filters.build_where(filters.VACANCY_FILTERS, params)
     order = filters.order_by(
         filters.VACANCY_SORTS, str(params.get("sort", "") or ""), "score"

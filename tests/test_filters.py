@@ -137,6 +137,7 @@ def test_каждый_фильтр_превращается_в_рабочий_sq
         "notified": "no",
         "feedback": "none",
         "contact": "none",
+        "source": "many",
         "market": "below",
         "ai": "human",
         "company_level": "red",
