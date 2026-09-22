@@ -98,5 +98,40 @@ def test_evaluate_without_area_is_silent():
 def test_hits_are_markers_not_people():
     """В отчёт уходят маркеры, а не должность и не автор [CORE-013]."""
     area = review_area.classify("Должность: Иван Петров, программист. Плюсы: ревью, спринты")
-    assert all(mark in sum(review_area.MARKERS.values(), ()) + review_area.WIDE_MARKERS
-               for mark in area.hits)
+    known = (
+        sum(review_area.MARKERS.values(), ())
+        + sum(review_area.ROLES.values(), ())
+        + review_area.WIDE_MARKERS
+    )
+    assert all(mark in known for mark in area.hits)
+
+
+def test_one_profession_in_text_is_enough():
+    """«Работала продавцом» — это сфера. Раньше не хватало до порога, и отзывы
+    сети магазинов сферы не получали вовсе."""
+    assert review_area.classify("Работала продавцом полгода, график 2/2").code == "retail"
+    assert review_area.classify("Устроился курьером, доставка по городу").code == "retail"
+    assert review_area.classify("Работал программистом в этой конторе").code == "it"
+    # Одно слово лексики профессией не считается: «магазин» пишут и клиенты.
+    assert review_area.classify("Магазин у дома, зарплата маленькая").code == "unknown"
+
+
+def test_line_professions_are_known():
+    """Дырка в словаре была именно здесь: линейные профессии отсутствовали."""
+    for text, code in (
+        ("Должность: Продавец-консультант", "retail"),
+        ("Работал грузчиком на складе", "retail"),
+        ("Кем работал: повар", "retail"),
+        ("Должность: водитель-экспедитор", "retail"),
+        ("Работала оператором, входящие звонки", "support"),
+        ("Должность: бухгалтер", "office"),
+        ("Менеджер по продажам, план нереальный", "sales"),
+    ):
+        assert review_area.classify(text).code == code, text
+
+
+def test_markers_do_not_overlap_inside_one_sphere():
+    """Длинная фраза при коротком корне считалась дважды и завышала счёт."""
+    for code, roles in review_area.ROLES.items():
+        for one in roles:
+            assert not [other for other in roles if other != one and one in other], code

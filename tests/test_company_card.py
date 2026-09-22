@@ -1,4 +1,4 @@
-"""Карточка компании: порядок блоков и их свёрнутость.
+"""Карточка компании: порядок блоков, свёрнутость и разбивка по сферам.
 
 Проверяется не вёрстка, а решение: сначала компания, потом её вакансии, в
 самом низу контакты — это порядок принятия решения [OUT-002]. И то, что
@@ -47,6 +47,10 @@ def test_блоки_идут_по_порядку_и_свёрнуты(conn: sqlit
     assert about < jobs < people
     assert "<details>" in html
     assert "<details open>" not in html
+    # Внутренние блоки сворачиваются тоже: иначе «О компании» — это экран
+    # прокрутки, в котором не найти нужную цифру.
+    for title in ("Отзывы по сферам", "История публикаций", "Закономерности", "Источники"):
+        assert "<summary>{}".format(title) in html
 
 
 def test_вакансии_компании_попадают_в_карточку_при_разном_написании(
@@ -112,3 +116,49 @@ def test_чужая_сортировка_не_роняет_страницу(conn
     _vacancy(conn, "hh:1", "Ромашка", "Python разработчик")
     html = ui_companies.render_company(conn, "Ромашка", jobs_sort="'; DROP TABLE--")
     assert "Python разработчик" in html
+
+
+def _item(
+    conn: sqlite3.Connection,
+    idx: int,
+    company: str,
+    text: str,
+    rating: float,
+) -> None:
+    """Разобранный отзыв прямо в таблицу: сфера ставится теми же словарями."""
+    import fake_store
+    import review_area
+
+    fake_store.ensure_schema(conn)
+    area = review_area.classify(text)
+    conn.execute(
+        "INSERT INTO review_items (company, url, idx, site, text_hash, excerpt,"
+        " rating, label, area, area_scope, area_hits, created_at)"
+        " VALUES (?, 'https://x/1', ?, 'dreamjob', ?, ?, ?, 'clean', ?, ?, '[]',"
+        " '2026-09-18T00:00:00+00:00')",
+        (company, idx, "h{}".format(idx), text, rating, area.code, area.scope),
+    )
+    conn.commit()
+
+
+def test_сферы_видны_на_странице_и_объясняют_молчание(
+    conn: sqlite3.Connection, monkeypatch
+) -> None:
+    """Разбивка считалась и раньше, но нигде не показывалась: в сводке её видно
+    только при заданной настройке, а на странице компании не было вовсе."""
+    _dossier(conn)
+    _item(conn, 0, "ООО «Ромашка»", "Работала продавцом, недостачу вешают на нас", 2.0)
+    _item(conn, 1, "ООО «Ромашка»", "Работал программистом, ревью и спринты", 4.0)
+    _item(conn, 2, "ООО «Ромашка»", "Задерживают зарплату второй месяц", 1.0)
+    _item(conn, 3, "ООО «Ромашка»", "Всё нормально, работаю второй год", 5.0)
+
+    monkeypatch.setattr("settings.get", lambda key, default="": default)
+    html = ui_companies.render_areas(conn, "ООО «Ромашка»")
+    assert "розница, склад и линия" in html and "разработка и ИТ" in html
+    assert "про компанию целиком" in html and "сфера не определена" in html
+    # Настройка не задана — страница говорит об этом, а не молчит.
+    assert "REVIEW_AREA" in html
+
+    monkeypatch.setattr("settings.get", lambda key, default="": "it" if key == "REVIEW_AREA" else default)
+    html = ui_companies.render_areas(conn, "ООО «Ромашка»")
+    assert "разработка и ИТ" in html and "REVIEW_AREA" not in html
