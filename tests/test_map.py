@@ -233,3 +233,20 @@ def test_run_page_keeps_only_regular_tasks() -> None:
         assert hidden not in keys
         # Из командной строки и из своих разделов они всё равно запускаются.
         assert hidden in jobs.TASKS
+
+
+def test_светофор_и_поиск_отбирают_метки_на_месте() -> None:
+    """Галочки уровней и поиск работают в браузере: перезагрузка карты стоит
+    секунды ожидания и сбрасывает масштаб."""
+    conn = make_db()
+    html = ui_map.render_map(conn, {})
+
+    # Легенда стала выключателями, а не только подписью цветов.
+    assert "id=maplevels" in html
+    assert html.count("input type=checkbox class=lvl") == 5
+    # Список адресов помечен уровнем, чтобы прятаться вместе с меткой.
+    assert "id=maprows" in html
+    assert "data-level=" in html
+    # Отбор живёт в скрипте карты, а не в ссылке с перезагрузкой.
+    assert "addEventListener('change', refresh)" in html
+    assert "addEventListener('input', refresh)" in html

@@ -46,6 +46,29 @@ def like(value: str) -> str:
     return "%" + safe + "%"
 
 
+def register(conn: sqlite3.Connection) -> None:
+    """Регистрирует `ru_lower` — без неё поиск по-русски учитывает регистр.
+
+    Встроенные `LIKE`, `lower()` и `COLLATE NOCASE` в SQLite приводят регистр
+    только у латиницы: «оператор» не находил «Оператор 1С», а «ООО» не
+    находило «ооо». Собранная без ICU библиотека — норма, поэтому регистр
+    приводит Python.
+    """
+    try:
+        conn.create_function("ru_lower", 1, _lower, deterministic=True)
+    except Exception:  # noqa: BLE001 — старый sqlite3 без deterministic
+        conn.create_function("ru_lower", 1, _lower)
+
+
+def _lower(value: object) -> object:
+    return str(value).lower() if value is not None else None
+
+
+def ilike(column: str) -> str:
+    """Условие поиска без учёта регистра: `ru_lower(<колонка>) LIKE ru_lower(?)`."""
+    return "ru_lower({}) LIKE ru_lower(?) ESCAPE '\\'".format(column)
+
+
 def _days_ago(value: str) -> str:
     days = max(0, min(3650, int(float(value))))
     return (date.today() - timedelta(days=days)).isoformat()
@@ -113,11 +136,14 @@ VACANCY_FILTERS: tuple[Filter, ...] = (
         "q",
         "Слово в названии или компании",
         "text",
-        lambda v: ("(v.title LIKE ? ESCAPE '\\' OR v.company LIKE ? ESCAPE '\\')", (like(v), like(v))),
+        lambda v: (
+            "({} OR {})".format(ilike("v.title"), ilike("v.company")),
+            (like(v), like(v)),
+        ),
         width="220px",
     ),
     Filter("company", "Компания целиком", "text", lambda v: ("v.company = ?", (v,))),
-    Filter("area", "Город", "text", lambda v: ("v.area LIKE ? ESCAPE '\\'", (like(v),))),
+    Filter("area", "Город", "text", lambda v: (ilike("v.area"), (like(v),))),
     Filter(
         "min_score",
         "Скор не ниже",
@@ -339,7 +365,7 @@ COMPANY_FILTERS: tuple[Filter, ...] = (
         "cq",
         "Название",
         "text",
-        lambda v: ("d.company LIKE ? ESCAPE '\\'", (like(v),)),
+        lambda v: (ilike("d.company"), (like(v),)),
         width="220px",
     ),
     Filter(
@@ -574,6 +600,9 @@ def ensure_tables(conn: sqlite3.Connection) -> None:
         source_store,
     ):
         store.ensure_schema(conn)
+    # Здесь же, а не в db.connect: ensure_tables зовут все страницы с фильтрами,
+    # включая тесты с базой в памяти, и функция нужна ровно там, где LIKE.
+    register(conn)
 
 
 __all__ = (
@@ -589,7 +618,9 @@ __all__ = (
     "VACANCY_SORTS",
     "build_where",
     "ensure_tables",
+    "ilike",
     "like",
+    "register",
     "order_by",
     "preset_of",
     "query_string",

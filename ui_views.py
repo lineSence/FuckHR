@@ -35,7 +35,7 @@ import settings
 import source_store
 import sources
 import websearch
-from ui_core import esc, sort_head, sort_pick, table
+from ui_core import esc, live_search, sort_head, sort_pick, table
 from ui_run import (  # noqa: F401 — реэкспорт: страница запуска живёт в ui_run.py
     loop_form,
     progress_block,
@@ -239,7 +239,20 @@ def render_vacancies(
     direct, total = contacts.coverage(conn)
 
     head = (
-        ui_filters.presets_line(filters.VACANCY_PRESETS, query, "/vacancies")
+        ui_filters.presets_line(
+            filters.VACANCY_PRESETS, query, "/vacancies", default=filters.FIT
+        )
+        + live_search(
+            "/vacancies",
+            "vq",
+            "vlist",
+            value=str(query.get("q", "") or ""),
+            hidden={
+                key: value
+                for key, value in query.items()
+                if key not in ("q", "limit") and value
+            },
+        )
         + ui_filters.chips(active, query, "/vacancies")
         + ui_filters.form(
             filters.VACANCY_FILTERS,
@@ -298,11 +311,13 @@ def render_vacancies(
     return (
         head
         + summary
+        + '<div id=vlist>'
         + table(
             sort_head(VACANCY_COLUMNS, base, "sort", query.get("sort", "score")),
             body,
             raw_head=True,
         )
+        + "</div>"
     )
 
 

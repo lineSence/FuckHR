@@ -29,7 +29,7 @@ import market_store
 import profiles
 import reviewlegit_store
 from ui_cleanup import CONFIRM_WORD, apply_cleanup, render_cleanup
-from ui_core import details, esc, sort_head, sort_pick, table
+from ui_core import details, esc, live_search, sort_head, sort_pick, table
 from ui_views import draft_button
 
 RISK_CLASS = {
@@ -142,6 +142,7 @@ def filtered_companies(
     dossier.ensure_schema(conn)
     company_score_store.ensure_schema(conn)
     contacts.ensure_schema(conn)
+    filters.register(conn)  # поиск по-русски без учёта регистра
     where, args, active = filters.build_where(filters.COMPANY_FILTERS, params)
     order = filters.order_by(
         filters.COMPANY_SORTS, str(params.get("csort", "") or ""), "updated"
@@ -214,6 +215,17 @@ def render_companies(
 
     head = (
         ui_filters.presets_line(filters.COMPANY_PRESETS, query, "/companies")
+        + live_search(
+            "/companies",
+            "cq",
+            "clist",
+            value=str(query.get("cq", "") or ""),
+            placeholder="название компании",
+            name="cq",
+            hidden={
+                key: value for key, value in query.items() if key != "cq" and value
+            },
+        )
         + ui_filters.chips(active, query, "/companies")
         + ui_filters.form(filters.COMPANY_FILTERS, query, "/companies", len(active))
         + ui_filters.sort_line(
@@ -271,11 +283,13 @@ def render_companies(
     return (
         head
         + summary
+        + "<div id=clist>"
         + table(
             sort_head(COMPANY_COLUMNS, base, "csort", query.get("csort", "updated")),
             company_rows(conn, params=query),
             raw_head=True,
         )
+        + "</div>"
         + hint
     )
 

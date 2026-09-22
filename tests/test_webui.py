@@ -111,8 +111,10 @@ def test_чужой_html_из_базы_не_попадает_в_страницу
 
     html = webui.render_vacancies(conn, min_score=0.0, limit=10)
 
-    assert "<script>" not in html
-    assert "&lt;script&gt;" in html
+    # Свой скрипт на странице есть — это мгновенный отбор строк. Проверяем то,
+    # что важно: из базы не пришло ни тега, ни его содержимого.
+    assert "<script>alert(1)</script>" not in html
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
 
 
 def test_без_адреса_инстанса_страница_поиска_объясняет_причину(
@@ -365,3 +367,20 @@ def test_список_по_умолчанию_показывает_подход�
 
     every = webui.render_vacancies(conn, 0.0, 10, params={"view": "all"})
     assert "Ниже порога" in every
+
+
+def test_мгновенный_отбор_есть_в_списках(conn, make_vacancy) -> None:
+    """Поле отбирает строки по мере набора, Enter отправляет тот же текст в базу."""
+    conditions.ensure_schema(conn)
+    contacts.ensure_schema(conn)
+    detector.ensure_schema(conn)
+    db.upsert_vacancy(conn, make_vacancy(external_id="1"), 90.0, [])
+
+    html = webui.render_vacancies(conn, 0.0, 10, params={})
+    assert 'id="vq"' in html and "id=vlist" in html
+    assert "Enter — поиск по всей базе" in html
+
+    import ui_companies
+
+    companies = ui_companies.render_companies(conn)
+    assert 'id="cq"' in companies and 'name="cq"' in companies

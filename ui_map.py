@@ -110,7 +110,7 @@ def points_json(conn: sqlite3.Connection, params: dict[str, Any]) -> str:
     )
 
 
-MAP_JS = """
+MAP_JS = r"""
 (function () {
   var box = document.getElementById('map');
   var fallback = document.getElementById('maplist');
@@ -149,6 +149,7 @@ MAP_JS = """
       }).addTo(map).bindPopup('Центр поиска. Клик по карте переносит его.');
       bounds.push(data.center);
     }
+    var marks = [];
     items.forEach(function (item) {
       var marker = L.circleMarker([item.lat, item.lng], {
         radius: 7,
@@ -157,6 +158,13 @@ MAP_JS = """
         fillColor: colors[item.level || 'none'] || colors.none,
         fillOpacity: 0.9
       }).addTo(map);
+      marks.push({
+        marker: marker,
+        level: item.level || 'none',
+        key: item.key,
+        find: [item.title, item.company, item.address, item.area, item.metro]
+          .filter(Boolean).join(' ').toLowerCase()
+      });
       var lines = [
         '<b>' + clean(item.title) + '</b>',
         clean(item.company),
@@ -176,6 +184,46 @@ MAP_JS = """
     } else if (bounds.length) {
       map.fitBounds(bounds, { padding: [30, 30] });
     }
+    // Отбор на месте: галочки светофора и набор слова прячут метки сразу, без
+    // перезагрузки страницы и без потери масштаба. Кнопка «Искать в базе»
+    // рядом остаётся для поиска по всему, что в базе, а не только на экране.
+    var search = document.getElementById('mapq');
+    var note = document.getElementById('mapq-note');
+    var boxes = [].slice.call(document.querySelectorAll('#maplevels input.lvl'));
+    var rows = [].slice.call(document.querySelectorAll('#maprows tr'));
+    function refresh() {
+      var allowed = {};
+      boxes.forEach(function (input) { allowed[input.value] = input.checked; });
+      var words = (search ? search.value : '').toLowerCase().split(/\s+/).filter(Boolean);
+      var shown = 0;
+      var visible = {};
+      marks.forEach(function (mark) {
+        var hit = allowed[mark.level] !== false && words.every(function (word) {
+          return mark.find.indexOf(word) >= 0;
+        });
+        if (hit) {
+          mark.marker.addTo(map);
+          shown += 1;
+          visible[mark.key] = true;
+        } else if (map.hasLayer(mark.marker)) {
+          map.removeLayer(mark.marker);
+        }
+      });
+      rows.forEach(function (row) {
+        if (row.querySelector('th')) { return; }
+        var link = row.querySelector('a[href*="key="]');
+        var key = link ? decodeURIComponent(link.getAttribute('href').split('key=')[1]) : '';
+        row.hidden = key ? !visible[key] : false;
+      });
+      if (note) {
+        note.textContent = 'Показано меток: ' + shown + ' из ' + marks.length +
+          '. Цвет метки — оценка работодателя из досье, а не качество вакансии.' +
+          (words.length ? ' Enter в поиске — по всей базе.' : '');
+      }
+    }
+    boxes.forEach(function (input) { input.addEventListener('change', refresh); });
+    if (search) { search.addEventListener('input', refresh); }
+    refresh();
   }).catch(function () {
     box.innerHTML = '<p class=muted>Точки не загрузились. Список адресов ниже.</p>';
     if (fallback) { fallback.open = true; }
@@ -256,7 +304,8 @@ def _quick(conn: sqlite3.Connection, chosen: Mapping[str, str], has_center: bool
         "{radius}"
         '<label class=filt>Скор<br>{scores}</label>'
         '<label class=filt>Поиск<br>'
-        '<input type=search name=q value="{q}" placeholder="должность или компания"></label>'
+        '<input type=search id=mapq name=q value="{q}" autocomplete=off '
+        'placeholder="должность, компания или адрес"></label>'
         "<label class=filt><br><button>Показать</button></label>"
         '<label class=filt><br><a class=chip href="/map">Сбросить</a></label>'
         "</form>"
@@ -271,7 +320,12 @@ def _quick(conn: sqlite3.Connection, chosen: Mapping[str, str], has_center: bool
 
 
 def _legend() -> str:
-    """Цвет без подписи — угадайка, поэтому легенда стоит рядом с картой."""
+    """Светофор галочками: цвет без подписи — угадайка, а подпись без выключателя —
+    подсказка, которой нельзя воспользоваться.
+
+    Отбор идёт в браузере, по уже загруженным точкам: перезагружать карту ради
+    «покажи только красных» — это секунда ожидания и потерянный масштаб.
+    """
     items = [
         (CSR.LEVEL_GREEN, CSR.LEVEL_RU[CSR.LEVEL_GREEN]),
         (CSR.LEVEL_YELLOW, CSR.LEVEL_RU[CSR.LEVEL_YELLOW]),
@@ -279,17 +333,19 @@ def _legend() -> str:
         (CSR.LEVEL_UNKNOWN, CSR.LEVEL_RU[CSR.LEVEL_UNKNOWN]),
         (NO_LEVEL, "оценки нет"),
     ]
-    dots = "".join(
-        '<span class=chip><span style="display:inline-block;width:10px;height:10px;'
-        'border-radius:50%;background:{color};vertical-align:middle"></span> {label}</span>'.format(
-            color=LEVEL_COLORS[level], label=esc(label)
+    boxes = "".join(
+        '<label class=chip><input type=checkbox class=lvl value="{level}" checked> '
+        '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;'
+        'background:{color};vertical-align:middle"></span> {label}</label>'.format(
+            level=esc(level), color=LEVEL_COLORS[level], label=esc(label)
         )
         for level, label in items
     )
     return (
-        "<div class=chips>{}</div>"
-        '<p class=muted>Цвет метки — оценка работодателя из досье, а не качество вакансии.</p>'
-    ).format(dots)
+        "<div class=chips id=maplevels>{}</div>"
+        '<p class=muted id=mapq-note>Цвет метки — оценка работодателя из досье, а не '
+        "качество вакансии. Галочки и поиск отбирают метки сразу, без перезагрузки.</p>"
+    ).format(boxes)
 
 
 def _backfill(blind: int) -> str:
@@ -324,6 +380,7 @@ def _list(found: geo_query.Selection) -> str:
     if found.radius:
         head.append("От центра")
     rows = []
+    attrs: list[str] = []
     for item in found.points[:200]:
         level = item["level"] or ""
         row = [
@@ -340,9 +397,11 @@ def _list(found: geo_query.Selection) -> str:
         if found.radius:
             row.append("{:.1f} км".format(item["distance"] or 0.0))
         rows.append(row)
+        attrs.append('data-level="{}"'.format(esc(level or NO_LEVEL)))
     if not rows:
         return "<p class=muted>Под эти условия точек нет.</p>"
-    return table(head, rows)
+    # Тот же отбор, что на карте: строка прячется вместе со своей меткой.
+    return "<div id=maprows>{}</div>".format(table(head, rows, row_attrs=attrs))
 
 
 def render_map(

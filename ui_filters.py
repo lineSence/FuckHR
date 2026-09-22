@@ -30,15 +30,23 @@ def _url(action: str, params: Mapping[str, str], drop: str = "", **extra) -> str
 
 
 def presets_line(
-    presets: Sequence[filters.Preset], params: Mapping[str, str], action: str
+    presets: Sequence[filters.Preset],
+    params: Mapping[str, str],
+    action: str,
+    default: str = "",
 ) -> str:
-    """Быстрые виды ссылками. Активный выделен, у каждого — подпись зачем он."""
-    current = str(params.get("view", "") or "")
+    """Быстрые виды ссылками. Активный выделен, у каждого — подпись зачем он.
+
+    `default` — вид, который страница показывает при пустом адресе. Без него
+    подсвечивался «Все», хотя список открывался «Подходящими», и выделение
+    врало про то, что человек видит.
+    """
+    current = str(params.get("view", "") or "") or default
     out = []
     for item in presets:
-        active = item.key == current or (not current and item.key == "all")
+        active = item.key == current
         label = esc(item.label)
-        href = action + ("?view=" + item.key if item.key != "all" else "")
+        href = action + ("?view=" + item.key if item.key != default else "")
         out.append(
             '<a class="{cls}" href="{href}" title="{why}">{label}</a>'.format(
                 cls="chip on" if active else "chip",

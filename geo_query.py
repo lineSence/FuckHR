@@ -36,7 +36,7 @@ KM_PER_DEGREE = 111.2
 # Шаги, а не свободное число: «17 км» — это не вопрос, который кто-то задаёт.
 RADIUS_STEPS = (1, 3, 5, 10, 20)
 
-_METRO_SQL = "COALESCE(v.metro, '') LIKE ? ESCAPE '\\'"
+_METRO_SQL = filters.ilike("COALESCE(v.metro, '')")
 
 MAP_FILTERS: tuple[Filter, ...] = filters.VACANCY_FILTERS + (
     Filter(
