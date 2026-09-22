@@ -142,3 +142,16 @@ def test_hh_off_means_do_not_go_there():
     """Снятая галочка hh.ru — запрет ходить туда, а не украшение списка."""
     assert sources.hh_enabled(["rabota"]) is False
     assert sources.hh_enabled(["rabota", "hh"]) is True
+
+
+def test_queue_note_показывает_вклад_каждой_площадки() -> None:
+    from hh import Vacancy
+
+    seen = {
+        "a": Vacancy(source="hh.ru", external_id="1", url="u1", title="t1"),
+        "b": Vacancy(source="zarplata", external_id="2", url="u2", title="t2"),
+        "c": Vacancy(source="zarplata", external_id="3", url="u3", title="t3"),
+    }
+    note = sources.queue_note(seen, {"a": seen["a"]})
+    assert "Zarplata.ru: увидели 2, в прогон 0" in note
+    assert "hh.ru: увидели 1, в прогон 1" in note

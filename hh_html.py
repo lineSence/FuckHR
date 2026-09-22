@@ -1,16 +1,13 @@
 """Сбор вакансий hh.ru из HTML страниц поиска (ADR-015).
 
-Публичный `GET /vacancies` закрыт с апреля 2026: всем неавторизованным прилетает 403.
-Поэтому данные берём из того же JSON, который hh.ru отдаёт браузеру внутри страницы.
+Публичный `GET /vacancies` закрыт с апреля 2026: неавторизованным 403. Данные
+берём из того же JSON, который hh.ru отдаёт браузеру внутри страницы.
 
-Важное свойство кода ниже: он не знает точной структуры страницы и не опирается на
-один жёсткий путь. Сначала извлекается любой найденный JSON состояния, потом по нему
-идёт обход в поисках объектов, похожих на вакансию, и только затем — резервный разбор
-разметки. При редизайне шанс выжить выше, а диагностика понятнее (probe_hh.py).
-
-Когда разбор всё-таки ломается, сырая страница падает в data/failures/. Без неё
-починка парсера превращается в гадание: к следующему запуску hh.ru уже отдаст
-другую верстку, и воспроизвести сбой нечем.
+Код не знает точной структуры страницы: сначала извлекается любой найденный
+JSON состояния, потом обход в поисках объектов, похожих на вакансию, и только
+затем резервный разбор разметки. При редизайне шанс выжить выше, а диагностика
+понятнее (probe_hh.py). Сломавшаяся страница падает в data/failures/: без неё
+починка парсера — гадание, hh.ru к следующему запуску отдаст другую вёрстку.
 """
 
 from __future__ import annotations
@@ -71,6 +68,12 @@ SECRET_RE = re.compile(
 )
 
 
+# Ключи сниппета: длинные у hh.ru, короткие (req/resp/cond) у zarplata.ru на
+# том же движке. Без коротких описание внешней площадки терялось целиком, а
+# без описания вакансия не добирала до порога профиля.
+SNIPPET_KEYS = ("requirement", "responsibility", "text", "req", "resp", "cond")
+
+
 class BlockedError(RuntimeError):
     """hh.ru показал капчу или забанил запросы."""
 
@@ -92,7 +95,7 @@ def scrub(page: str, secrets: Iterable[str] = ()) -> str:
 
 
 def prune_failures(directory: str | Path, keep: int = FAILURE_KEEP) -> list[Path]:
-    """Оставляет только `keep` самых свежих дампов: страница hh.ru — это ~1 МБ."""
+    """Оставляет `keep` свежих дампов: страница hh.ru — это ~1 МБ."""
     files = sorted(Path(directory).glob("*.html"))
     removed: list[Path] = []
     for path in files[: max(0, len(files) - keep)]:
@@ -157,8 +160,8 @@ def _looks_like_vacancy(node: dict[str, Any]) -> bool:
 def find_vacancy_nodes(state: Any, limit: int = 500) -> list[dict[str, Any]]:
     """Обходит состояние в ширину и собирает всё, что похоже на вакансию.
 
-    Специально не привязываемся к конкретному пути вида vacancySearchResult.vacancies:
-    hh.ru переименовывал эти ключи не раз.
+    К пути вида vacancySearchResult.vacancies не привязываемся: hh.ru
+    переименовывал эти ключи не раз.
     """
     found: dict[str, dict[str, Any]] = {}
     queue: list[Any] = [state]
@@ -222,9 +225,7 @@ def node_to_vacancy(node: dict[str, Any]) -> Vacancy:
     snippet_parts: list[str] = []
     snippet = node.get("snippet")
     if isinstance(snippet, dict):
-        snippet_parts += [
-            strip_html(snippet.get(part)) for part in ("requirement", "responsibility", "text")
-        ]
+        snippet_parts += [strip_html(snippet.get(part)) for part in SNIPPET_KEYS]
     for key in ("workExperienceText", "description", "descriptionText"):
         if isinstance(node.get(key), str):
             snippet_parts.append(strip_html(node[key]))

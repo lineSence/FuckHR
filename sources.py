@@ -239,6 +239,26 @@ def collect_external(
     return seen, passed, owners
 
 
+def queue_note(seen: dict[str, Vacancy], drafts: dict[str, Vacancy]) -> str:
+    """Строка «кто сколько принёс» для лога прогона.
+
+    Без неё «досье только по hh.ru» выглядит как поломка досье, хотя обычно
+    площадка либо не ответила, либо принесла дубли и вакансии ниже порога.
+    """
+    counts: dict[str, list[int]] = {}
+    for key, vacancy in seen.items():
+        row = counts.setdefault(str(vacancy.source or "?"), [0, 0])
+        row[0] += 1
+        if key in drafts:
+            row[1] += 1
+    if not counts:
+        return "никто ничего не принёс"
+    return "; ".join(
+        "{}: увидели {}, в прогон {}".format(label_of(source), row[0], row[1])
+        for source, row in sorted(counts.items(), key=lambda item: -item[1][0])
+    )
+
+
 def main_source(current: str, other: str) -> str:
     """Какая площадка считается главной для вакансии из двух."""
     order = {source: index for index, source in enumerate(PRIORITY)}
@@ -257,6 +277,7 @@ __all__ = (
     "main_source",
     "max_pages",
     "pause",
+    "queue_note",
     "ready",
     "selected",
 )

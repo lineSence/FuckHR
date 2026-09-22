@@ -115,3 +115,12 @@ def test_fetch_превращает_404_в_missing_page(monkeypatch: pytest.Monk
             client.fetch("https://hh.ru/vacancy/1")
     finally:
         client.close()
+
+
+def test_короткий_сниппет_zarplata_даёт_описание() -> None:
+    """У zarplata.ru тот же движок, но ключи сниппета короткие: req/resp/cond."""
+    node = dict(NODE, snippet={"req": "Знание 1С", "resp": "Вести учёт", "cond": "ДМС"})
+    vacancy = hh_html.node_to_vacancy(node)
+    assert "Знание 1С" in vacancy.description
+    assert "Вести учёт" in vacancy.description
+    assert "ДМС" in vacancy.description
