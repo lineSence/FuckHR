@@ -317,11 +317,17 @@ def areas(conn: sqlite3.Connection) -> list[tuple[str, int]]:
 
 
 def pending(conn: sqlite3.Connection, limit: int = 100) -> list[sqlite3.Row]:
-    """Вакансии без точки: сначала самые интересные по скору."""
+    """Вакансии без точки: сначала самые интересные по скору.
+
+    Только вакансии с hh.ru. Дозаполнение открывает `hh.ru/vacancy/<id>`, а id
+    чужой площадки на hh.ru ведёт на другую, вполне существующую вакансию —
+    и на карте появился бы её адрес, выданный за наш. Лучше пустая карта, чем
+    правдоподобно неверная [CORE-019].
+    """
     return conn.execute(
         """
         SELECT key, url, title FROM vacancies
-        WHERE lat IS NULL OR lng IS NULL
+        WHERE (lat IS NULL OR lng IS NULL) AND COALESCE(source, '') = 'hh.ru' 
         ORDER BY COALESCE(score, 0) DESC, last_seen_at DESC
         LIMIT ?
         """,

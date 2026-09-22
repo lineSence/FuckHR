@@ -96,3 +96,16 @@ def test_без_дельты_карточки_качаются_всем() -> Non
     # Нулевая дельта — поведение как до B-15: карточка качается всегда,
     # причём до обращения к профилям — поэтому bundle здесь не нужен.
     assert hh_pages.worth_details(vacancy, None, None, 88, 0.0) is True
+
+
+def test_чужая_площадка_не_открывается_клиентом_hh() -> None:
+    """id Работы.ру на hh.ru ведёт на другую живую вакансию: её описание и
+    адрес выглядели бы настоящими. Второй запрос внешним площадкам и не нужен —
+    описание приходит вместе с выдачей."""
+    alien = Vacancy(
+        source="rabota",
+        external_id="54421864",
+        url="https://www.rabota.ru/vacancy/54421864/",
+        title="Python-разработчик",
+    )
+    assert hh_pages.worth_details(alien, None, None, 88, 0.0) is False

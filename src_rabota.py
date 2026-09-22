@@ -26,8 +26,19 @@ log = logging.getLogger("fuckhr")
 
 CODE = "rabota"
 LABEL = "Работа.ру"
-SEARCH = "https://www.rabota.ru/vacancy"
+SEARCH = "https://{host}/vacancy"
 MAX_PAGES = 3
+
+# Регион на Работа.ру выбирается поддоменом, а не параметром: www — это Москва
+# («Python в Москве» в заголовке), spb.rabota.ru — Питер. Проверено 22.09.2026:
+# ни `city=`, ни `region_id=` выдачу не меняют, а поддомен меняет (11 вакансий
+# по «python» против 4, пересечение — 2). Всю Россию даёт `all_regions=1`,
+# иначе «везде» молча превращается в Москву.
+HOSTS: dict[str, str] = {
+    "moskva": "www.rabota.ru",
+    "sankt-peterburg": "spb.rabota.ru",
+}
+ALL_REGIONS = "www.rabota.ru"
 
 LD_RE = re.compile(
     r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
@@ -105,13 +116,16 @@ def search(
     own = fetcher is None
     fetcher = fetcher or C.client()
     city = C.area_for(CODE, area)
+    url = SEARCH.format(host=HOSTS.get(city, ALL_REGIONS))
     found = 0
     try:
         for page in range(1, max_pages + 1):
             params: dict[str, Any] = {"query": text, "page": page}
-            if city:
-                params["city"] = city
-            html = fetcher.text(SEARCH, params=params)
+            if not city:
+                # Регион не задан — значит «вся Россия», и это надо сказать
+                # площадке прямо: молчание она понимает как Москву.
+                params["all_regions"] = 1
+            html = fetcher.text(url, params=params)
             nodes = _postings(html)
             if not nodes:
                 return
@@ -128,4 +142,4 @@ def search(
             fetcher.close()
 
 
-__all__ = ("CODE", "LABEL", "search", "to_vacancy")
+__all__ = ("ALL_REGIONS", "CODE", "HOSTS", "LABEL", "search", "to_vacancy")

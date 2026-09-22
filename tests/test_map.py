@@ -22,6 +22,7 @@ CREATE TABLE vacancies (
     title TEXT,
     company TEXT,
     area TEXT,
+    source TEXT,
     score REAL,
     url TEXT,
     published_at TEXT,
@@ -42,13 +43,14 @@ def make_db() -> sqlite3.Connection:
     conn.execute(SCHEMA)
     for key, title, company, area, score in ROWS:
         conn.execute(
-            "INSERT INTO vacancies (key, title, company, area, score, url,"
-            " published_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO vacancies (key, title, company, area, source, score, url,"
+            " published_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 key,
                 title,
                 company,
                 area,
+                "hh.ru",
                 score,
                 "https://hh.ru/vacancy/" + key.split(":")[1],
                 "2026-09-01T10:00:00",
@@ -140,8 +142,18 @@ def test_one_and_areas() -> None:
     assert dict(geo.areas(conn)) == {"Москва": 1, "Казань": 1}
 
 
-def test_pending_skips_mapped() -> None:
+def test_pending_skips_mapped_and_alien_sites() -> None:
+    """Без точки — hh:3 и вакансия с Работы.ру, но вторую в дозаполнение брать
+    нельзя: её id на hh.ru ведёт на другую, живую вакансию, и на карте появился
+    бы чужой адрес, выданный за наш."""
     conn = make_db()
+    conn.execute(
+        "INSERT INTO vacancies (key, title, company, area, source, score, url,"
+        " published_at, last_seen_at) VALUES ('rb:1', 'С Работы.ру', 'Компания Г',"
+        " 'Тверь', 'rabota', 90.0, 'https://www.rabota.ru/vacancy/54421864/',"
+        " '2026-09-01T10:00:00', '2026-09-02T10:00:00')"
+    )
+    conn.commit()
     assert [row["key"] for row in geo.pending(conn)] == ["hh:3"]
 
 

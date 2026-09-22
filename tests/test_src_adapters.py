@@ -161,3 +161,26 @@ def test_zarplata_uses_hh_engine():
     assert found[0].source == "zarplata"
     assert found[0].url.startswith("https://zarplata.ru/")
     assert found[0].salary_from == 200000
+
+
+def test_rabota_region_is_a_subdomain():
+    """Регион у Работы.ру задаётся поддоменом: параметры она игнорирует, а
+    молчание понимает как Москву (проверено на живой выдаче 22.09.2026)."""
+    fetcher = Fake(None, text="<html></html>")
+    list(src_rabota.search("python", area=2, fetcher=fetcher, max_pages=1))
+    url, params = fetcher.calls[0]
+    assert url.startswith("https://spb.rabota.ru/")
+    assert "all_regions" not in params
+
+    fetcher = Fake(None, text="<html></html>")
+    list(src_rabota.search("python", area=113, fetcher=fetcher, max_pages=1))
+    url, params = fetcher.calls[0]
+    assert url.startswith("https://www.rabota.ru/")
+    assert params["all_regions"] == 1
+
+
+def test_accept_header_looks_like_a_browser():
+    """Zarplata.ru отвечала 406 на наш Accept с application/json, и в логе это
+    выглядело как «площадка не ответила». Заголовок должен быть браузерным."""
+    assert "application/json" not in C.HEADERS["Accept"]
+    assert C.HEADERS["Accept"].startswith("text/html")

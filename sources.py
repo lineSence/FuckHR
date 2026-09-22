@@ -39,6 +39,10 @@ from score import evaluate
 log = logging.getLogger("fuckhr")
 
 CODE_HH = "hh"
+# Значение `Vacancy.source` у hh.ru. Отдельная константа, потому что по ней
+# решается, можно ли открывать страницу вакансии клиентом hh: id чужой площадки
+# на hh.ru ведёт на другую, существующую вакансию, и подмену никто не заметит.
+SOURCE_HH = "hh.ru"
 DEFAULT = (CODE_HH,)
 
 
@@ -102,6 +106,12 @@ PRIORITY: tuple[str, ...] = tuple(site.source for site in SITES)
 
 BY_CODE: dict[str, Site] = {site.code: site for site in SITES}
 BY_SOURCE: dict[str, Site] = {site.source: site for site in SITES}
+
+
+def hh_enabled(codes: Sequence[str] | None = None) -> bool:
+    """Входит ли hh.ru в сбор. Снятая галочка означает «не ходить туда вовсе»."""
+    chosen = tuple(codes) if codes is not None else selected()
+    return CODE_HH in chosen
 
 
 def label_of(source: str) -> str:
@@ -237,10 +247,12 @@ def main_source(current: str, other: str) -> str:
 
 __all__ = (
     "CODE_HH",
+    "SOURCE_HH",
     "PRIORITY",
     "SITES",
     "Site",
     "collect_external",
+    "hh_enabled",
     "label_of",
     "main_source",
     "max_pages",

@@ -136,3 +136,9 @@ def test_site_without_key_is_skipped(monkeypatch):
     )
     seen, passed, _ = sources.collect_external(bundle(), conn=conn, codes=("superjob",))
     assert called == [] and seen == {} and passed == {}
+
+
+def test_hh_off_means_do_not_go_there():
+    """Снятая галочка hh.ru — запрет ходить туда, а не украшение списка."""
+    assert sources.hh_enabled(["rabota"]) is False
+    assert sources.hh_enabled(["rabota", "hh"]) is True

@@ -199,11 +199,18 @@ def run_once(args: argparse.Namespace) -> int:
         failure_dir=settings.get("FAILURE_DIR", "data/failures"),
         cache=hh_pages.search_cache(),
     )
+    # Галочка hh.ru на главной — это разрешение туда ходить, а не украшение:
+    # снятая означает «не трогай hh вообще», включая цели со слежением.
+    hh_on = sources.hh_enabled()
     try:
-        seen, drafts, owners = profiles.collect_all(
-            client, bundle, options.limit, prefilter, conn=conn
-        )
-        log.info("увидели: %s, прошло предфильтр: %s", len(seen), len(drafts))
+        if hh_on:
+            seen, drafts, owners = profiles.collect_all(
+                client, bundle, options.limit, prefilter, conn=conn
+            )
+            log.info("увидели: %s, прошло предфильтр: %s", len(seen), len(drafts))
+        else:
+            owners = {}
+            log.info("hh.ru выключен галочкой на главной: ни поиска, ни целей")
         # Другие площадки: свой обход, свои паузы, ключ дедупа тот же. Вакансия,
         # найденная и здесь и на hh.ru, остаётся одной записью — площадка уходит
         # в vacancy_sources, а этапы модели платятся один раз [CORE-016].
@@ -225,8 +232,9 @@ def run_once(args: argparse.Namespace) -> int:
         # Цели со слежением (ADR-025): отдельный обход по employer_id, не чаще
         # раза в сутки на цель. Компания выбрана владельцем, поэтому её
         # вакансии сохраняются целиком, без предфильтра и порога.
-        for company, fresh in targets_hh.sweep(conn, client):
-            log.info("цель %s: новых вакансий %s", company, fresh)
+        if hh_on:
+            for company, fresh in targets_hh.sweep(conn, client):
+                log.info("цель %s: новых вакансий %s", company, fresh)
         # Рынок пересчитывается до скоринга: вес `market` в score.py берётся
         # из свежих срезов, иначе первая вакансия прогона сравнивалась бы с
         # позавчерашней медианой.
@@ -267,7 +275,7 @@ def run_once(args: argparse.Namespace) -> int:
                     with_details = False
                 except Exception:  # noqa: BLE001 — вакансия могла быть уже закрыта
                     log.warning("нет деталей по %s, берём черновик", draft.external_id)
-            elif with_details:
+            elif with_details and draft.source == sources.SOURCE_HH:
                 skipped_details += 1
             # Спрятанная в тексте инструкция для ИИ — поступок работодателя,
             # а не техническая помеха (ADR-020). Запоминаем до скоринга: улика

@@ -30,7 +30,10 @@ UA = (
 HEADERS = {
     "User-Agent": UA,
     "Accept-Language": "ru-RU,ru;q=0.9",
-    "Accept": "text/html,application/json;q=0.9,*/*;q=0.8",
+    # Как у браузера. Своя строка с application/json уже стоила нам площадки:
+    # Zarplata.ru отвечала на неё 406 Not Acceptable, а в логе это выглядело
+    # как «площадка не ответила». API-площадкам заголовок безразличен.
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 }
 
 # Регионы: профиль хранит коды hh.ru, у каждой площадки справочник свой.
