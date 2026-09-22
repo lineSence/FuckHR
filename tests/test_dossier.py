@@ -212,3 +212,22 @@ def test_ошибка_модели_не_роняет_досье():
     )
     assert досье.summary_by == "правила"
     assert досье.review_count == 1
+
+
+def test_запросы_идут_только_живым_площадкам() -> None:
+    """Мёртвый домен и Cloudflare не стоят поискового запроса [CORE-016].
+
+    Проверка 24.09.2026: `otzyvy-sotrudnikov.ru` не резолвится вовсе,
+    `orabote.top` и `antijob.net` отдают 403 (docs/review-sites.md).
+    """
+    import dossier_rules
+
+    assert "otzyvy-sotrudnikov.ru" not in dossier_rules.SITE_NAMES
+    queries = dossier.review_queries("Ромашка")
+    asked = " ".join(queries)
+    for host in dossier_rules.QUERY_SITES:
+        assert "site:" + host in asked
+    for host in ("orabote.top", "antijob.net", "glassdoor.com"):
+        assert "site:" + host not in asked
+        # Но ссылку с такой площадки мы всё равно узнаём и называем по имени.
+        assert host in dossier_rules.SITE_NAMES

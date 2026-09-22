@@ -91,7 +91,8 @@ from dossier_rules import (  # noqa: F401 — реэкспорт для стар
     PATTERN_RULES,
     POSITIVE_MARKERS,
     RATING_RE,
-    REVIEW_SITES,
+    QUERY_SITES,
+    REVIEW_SITES,  # noqa: F401 — реэкспорт для старых вызовов
     RISK_GREEN,
     RISK_RED,
     RISK_RU,
@@ -208,7 +209,7 @@ def review_queries(company: str) -> list[str]:
         return []
     queries = [
         '"{}" отзывы сотрудников site:{}'.format(company, host)
-        for host, _name, _trust in REVIEW_SITES[:5]
+        for host in QUERY_SITES
     ]
     queries.append('"{}" отзывы работодатель задержка зарплаты'.format(company))
     queries.append('"{}" как работать отзыв разработчика'.format(company))

@@ -19,11 +19,23 @@ REVIEW_SITES: tuple[tuple[str, str, float], ...] = (
     ("dreamjob.ru", "Dream Job", 1.0),
     ("pravda-sotrudnikov.ru", "Правда сотрудников", 1.0),
     ("orabote.top", "О работе", 0.9),
-    ("otzyvy-sotrudnikov.ru", "Отзывы сотрудников", 0.8),
     ("antijob.net", "Antijob", 0.7),
     ("career.habr.com", "Хабр Карьера", 0.9),
     ("habr.com", "Хабр", 0.6),
     ("glassdoor.com", "Glassdoor", 0.8),
+)
+
+# Кому имеет смысл отдавать поисковый запрос `site:`. Проверка 24.09.2026
+# (`docs/review-sites.md`): `otzyvy-sotrudnikov.ru` больше не существует —
+# домен не резолвится, и он убран из списка совсем. `orabote.top` и
+# `antijob.net` отвечают 403 Cloudflare на обычный httpx, а `glassdoor.com`
+# по РФ почти пуст. В `REVIEW_SITES` они остались: ссылку с такой площадки
+# широкий запрос всё равно приносит, и её надо узнать и назвать. Но платить
+# за них отдельным запросом поиска не за что [CORE-016].
+QUERY_SITES: tuple[str, ...] = (
+    "dreamjob.ru",
+    "pravda-sotrudnikov.ru",
+    "career.habr.com",
 )
 
 SITE_NAMES = {host: name for host, name, _ in REVIEW_SITES}
