@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Any, Iterator, Sequence
 
@@ -163,6 +164,59 @@ def _search(site: Site, text: str, area: Any, period: int, limit: int, fetcher: 
     return site.module.search(text, **kwargs)
 
 
+def workers() -> int:
+    """Сколько площадок обходится одновременно. Максимум 8, как у досье."""
+    return max(1, min(8, settings.as_int(settings.get("SOURCE_WORKERS", "4"), 4)))
+
+
+def _collect_site(
+    site: Site, bundle: Sequence[Any], limit: int, prefilter: Any
+) -> tuple[dict[str, Vacancy], dict[str, list[str]], list[tuple[str, str, str, str]], int]:
+    """Обход одной площадки: своя сессия, свои паузы, свой счётчик.
+
+    Работает в отдельном потоке и базы не касается: находки возвращаются
+    главному потоку, он и пишет. Ошибка площадки остаётся её ошибкой
+    [CORE-017].
+    """
+    found = 0
+    site_seen: dict[str, Vacancy] = {}
+    owners: dict[str, list[str]] = {}
+    marks: list[tuple[str, str, str, str]] = []
+    with src_common.client(pause=pause()) as fetcher:
+        for loaded in bundle:
+            profile = getattr(loaded, "profile", loaded)
+            for query in [q for q in profile.queries if q.get("text")]:
+                if limit and found >= limit:
+                    break
+                try:
+                    stream = _search(
+                        site,
+                        str(query["text"]),
+                        query.get("area") or profile.areas or None,
+                        int(query.get("period", 7)),
+                        max(0, limit - found) if limit else 0,
+                        fetcher,
+                    )
+                    for draft in stream:
+                        found += 1
+                        marks.append((draft.key, site.source, draft.external_id, draft.url))
+                        site_seen.setdefault(draft.key, draft)
+                        rough = evaluate(draft, profile, getattr(prefilter, "fuzzy", None))
+                        if prefilter.enabled and (
+                            rough.rejected or rough.score < prefilter.min_score
+                        ):
+                            continue
+                        owners.setdefault(draft.key, []).append(getattr(loaded, "id", "профиль"))
+                        if limit and found >= limit:
+                            break
+                except Exception as exc:  # noqa: BLE001 — чужой сайт [CORE-017]
+                    log.warning(
+                        "%s: сбор по запросу «%s» сорвался: %s", site.label, query["text"], exc
+                    )
+    log.info("%s: увидел %s, прошло предфильтр %s", site.label, found, len(owners))
+    return site_seen, owners, marks, found
+
+
 def collect_external(
     bundle: Sequence[Any],
     limit: int = 0,
@@ -170,6 +224,7 @@ def collect_external(
     conn: sqlite3.Connection | None = None,
     known: Sequence[str] = (),
     codes: Sequence[str] | None = None,
+    marks_out: list[tuple[str, str, str, str]] | None = None,
 ) -> tuple[dict[str, Vacancy], dict[str, Vacancy], dict[str, list[str]]]:
     """Сбор со всех выбранных площадок, кроме hh.ru.
 
@@ -177,6 +232,14 @@ def collect_external(
     предфильтр и кто из профилей забрал вакансию. Вакансии с ключом из `known`
     в черновики не попадают — они уже собраны с площадки выше по приоритету,
     но их площадка запоминается: на этом стоит метрика уникальности.
+
+    Площадки обходятся потоками: домены разные, чужая пауза нашей не мешает, а
+    последовательный обход означал, что медленный API держит весь сбор. Внутри
+    площадки порядок прежний, и пауза `SOURCE_PAUSE` считается на неё одну.
+
+    `marks_out` — куда сложить «где видели», когда писать в базу нельзя:
+    соединение sqlite нельзя делить между потоками, поэтому при работе в фоне
+    записи отдаются главному потоку (`source_store.remember_many`).
     """
     prefilter = prefilter or settings.prefilter_options()
     chosen = tuple(codes) if codes is not None else selected()
@@ -184,59 +247,96 @@ def collect_external(
     seen: dict[str, Vacancy] = {}
     passed: dict[str, Vacancy] = {}
     owners: dict[str, list[str]] = {}
-    if not sites:
+    ready_sites: list[Site] = []
+    for site in sites:
+        ok, why = ready(site)
+        if ok:
+            ready_sites.append(site)
+        else:
+            log.info("%s пропущен: %s", site.label, why)
+    if not ready_sites:
         return seen, passed, owners
 
     marks: list[tuple[str, str, str, str]] = []
     known_keys = set(known)
-    for site in sites:
-        ok, why = ready(site)
-        if not ok:
-            log.info("%s пропущен: %s", site.label, why)
-            continue
-        found = 0
-        with src_common.client(pause=pause()) as fetcher:
-            for loaded in bundle:
-                profile = getattr(loaded, "profile", loaded)
-                queries = [q for q in profile.queries if q.get("text")]
-                for query in queries:
-                    if limit and found >= limit:
-                        break
-                    try:
-                        stream = _search(
-                            site,
-                            str(query["text"]),
-                            query.get("area") or profile.areas or None,
-                            int(query.get("period", 7)),
-                            max(0, limit - found) if limit else 0,
-                            fetcher,
-                        )
-                        for draft in stream:
-                            found += 1
-                            marks.append(
-                                (draft.key, site.source, draft.external_id, draft.url)
-                            )
-                            seen.setdefault(draft.key, draft)
-                            if draft.key in known_keys:
-                                continue
-                            rough = evaluate(draft, profile, getattr(prefilter, "fuzzy", None))
-                            if prefilter.enabled and (
-                                rough.rejected or rough.score < prefilter.min_score
-                            ):
-                                continue
-                            passed.setdefault(draft.key, draft)
-                            owners.setdefault(draft.key, []).append(
-                                getattr(loaded, "id", "профиль")
-                            )
-                            if limit and found >= limit:
-                                break
-                    except Exception as exc:  # noqa: BLE001 — чужой сайт [CORE-017]
-                        log.warning("%s: сбор по запросу «%s» сорвался: %s", site.label, query["text"], exc)
-        log.info("%s: увидел %s, прошло предфильтр %s", site.label, found, len(passed))
+    count = min(workers(), len(ready_sites))
+    log.info("площадок в обходе: %s, потоков: %s", len(ready_sites), count)
+    with ThreadPoolExecutor(max_workers=count, thread_name_prefix="source") as pool:
+        futures = {
+            pool.submit(_collect_site, site, bundle, limit, prefilter): site
+            for site in ready_sites
+        }
+        for future in as_completed(futures):
+            site = futures[future]
+            try:
+                site_seen, site_owners, site_marks, _found = future.result()
+            except Exception as exc:  # noqa: BLE001 — одна площадка не роняет сбор
+                log.warning("%s: обход сорвался: %s", site.label, exc)
+                continue
+            marks += site_marks
+            for key, draft in site_seen.items():
+                seen.setdefault(key, draft)
+            for key, ids in site_owners.items():
+                if key in known_keys:
+                    continue
+                passed.setdefault(key, site_seen[key])
+                owners.setdefault(key, []).extend(ids)
 
-    if conn is not None and marks:
+    if marks_out is not None:
+        marks_out += marks
+    elif conn is not None and marks:
         source_store.remember_many(conn, marks)
     return seen, passed, owners
+
+
+@dataclass
+class ExternalJob:
+    """Обход площадок, запущенный в фоне: результат забирают после hh.ru."""
+
+    future: Any
+    marks: list[tuple[str, str, str, str]]
+    pool: Any
+
+    def result(
+        self, conn: sqlite3.Connection | None = None, known: Sequence[str] = ()
+    ) -> tuple[dict[str, Vacancy], dict[str, Vacancy], dict[str, list[str]]]:
+        """Дожидается площадок и отдаёт находки. Сбой фона не роняет прогон."""
+        try:
+            seen, passed, owners = self.future.result()
+        except Exception as exc:  # noqa: BLE001 — чужие сайты [CORE-017]
+            log.warning("обход других площадок сорвался: %s", exc)
+            seen, passed, owners = {}, {}, {}
+        finally:
+            self.pool.shutdown(wait=False)
+        # Дедуп с hh.ru делается здесь: пока площадки шли в фоне, что именно
+        # принёс hh.ru, известно не было.
+        known_keys = set(known)
+        passed = {key: value for key, value in passed.items() if key not in known_keys}
+        owners = {key: value for key, value in owners.items() if key not in known_keys}
+        if conn is not None and self.marks:
+            source_store.remember_many(conn, self.marks)
+        return seen, passed, owners
+
+
+def start_external(
+    bundle: Sequence[Any],
+    limit: int = 0,
+    prefilter: Any = None,
+    codes: Sequence[str] | None = None,
+) -> ExternalJob:
+    """Пускает обход площадок параллельно с hh.ru.
+
+    hh.ru собирается медленно намеренно: паузы между страницами — защита от
+    капчи, и всё это время процесс просто ждёт. Другие площадки живут на других
+    доменах, их очередь запросов никак не связана с очередью hh.ru, поэтому
+    ждать их по очереди — терять минуты на пустом месте.
+    """
+    pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="external")
+    marks: list[tuple[str, str, str, str]] = []
+    future = pool.submit(
+        collect_external, bundle, limit, prefilter, None, (), codes, marks
+    )
+    return ExternalJob(future=future, marks=marks, pool=pool)
 
 
 def queue_note(seen: dict[str, Vacancy], drafts: dict[str, Vacancy]) -> str:
@@ -278,6 +378,8 @@ __all__ = (
     "max_pages",
     "pause",
     "queue_note",
+    "workers",
     "ready",
     "selected",
+    "start_external",
 )

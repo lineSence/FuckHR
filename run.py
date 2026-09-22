@@ -202,6 +202,11 @@ def run_once(args: argparse.Namespace) -> int:
     # Галочка hh.ru на главной — это разрешение туда ходить, а не украшение:
     # снятая означает «не трогай hh вообще», включая цели со слежением.
     hh_on = sources.hh_enabled()
+    # Другие площадки: свой обход, свои паузы, ключ дедупа тот же. Идут в фоне,
+    # пока hh.ru отсиживает свои паузы. Вакансия, найденная и здесь и на hh.ru,
+    # остаётся одной записью — площадка уходит в vacancy_sources, а этапы
+    # модели платятся один раз [CORE-016].
+    extra_job = sources.start_external(bundle, options.limit, prefilter)
     try:
         if hh_on:
             seen, drafts, owners = profiles.collect_all(
@@ -211,12 +216,7 @@ def run_once(args: argparse.Namespace) -> int:
         else:
             owners = {}
             log.info("hh.ru выключен галочкой на главной: ни поиска, ни целей")
-        # Другие площадки: свой обход, свои паузы, ключ дедупа тот же. Вакансия,
-        # найденная и здесь и на hh.ru, остаётся одной записью — площадка уходит
-        # в vacancy_sources, а этапы модели платятся один раз [CORE-016].
-        extra_seen, extra_drafts, extra_owners = sources.collect_external(
-            bundle, options.limit, prefilter, conn=conn, known=tuple(seen)
-        )
+        extra_seen, extra_drafts, extra_owners = extra_job.result(conn, known=tuple(seen))
         if extra_seen:
             for key, draft in extra_seen.items():
                 seen.setdefault(key, draft)

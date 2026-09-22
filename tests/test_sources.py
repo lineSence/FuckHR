@@ -155,3 +155,52 @@ def test_queue_note_показывает_вклад_каждой_площадк�
     note = sources.queue_note(seen, {"a": seen["a"]})
     assert "Zarplata.ru: увидели 2, в прогон 0" in note
     assert "hh.ru: увидели 1, в прогон 1" in note
+
+
+def test_площадки_обходятся_параллельно(monkeypatch) -> None:
+    """Две медленные площадки должны укладываться в время одной, а не двух."""
+    import threading
+    import time
+
+    live = []
+    peak = [0]
+    lock = threading.Lock()
+
+    def slow_search(text, **kwargs):
+        with lock:
+            live.append(1)
+            peak[0] = max(peak[0], len(live))
+        time.sleep(0.2)
+        with lock:
+            live.pop()
+        return iter(())
+
+    for code in ("zarplata", "rabota"):
+        monkeypatch.setattr(sources.BY_CODE[code].module, "search", slow_search)
+    started = time.monotonic()
+    sources.collect_external(bundle(), codes=("zarplata", "rabota"))
+    spent = time.monotonic() - started
+    assert peak[0] == 2
+    assert spent < 0.35
+
+
+def test_фоновый_обход_отдаёт_находки_и_отсекает_известные(monkeypatch) -> None:
+    from hh import Vacancy
+
+    draft = Vacancy(source="zarplata", external_id="9", url="u", title="Оператор 1С")
+
+    def fake_search(text, **kwargs):
+        return iter([draft])
+
+    monkeypatch.setattr(sources.BY_CODE["zarplata"].module, "search", fake_search)
+    job = sources.start_external(bundle(), codes=("zarplata",))
+    seen, passed, owners = job.result(None, known=())
+    assert list(seen) == [draft.key]
+    assert list(passed) == [draft.key]
+
+    job = sources.start_external(bundle(), codes=("zarplata",))
+    seen, passed, owners = job.result(None, known=(draft.key,))
+    # Вакансию уже принёс hh.ru: площадку запомним, второй раз в прогон не берём.
+    assert list(seen) == [draft.key]
+    assert passed == {} and owners == {}
+    assert job.marks and job.marks[0][1] == "zarplata"
