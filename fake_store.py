@@ -147,7 +147,10 @@ def store(
                 int(getattr(item, "index", 0)),
                 getattr(item, "site", ""),
                 digest,
-                str(getattr(item, "text", ""))[:EXCERPT_CHARS],
+                # В выписку и в правила идёт текст вместе с карточкой отзыва
+                # (город, статус, словесные метки): детекции накрутки они
+                # мешали, а человеку и закономерностям — нужны.
+                str(getattr(item, "full", None) or getattr(item, "text", ""))[:EXCERPT_CHARS],
                 getattr(item, "rating", None),
                 getattr(item, "dated_at", None),
                 getattr(item, "date_precision", "none"),
@@ -155,7 +158,11 @@ def store(
                 float(getattr(verdict, "score", 0.0) or 0.0),
                 json.dumps(list(getattr(verdict, "signals", ())), ensure_ascii=False),
                 json.dumps(
-                    list(dossier_text.codes_in(str(getattr(item, "text", "")))),
+                    list(
+                        dossier_text.codes_in(
+                            str(getattr(item, "full", None) or getattr(item, "text", ""))
+                        )
+                    ),
                     ensure_ascii=False,
                 ),
                 str(getattr(verdict, "label", "clean")),

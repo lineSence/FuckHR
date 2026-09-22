@@ -19,6 +19,8 @@
 from __future__ import annotations
 
 import hashlib
+import logging
+import re
 from dataclasses import dataclass
 from datetime import date
 from typing import Iterable, Mapping, Sequence
@@ -28,6 +30,8 @@ import aitext_rules as AI
 import fake_rules as R
 from dossier_rules import PATTERN_RULES, POSITIVE_MARKERS, SITE_TRUST
 from reviewitems import ReviewItem
+
+log = logging.getLogger("fuckhr")
 
 
 @dataclass(frozen=True)
@@ -103,6 +107,40 @@ def _has_praise(low: str) -> bool:
     )
 
 
+_AD_RE = tuple(
+    re.compile(r"(?<![а-яёa-z]){}".format(re.escape(tail)), re.IGNORECASE)
+    for tail in R.AD_TAILS
+)
+
+
+def _ad_tail(low: str) -> bool:
+    """Рекламный хвост ищется по границе слова: «реакция» — не «акция»."""
+    return any(pattern.search(low) for pattern in _AD_RE)
+
+
+def _thin_crowd(signals: dict[int, list[str]], total: int) -> None:
+    """Гасит корпусные сигналы, которые есть у большинства выборки.
+
+    У компании с сотнями отзывов «ровная длина» и «похож на соседа» находятся
+    случайно, и вместе с любым третьим сигналом выносили отзыв в «заказной».
+    Сигнал, который стоит у всех, ничего не различает [CORE-019].
+    """
+    if total < R.CROWD_MIN_ITEMS:
+        return
+    for code in R.CROWD_SIGNALS:
+        hits = [index for index, codes in signals.items() if code in codes]
+        if len(hits) / total <= R.CROWD_SHARE:
+            continue
+        log.info(
+            "сигнал «%s» есть у %s из %s отзывов — не улика, не считаем",
+            R.SIGNALS[code][1],
+            len(hits),
+            total,
+        )
+        for index in hits:
+            signals[index].remove(code)
+
+
 def _bursts(items: Sequence[ReviewItem]) -> set[int]:
     """Индексы отзывов, попавших в окно всплеска.
 
@@ -168,9 +206,14 @@ def _item_signals(
     if item.rating is not None:
         if item.rating >= R.TOP_RATING and _has_red_text(low):
             signals.append("rating_mismatch")
-        elif item.rating <= R.LOW_RATING and _has_praise(low) and not _has_red_text(low):
-            signals.append("rating_mismatch")
-    if any(tail in low for tail in R.AD_TAILS):
+        elif item.rating <= R.LOW_RATING and not _has_red_text(low):
+            # Похвала в отдельном поле «плюсы» при низкой оценке — это формат
+            # площадки, а не противоречие: «Не били палкой, ДМС» с оценкой 1.0
+            # написал живой человек. Смотрим только на свободный текст.
+            free = " ".join(part for part in (item.cons, item.body) if part).lower()
+            if _has_praise(free if item.pros else low):
+                signals.append("rating_mismatch")
+    if _ad_tail(low):
         signals.append("ad_tail")
     if any(phrase in low for phrase in R.IMPERSONAL):
         signals.append("impersonal")
@@ -214,7 +257,8 @@ def score_items(
     flat = _uniform(items)
     prints = [shingles(item.text) for item in items]
 
-    verdicts: list[Verdict] = []
+    collected: dict[int, list[str]] = {}
+    digests: dict[int, str] = {}
     for position, item in enumerate(items):
         low = item.text.lower()
         signals = _item_signals(
@@ -244,16 +288,30 @@ def score_items(
         if item.index in paraphrased and "dup_same_company" not in signals:
             signals.append("paraphrase")
 
+        collected[position] = signals
+        digests[position] = digest
+
+    _thin_crowd(collected, len(items))
+
+    verdicts: list[Verdict] = []
+    for position, item in enumerate(items):
+        signals = collected[position]
         total = sum(R.SIGNALS[code][0] for code in signals)
         score = round(min(1.0, total / R.SCORE_CAP), 2)
+        label = label_of(score)
+        if label == R.LABEL_FAKE and not (set(signals) & R.TEXT_SIGNALS):
+            # Улик про сам текст нет — говорить «заказной» не на чем.
+            # Отзыв остаётся сомнительным: половина веса вместо нуля.
+            label = R.LABEL_SUSPECT
+            score = min(score, R.FAKE_AT)
         verdicts.append(
             Verdict(
                 index=item.index,
                 url=item.url,
-                text_hash=digest,
+                text_hash=digests[position],
                 score=score,
                 signals=tuple(signals),
-                label=label_of(score),
+                label=label,
             )
         )
     return tuple(verdicts)

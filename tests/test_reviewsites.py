@@ -113,10 +113,12 @@ def test_правда_сотрудников_считает_оценку_и_не
     assert item.rating == 2.0
     assert (item.dated_at, item.date_precision) == ("2026-09-05", "exact")
     # Имя автора в базу не идёт, статус — идёт [CORE-013].
-    assert "Роман" not in item.text
-    assert "Бывший сотрудник" in item.body
+    assert "Роман" not in item.full
+    # Карточка отзыва лежит отдельно от слов автора: в text она делала разные
+    # отзывы «дословными копиями» друг друга.
+    assert "Бывший сотрудник" in item.meta and "Бывший сотрудник" not in item.text
     # Словесная метка развёрнута так, чтобы её увидели правила закономерностей.
-    assert "серая зарплата" in item.body
+    assert "серая зарплата" in item.meta
 
 
 def test_schema_org_приводит_шкалу_к_пяти_баллам() -> None:

@@ -115,6 +115,12 @@ class ReviewItem:
     body: str = ""
     pros: str = ""
     cons: str = ""
+    # Город, статус автора и словесные метки площадки. Отдельно от текста:
+    # это карточка отзыва, а не слова автора. Пока они лежали в body, два
+    # разных отзыва с одинаковым хвостом давали похожесть 0.9 и метку
+    # «дословный повтор», а «белая зарплата» в хвосте — «оценка не совпадает
+    # с текстом» у разгромного отзыва.
+    meta: str = ""
     rating: float | None = None
     dated_at: str | None = None          # ISO-дата
     date_precision: str = "none"         # exact | approx | month | none
@@ -126,7 +132,13 @@ class ReviewItem:
 
     @property
     def text(self) -> str:
+        """Слова автора. По ним считаются дубли, сфера и детекция накрутки."""
         return " ".join(p for p in (self.pros, self.cons, self.body) if p).strip()
+
+    @property
+    def full(self) -> str:
+        """Текст вместе с метками площадки: для поиска закономерностей."""
+        return " ".join(p for p in (self.text, self.meta) if p).strip()
 
     @property
     def dated_by_day(self) -> bool:

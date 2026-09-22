@@ -246,7 +246,9 @@ def _pravda(html: str, url: str, today: date | None) -> list[dict[str, Any]]:
             {
                 "pros": pros,
                 "cons": cons,
-                "body": " · ".join(
+                "body": "",
+                # Город, статус и метки — карточка отзыва, а не текст автора.
+                "meta": " · ".join(
                     part
                     for part in (city, status.group(1) if status else "", *marks)
                     if part
@@ -418,7 +420,7 @@ def parse(html: str, url: str = "", today: date | None = None) -> tuple[Any, ...
     items: list[Any] = []
     for row in rows:
         chunk = " ".join(
-            str(row.get(key) or "") for key in ("role", "pros", "cons", "body")
+            str(row.get(key) or "") for key in ("role", "pros", "cons", "body", "meta")
         )
         dated_at, precision = _dated(str(row.get("date_source") or ""), today)
         items.append(
@@ -427,6 +429,7 @@ def parse(html: str, url: str = "", today: date | None = None) -> tuple[Any, ...
                 site=site,
                 index=len(items),
                 body=str(row.get("body") or "")[:BODY_CHARS],
+                meta=str(row.get("meta") or "")[:BODY_CHARS],
                 pros=str(row.get("pros") or "")[:BODY_CHARS],
                 cons=str(row.get("cons") or "")[:BODY_CHARS],
                 rating=row.get("rating"),
