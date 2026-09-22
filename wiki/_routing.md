@@ -125,6 +125,16 @@ triggers:
       - docs/fake-reviews.md
       - wiki/rules/hr-signal-detection.md
 
+  - id: review-area
+    keywords: [сфера отзыва, отдел, по моей сфере, кем работал автора, разбивка отзывов, review_area, REVIEW_AREA]
+    load:
+      - docs/review-area.md
+
+  - id: sources
+    keywords: [источник вакансий, площадка, агрегатор, superjob, суперджоб, trudvsem, работа россии, zarplata, зарплата ру, rabota, работа ру, авито, мультиисточник, дубли между сайтами]
+    load:
+      - docs/sources.md
+
   - id: market-salary
     keywords: [рынок, средняя зарплата, медиана, перцентиль, вилка, ниже рынка, выше рынка, срез, market_stats]
     load:
@@ -171,6 +181,16 @@ triggers:
     keywords: [сверка лимитов, аудит квот, проверить провайдеров]
     load:
       - wiki/workflows/quota-audit.md
+
+  - id: gates
+    keywords: [гейт, пропустить этап, не звать модель, близость к профилю, gliner, спан, классификатор, разметчик, zero-shot, экономия вызовов]
+    load:
+      - docs/gates.md
+
+  - id: dataset
+    keywords: [датасет, dataset, файнтюн, finetune, дообучение, обучающая выборка, jsonl, colab, unsloth, lora]
+    load:
+      - docs/dataset.md
 
   - id: rules-general
     keywords: [правило, конвенция, стиль, запрет]

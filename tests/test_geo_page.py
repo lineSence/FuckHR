@@ -88,3 +88,61 @@ def test_no_address_returns_none() -> None:
 
 def test_broken_page_is_not_an_exception() -> None:
     assert geo.from_page("<html>капча</html>", "1") is None
+
+
+def test_vacancy_detail_carries_address(monkeypatch):
+    """Адрес приезжает вместе с описанием: отдельного похода за точкой нет."""
+    import geo
+    import hh_html
+
+    state = {
+        "vacancyView": {
+            "vacancyId": "42",
+            "description": "<p>Работа</p>",
+            "address": {
+                "city": "Москва",
+                "street": "Ленина",
+                "building": "1",
+                "lat": 55.7,
+                "lng": 37.6,
+                "metroStations": [{"stationName": "Тверская"}],
+            },
+        }
+    }
+
+    client = hh_html.HHHtmlClient.__new__(hh_html.HHHtmlClient)
+    monkeypatch.setattr(
+        hh_html.HHHtmlClient,
+        "fetch",
+        lambda self, url: '<template id="HH-Lux-InitialState">{}</template>'.format(
+            json.dumps(state)
+        ),
+    )
+    detail = client.vacancy("42")
+    point = geo.point_of(detail)
+    assert point is not None and point.mappable
+    assert point.address == "Москва, Ленина, 1"
+    assert point.metro == "Тверская"
+
+
+def test_point_of_tolerates_broken_detail():
+    """Страница без состояния — деталь без адреса, а не исключение [CORE-017]."""
+    import geo
+
+    assert geo.point_of({"description": "", "key_skills": []}) is None
+    assert geo.point_of(None) is None
+
+
+def test_save_needs_the_vacancy_in_base():
+    """Адрес без вакансии записать некуда: счётчик не должен врать."""
+    import sqlite3
+
+    import geo
+
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE vacancies (key TEXT PRIMARY KEY)")
+    point = geo.Point(address="Москва, Ленина, 1", lat=55.7, lng=37.6)
+    geo.ensure_schema(conn)
+    assert geo.save(conn, "hh:missing", point) is False
+    conn.execute("INSERT INTO vacancies (key) VALUES ('hh:1')")
+    assert geo.save(conn, "hh:1", point) is True

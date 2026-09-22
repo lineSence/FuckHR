@@ -94,7 +94,7 @@ def test_пустое_значение_не_становится_условие�
 
 def test_быстрый_вид_подставляет_умолчания_а_явное_сильнее() -> None:
     params = ui_filters.apply_preset(filters.VACANCY_PRESETS, {"view": "open"})
-    assert params["min_score"] == "50"
+    assert params["min_score"] == filters.FIT
     assert params["state"] == "active"
 
     mine = ui_filters.apply_preset(
@@ -137,6 +137,7 @@ def test_каждый_фильтр_превращается_в_рабочий_sq
         "notified": "no",
         "feedback": "none",
         "contact": "none",
+        "source": "many",
         "market": "below",
         "ai": "human",
         "company_level": "red",
@@ -151,3 +152,32 @@ def test_каждый_фильтр_превращается_в_рабочий_sq
 
         value = "1" if item.kind == "number" else (item.options[1][0] if item.options else "а")
         ui_companies.filtered_companies(filled, {item.key: value}, 5)
+
+
+def test_поиск_по_русски_не_смотрит_на_регистр() -> None:
+    """Встроенный LIKE в SQLite приводит регистр только у латиницы: «оператор»
+    не находил «Оператор 1С». Регистр приводит ru_lower из filters.register."""
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    db.init_schema(conn)
+    filters.ensure_tables(conn)
+    conn.execute(
+        "INSERT INTO vacancies (key, external_id, title, company, url, source,"
+        " area, first_seen_at, last_seen_at) VALUES"
+        " ('k1', '1', 'Оператор 1С', 'ООО «Ромашка»', 'u', 'hh.ru', 'Санкт-Петербург',"
+        " '2026-09-01', '2026-09-01')"
+    )
+    conn.commit()
+
+    def found(params: dict) -> int:
+        where, args, _active = filters.build_where(filters.VACANCY_FILTERS, params)
+        return conn.execute(
+            "SELECT COUNT(*) FROM vacancies v WHERE {}".format(where), args
+        ).fetchone()[0]
+
+    assert found({"q": "оператор"}) == 1
+    assert found({"q": "ОПЕРАТОР"}) == 1
+    assert found({"q": "ромашка"}) == 1
+    assert found({"area": "санкт-петербург"}) == 1
+    # Процент остаётся буквой, а не джокером: экранирование не потерялось.
+    assert found({"q": "%"}) == 0

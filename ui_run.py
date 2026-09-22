@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import time
+import sqlite3
 from typing import Mapping, Sequence
 
 import jobs
@@ -93,7 +94,11 @@ def loop_form() -> str:
     )
 
 
-def render_run(active_id: int | None = None, note: str = "") -> tuple[str, int]:
+def render_run(
+    active_id: int | None = None,
+    note: str = "",
+    conn: "sqlite3.Connection | None" = None,
+) -> tuple[str, int]:
     """Главная страница: кнопки, полоска и живой лог.
 
     Вторым значением идёт интервал автообновления: пока задача идёт, страница
@@ -122,6 +127,13 @@ def render_run(active_id: int | None = None, note: str = "") -> tuple[str, int]:
         )
 
     parts.append(loop_form())
+
+    # Выбор площадок — часть решения «что сейчас собираем», поэтому он здесь, а
+    # не в настройках. Без базы блок не рисуется: метрику брать негде.
+    if conn is not None:
+        import ui_sources
+
+        parts.append(ui_sources.render_sources(conn))
 
     collect = settings.collect_options()
     outreach_opts = settings.outreach_options()

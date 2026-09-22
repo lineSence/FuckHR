@@ -304,9 +304,11 @@ def test_карточка_компании_показывает_уровень_�
 
     html = ui_companies.render_score(conn, "Ромашка")
 
-    assert "Оценка работодателя" in html
+    # Заголовок теперь даёт сворачиваемый блок карточки, а не сам render_score.
     assert R.LEVEL_RU[R.LEVEL_RED] in html
     assert "Доверие" in html and "вето" in html
+    card = ui_companies.render_company(conn, "Ромашка")
+    assert "<details open><summary>Оценка работодателя" in card
 
 
 def test_список_компаний_показывает_оценку_отдельной_колонкой():

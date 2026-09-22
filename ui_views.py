@@ -30,169 +30,21 @@ import aitext
 import market
 import market_rules
 import outreach
+import profiles
 import settings
+import source_store
+import sources
 import websearch
-from ui_core import esc, sort_head, sort_pick, table
+from ui_core import esc, live_search, sort_head, sort_pick, table
 from ui_run import (  # noqa: F401 — реэкспорт: страница запуска живёт в ui_run.py
     loop_form,
     progress_block,
     render_run,
 )
-
-
-# ———— настройки ————
-
-
-SETTINGS_SEARCH = """
-<div class=field>
-<input type=search id=setq autocomplete=off
- placeholder="Поиск по настройкам: название, ключ или слово из подсказки">
-<div class=hint id=setq-note>Группы свёрнуты: разверни нужную или начни искать.</div>
-</div>
-"""
-
-# Скрипт идёт после формы: на момент выполнения подкаты должны уже существовать.
-SETTINGS_SEARCH_JS = """
-<script>
-(function () {
-  var box = document.getElementById("setq");
-  var note = document.getElementById("setq-note");
-  var groups = [].slice.call(document.querySelectorAll("details.setgroup"));
-  function apply() {
-    var q = box.value.trim().toLowerCase();
-    var found = 0;
-    groups.forEach(function (group) {
-      var shown = 0;
-      [].slice.call(group.querySelectorAll("[data-find]")).forEach(function (field) {
-        var hit = !q || field.dataset.find.indexOf(q) >= 0;
-        field.hidden = !hit;
-        if (hit) { shown += 1; }
-      });
-      group.hidden = Boolean(q) && !shown;
-      // Пустой запрос возвращает исходное состояние, а не «всё открыто»:
-      // иначе после стирания строки страница остаётся километровой.
-      group.open = q ? shown > 0 : group.dataset.open === "1";
-      found += shown;
-    });
-    if (!q) {
-      note.textContent = "Группы свёрнуты: разверни нужную или начни искать.";
-    } else {
-      note.textContent = found ? "Найдено настроек: " + found : "Ничего не нашлось.";
-    }
-  }
-  box.addEventListener("input", apply);
-  apply();
-})();
-</script>
-"""
-
-
-def settings_field(field: "settings.Field", current: str) -> str:
-    """Одна настройка в форме. data-find — то, по чему её ищет строка поиска."""
-    found = " ".join((field.label, field.key, field.help, field.group)).lower()
-
-    if field.kind == settings.BOOL:
-        on = settings.as_bool(current, settings.as_bool(field.default))
-        control = (
-            '<label><input type=checkbox name="{key}" value="1"{checked}> {label}</label>'
-        ).format(
-            key=esc(field.key),
-            checked=" checked" if on else "",
-            label=esc(field.label),
-        )
-        return (
-            '<div class=field data-find="{found}">{control}'
-            "<div class=hint>{key} · {hint}</div></div>"
-        ).format(
-            found=esc(found), control=control, key=esc(field.key), hint=esc(field.help)
-        )
-
-    if field.is_secret:
-        shown = ""
-        placeholder = settings.mask(current)
-        input_type = "password"
-    else:
-        shown = current or field.default
-        placeholder = field.default
-        input_type = "number" if field.kind in (settings.INT, settings.FLOAT) else "text"
-
-    step = ""
-    if field.kind == settings.INT:
-        step = ' step="1"'
-    elif field.kind == settings.FLOAT:
-        step = ' step="any"'
-
-    return (
-        '<div class=field data-find="{found}"><label>{label}</label>'
-        '<input type="{input_type}" name="{key}" value="{value}" '
-        'placeholder="{placeholder}"{step}>'
-        "<div class=hint>{key} · {hint}</div></div>"
-    ).format(
-        found=esc(found),
-        label=esc(field.label),
-        input_type=input_type,
-        key=esc(field.key),
-        value=esc(shown),
-        placeholder=esc(placeholder),
-        step=step,
-        hint=esc(field.help),
-    )
-
-
-def render_settings(saved: Sequence[str] = ()) -> str:
-    """Настройки подкатами: шесть десятков полей одним списком не читаются.
-
-    Раскрыта только группа запуска — та, куда ходят чаще всего. Остальные
-    разворачиваются руками или сами, когда их поля попали в поиск. Поля
-    свёрнутых групп остаются в форме и сохраняются как обычно: details прячет
-    их визуально, браузер их всё равно отправляет.
-    """
-    values = settings.load()
-    parts = []
-
-    if saved:
-        parts.append("<div class=ok>Сохранено: {}</div>".format(esc(", ".join(saved))))
-
-    notes = settings.missing_required()
-    if notes:
-        items = "".join("<li>{}</li>".format(esc(item)) for item in notes)
-        parts.append("<div class=warn><ul>{}</ul></div>".format(items))
-
-    parts.append(
-        "<p class=muted>Всё сохраняется в {}. Секреты показаны маской: пустое поле "
-        "оставляет текущее значение, слово «очистить» стирает его.</p>".format(
-            esc(settings.ENV_PATH)
-        )
-    )
-    parts.append(SETTINGS_SEARCH)
-    parts.append('<form method=post action="/settings">')
-
-    for position, (group, fields) in enumerate(settings.groups()):
-        opened = position == 0
-        parts.append(
-            (
-                '<details class=setgroup data-open="{flag}"{attr}>'
-                "<summary>{group} <span class=muted>· настроек: {count} · {hint}</span>"
-                "</summary>"
-            ).format(
-                flag="1" if opened else "0",
-                attr=" open" if opened else "",
-                group=esc(group),
-                count=len(fields),
-                hint=esc(settings.GROUP_HINTS.get(group, "")),
-            )
-        )
-        for field in fields:
-            parts.append(settings_field(field, values.get(field.key, "")))
-        parts.append("</details>")
-
-    parts.append("<p><button>Сохранить</button></p></form>")
-    parts.append(SETTINGS_SEARCH_JS)
-    parts.append(
-        "<p class=muted>Новые значения подхватываются со следующего запуска задачи: "
-        "каждая задача — отдельный процесс со свежим .env.</p>"
-    )
-    return "".join(parts)
+from ui_settings import (  # noqa: F401 — реэкспорт: настройки живут в ui_settings.py
+    render_settings,
+    settings_field,
+)
 
 
 # ———— выдача ————
@@ -225,10 +77,7 @@ def filtered_vacancies(
     # Фильтры заглядывают в соседние таблицы (контакты, инъекции, сигналы,
     # оценки компаний). На базе, собранной версией без них, страница не должна
     # падать: CREATE IF NOT EXISTS дешевле, чем обработка «no such table».
-    contacts.ensure_schema(conn)
-    detector.ensure_schema(conn)
-    injection_store.ensure_schema(conn)
-    company_score_store.ensure_schema(conn)
+    filters.ensure_tables(conn)
     where, args, active = filters.build_where(filters.VACANCY_FILTERS, params)
     order = filters.order_by(
         filters.VACANCY_SORTS, str(params.get("sort", "") or ""), "score"
@@ -322,6 +171,7 @@ VACANCY_COLUMNS = (
     ("score", "Скор"),
     ("title", "Вакансия"),
     ("company", "Компания"),
+    ("", "Площадка"),
     ("salary", "Зарплата"),
     ("published", "Опубликована"),
     ("", "В TG"),
@@ -366,7 +216,18 @@ def render_vacancies(
     Старые позиционные аргументы оставлены: их зовут тесты и прежние ссылки.
     Всё остальное приходит словарём параметров адреса.
     """
-    query = ui_filters.apply_preset(filters.VACANCY_PRESETS, dict(params or {}))
+    query = dict(params or {})
+    if params is not None:
+        # Адрес без параметров — это вид «Подходящие», а не «всё подряд». Иначе
+        # первое, что видит владелец, — вакансии ниже порога профиля, на
+        # компании которых досье никто не собирал: вакансия есть, работодателя
+        # нет, и это выглядит поломкой. «Все» остаётся одним щелчком рядом.
+        # params=None означает старый вызов «покажи от min_score»: его зовут
+        # прежние ссылки и тесты, и вид им не навязывается.
+        query.setdefault("view", filters.FIT)
+    query = ui_filters.apply_preset(filters.VACANCY_PRESETS, query)
+    if query.get("min_score") == filters.FIT:
+        query["min_score"] = "{:.0f}".format(profiles.dossier_threshold())
     if min_score and "min_score" not in query:
         query["min_score"] = str(min_score)
     query.setdefault("sort", sort)
@@ -378,7 +239,20 @@ def render_vacancies(
     direct, total = contacts.coverage(conn)
 
     head = (
-        ui_filters.presets_line(filters.VACANCY_PRESETS, query, "/vacancies")
+        ui_filters.presets_line(
+            filters.VACANCY_PRESETS, query, "/vacancies", default=filters.FIT
+        )
+        + live_search(
+            "/vacancies",
+            "vq",
+            "vlist",
+            value=str(query.get("q", "") or ""),
+            hidden={
+                key: value
+                for key, value in query.items()
+                if key not in ("q", "limit") and value
+            },
+        )
         + ui_filters.chips(active, query, "/vacancies")
         + ui_filters.form(
             filters.VACANCY_FILTERS,
@@ -390,15 +264,20 @@ def render_vacancies(
         + ui_filters.sort_line(filters.VACANCY_SORTS, query, "/vacancies")
     )
 
+    # Порог профиля здесь же: без него «19 вакансий, а досье 5» выглядит
+    # поломкой, хотя это два разных порога (docs/dossier.md).
+    threshold = profiles.dossier_threshold()
     summary = (
         "<p class=muted>В базе {vacancies} вакансий · под фильтр подошло "
-        "{found} · показано {shown} · прямых контактов {direct} из {total}.</p>"
+        "{found} · показано {shown} · прямых контактов {direct} из {total}. "
+        "Досье, контакты и письма — только от {threshold:.0f} баллов.</p>"
     ).format(
         vacancies=stats.get("vacancies", 0),
         found=found,
         shown=len(rows),
         direct=direct,
         total=total,
+        threshold=threshold,
     )
 
     if not rows:
@@ -409,6 +288,7 @@ def render_vacancies(
             'или начни со <a href="/">сбора</a>, если база пуста.</div>'
         )
 
+    marks = _source_marks(conn, [str(row["key"] or "") for row in rows])
     body = []
     for row in rows:
         score = float(row["score"] or 0)
@@ -420,6 +300,7 @@ def render_vacancies(
                 "<span class=score>{:.0f}</span>".format(score),
                 link,
                 esc(row["company"]),
+                _source_cell(row, marks),
                 _salary_cell(row),
                 esc((row["published_at"] or "")[:10]),
                 "✓" if row["notified_at"] else "",
@@ -430,12 +311,56 @@ def render_vacancies(
     return (
         head
         + summary
+        + '<div id=vlist>'
         + table(
             sort_head(VACANCY_COLUMNS, base, "sort", query.get("sort", "score")),
             body,
             raw_head=True,
         )
+        + "</div>"
     )
+
+
+def _source_marks(
+    conn: sqlite3.Connection, keys: Sequence[str]
+) -> dict[str, list[str]]:
+    """Ключ вакансии → площадки, где её видели. Одним запросом на всю страницу."""
+    out: dict[str, list[str]] = {}
+    keys = [key for key in keys if key]
+    if not keys:
+        return out
+    source_store.ensure_schema(conn)
+    holes = ",".join("?" * len(keys))
+    for key, source in conn.execute(
+        "SELECT key, source FROM vacancy_sources WHERE key IN ({})".format(holes),
+        list(keys),
+    ):
+        out.setdefault(str(key), []).append(str(source))
+    return out
+
+
+def _source_cell(row: sqlite3.Row, marks: dict[str, list[str]]) -> str:
+    """Главная площадка и сколько ещё её видели.
+
+    Главная — та же, что в ссылке вакансии (`sources.PRIORITY`). «+1» рядом
+    значит, что вакансия висит не на одной площадке: это не дубль в базе, а
+    одна запись с несколькими адресами (docs/sources.md). Пусто — запись
+    старая, собранная до разметки площадок, и додумывать за неё нечего
+    [CORE-019].
+    """
+    seen = marks.get(str(row["key"] or ""), [])
+    main = str(row["source"] or "")
+    if not main:
+        for source in seen:
+            main = sources.main_source(main, source) if main else source
+    if not main:
+        return '<span class=muted>—</span>'
+    extra = len([source for source in seen if source != main])
+    tail = ' <span class=pill title="{}">+{}</span>'.format(
+        esc(", ".join(sources.label_of(source) for source in seen if source != main)),
+        extra,
+    ) if extra else ""
+    return esc(sources.label_of(main)) + tail
 
 
 def _salary_cell(row: sqlite3.Row) -> str:
@@ -456,19 +381,46 @@ MARKET_CLASS = {
 }
 
 
+def _open_links(conn: sqlite3.Connection, row: sqlite3.Row) -> str:
+    """Ссылки «открыть на …» — по всем площадкам, где вакансию видели.
+
+    Раньше подпись была «открыть на hh.ru» литералом, и вакансия с Работы.ру
+    выглядела как hh-евская. Главная ссылка идёт первой (она же в `vacancies`),
+    остальные адреса берутся из `vacancy_sources`: одна и та же вакансия на двух
+    сайтах — это одна запись с двумя адресами (`docs/sources.md`).
+    """
+    main = str(row["url"] or "")
+    main_source = str(row["source"] or "")
+    seen: list[tuple[str, str]] = []
+    if main:
+        seen.append((main_source, main))
+    source_store.ensure_schema(conn)
+    for site, url in conn.execute(
+        "SELECT source, url FROM vacancy_sources WHERE key = ? ORDER BY source",
+        (str(row["key"] or ""),),
+    ):
+        url = str(url or "")
+        if url and url != main:
+            seen.append((str(site), url))
+    links = [
+        '<a href="{url}" target=_blank rel=noreferrer>открыть на {label}</a>'.format(
+            url=esc(url), label=esc(sources.label_of(site) if site else "площадке")
+        )
+        for site, url in seen
+    ]
+    return " · ".join(links)
+
+
 def render_vacancy(conn: sqlite3.Connection, key: str, with_draft: bool) -> str:
     row = vacancy_one(conn, key)
     if row is None:
         return "<p>Вакансия не найдена.</p>"
 
     parts = [
-        (
-            "<p><b>{company}</b> · скоринг <span class=score>{score:.0f}</span> · "
-            '<a href="{url}" target=_blank rel=noreferrer>открыть на hh.ru</a></p>'
-        ).format(
+        "<p><b>{company}</b> · скоринг <span class=score>{score:.0f}</span>{links}</p>".format(
             company=esc(row["company"]),
             score=float(row["score"] or 0),
-            url=esc(row["url"]),
+            links=" · " + _open_links(conn, row) if row["url"] else "",
         )
     ]
 

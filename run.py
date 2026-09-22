@@ -59,6 +59,7 @@ import db
 import detector
 import detector_llm
 import dossier
+import geo
 import hh_pages
 import llm
 import injection_store
@@ -70,6 +71,8 @@ import market_store
 import llm_tasks
 import outreach
 import settings
+import source_store
+import sources
 import targets_hh
 import websearch
 from collector import collect  # noqa: F401 — реэкспорт: сбор живёт в collector.py
@@ -78,6 +81,8 @@ from hh_html import BlockedError, HHHtmlClient
 import run_cards
 import run_loop
 import embeddings_tasks
+import extract_spans
+import stage_gates
 from run_setup import build_gateway, notify_if_broken, setup_logging
 from research import (  # noqa: F401 — реэкспорт для старых вызовов
     MAX_RESEARCH_WORKERS,
@@ -169,6 +174,7 @@ def run_once(args: argparse.Namespace) -> int:
     new_count = 0
     enriched = 0
     reused_details = 0
+    addressed = 0
     # Сколько карточек не стали качать: даже идеальное описание не вытянуло бы
     # вакансию до порога профиля (PREFILTER_DETAILS_DELTA, B-15).
     skipped_details = 0
@@ -193,26 +199,55 @@ def run_once(args: argparse.Namespace) -> int:
         failure_dir=settings.get("FAILURE_DIR", "data/failures"),
         cache=hh_pages.search_cache(),
     )
+    # Галочка hh.ru на главной — это разрешение туда ходить, а не украшение:
+    # снятая означает «не трогай hh вообще», включая цели со слежением.
+    hh_on = sources.hh_enabled()
+    # Другие площадки: свой обход, свои паузы, ключ дедупа тот же. Идут в фоне,
+    # пока hh.ru отсиживает свои паузы. Вакансия, найденная и здесь и на hh.ru,
+    # остаётся одной записью — площадка уходит в vacancy_sources, а этапы
+    # модели платятся один раз [CORE-016].
+    extra_job = sources.start_external(bundle, options.limit, prefilter)
     try:
-        seen, drafts, owners = profiles.collect_all(
-            client, bundle, options.limit, prefilter, conn=conn
-        )
-        log.info("увидели: %s, прошло предфильтр: %s", len(seen), len(drafts))
+        if hh_on:
+            seen, drafts, owners = profiles.collect_all(
+                client, bundle, options.limit, prefilter, conn=conn
+            )
+            log.info("увидели: %s, прошло предфильтр: %s", len(seen), len(drafts))
+        else:
+            owners = {}
+            log.info("hh.ru выключен галочкой на главной: ни поиска, ни целей")
+        extra_seen, extra_drafts, extra_owners = extra_job.result(conn, known=tuple(seen))
+        if extra_seen:
+            for key, draft in extra_seen.items():
+                seen.setdefault(key, draft)
+            for key, draft in extra_drafts.items():
+                drafts.setdefault(key, draft)
+            for key, ids in extra_owners.items():
+                owners.setdefault(key, []).extend(ids)
+            log.info(
+                "другие площадки: увидели %s, добавили в прогон %s",
+                len(extra_seen),
+                len(extra_drafts),
+            )
         # Цели со слежением (ADR-025): отдельный обход по employer_id, не чаще
         # раза в сутки на цель. Компания выбрана владельцем, поэтому её
         # вакансии сохраняются целиком, без предфильтра и порога.
-        for company, fresh in targets_hh.sweep(conn, client):
-            log.info("цель %s: новых вакансий %s", company, fresh)
+        if hh_on:
+            for company, fresh in targets_hh.sweep(conn, client):
+                log.info("цель %s: новых вакансий %s", company, fresh)
         # Рынок пересчитывается до скоринга: вес `market` в score.py берётся
         # из свежих срезов, иначе первая вакансия прогона сравнивалась бы с
         # позавчерашней медианой.
         market_store.drop_stale(conn)
         market_store.recompute(conn)
         total = len(drafts)
+        geo.ensure_schema(conn)  # колонки адреса: один раз, не в цикле
+        source_store.ensure_schema(conn)
         for position, draft in enumerate(drafts.values(), start=1):
             # Счётчик в квадратных скобках — то, по чему интерфейс рисует полоску.
             log.info("[%s/%s] %s — %s", position, total, draft.title, draft.company)
             vacancy = draft
+            point = None
             # Описание из базы вместо второго похода на hh.ru: на повторном
             # прогоне именно эти запросы съедали почти всё время. Дата публикации
             # сменилась — объявление перепубликовали, описание качаем заново.
@@ -225,8 +260,12 @@ def run_once(args: argparse.Namespace) -> int:
                 draft, bundle, owners.get(draft.key), prefilter.fuzzy, details_delta
             ):
                 try:
-                    vacancy = enrich(draft, client.vacancy(draft.external_id))
+                    detail = client.vacancy(draft.external_id)
+                    vacancy = enrich(draft, detail)
                     enriched += 1
+                    # Точка приехала с той же страницей: запишем, когда
+                    # вакансия окажется в базе.
+                    point = geo.point_of(detail)
                     if not vacancy.description.strip():
                         empty_descriptions += 1
                 except BlockedError:
@@ -236,7 +275,7 @@ def run_once(args: argparse.Namespace) -> int:
                     with_details = False
                 except Exception:  # noqa: BLE001 — вакансия могла быть уже закрыта
                     log.warning("нет деталей по %s, берём черновик", draft.external_id)
-            elif with_details:
+            elif with_details and draft.source == sources.SOURCE_HH:
                 skipped_details += 1
             # Спрятанная в тексте инструкция для ИИ — поступок работодателя,
             # а не техническая помеха (ADR-020). Запоминаем до скоринга: улика
@@ -289,6 +328,14 @@ def run_once(args: argparse.Namespace) -> int:
                 ai_verdict=ai_verdict,
             ):
                 new_count += 1
+            # Без этого карта живёт только кнопкой дозаполнения.
+            if point is not None and geo.save(conn, vacancy.key, point):
+                addressed += 1
+            # Где именно видели вакансию: главная ссылка в vacancies одна, а
+            # площадок может быть несколько.
+            source_store.remember(
+                conn, vacancy.key, vacancy.source, vacancy.external_id, vacancy.url
+            )
             # Балл каждого профиля живёт на связи: у профилей разные критерии.
             db.save_matches(
                 conn,
@@ -331,6 +378,8 @@ def run_once(args: argparse.Namespace) -> int:
             reused_details,
             enriched,
         )
+    if addressed:
+        log.info("адресов с точкой на карте сохранено: %s", addressed)
     if skipped_details:
         log.info(
             "карточек не качали: %s (до порога не хватало больше %.0f баллов)",
@@ -341,10 +390,39 @@ def run_once(args: argparse.Namespace) -> int:
     # Этапы модели по всему собранному разом: сеть ждут параллельно, в базу
     # пишет главный поток.
     if to_extract:
-        for key, items in llm_batch.extract_all(db_path, to_extract).items():
+        # Сначала разметка спанами, если она включена: цитата оттуда дословна
+        # по построению, и на эти вакансии модель не тратится вовсе.
+        by_spans = {
+            vacancy.key: items
+            for vacancy in to_extract
+            for items in (extract_spans.conditions(vacancy.description),)
+            if items
+        }
+        for key, items in by_spans.items():
+            if conditions.store(conn, key, items):
+                extracted += 1
+        rest = stage_gates.keep_for_stage(
+            conn,
+            gateway,
+            "extract",
+            [v for v in to_extract if v.key not in by_spans],
+        )
+        for key, items in llm_batch.extract_all(db_path, rest).items():
             if conditions.store(conn, key, items):
                 extracted += 1
     if to_claim:
+        kept = {
+            vacancy.key
+            for vacancy in stage_gates.keep_for_stage(
+                conn, gateway, "hr_filter", [pair[0] for pair in to_claim]
+            )
+        }
+        # Отчёт детектора сохраняется всегда: гейт экономит вызов модели, а не
+        # выкидывает детерминированные находки [CORE-015].
+        for vacancy, report in to_claim:
+            if vacancy.key not in kept:
+                detector.store(conn, report)
+        to_claim = [pair for pair in to_claim if pair[0].key in kept]
         enriched_reports = llm_batch.claims_all(db_path, to_claim)
         for vacancy, report in to_claim:
             detector.store(conn, enriched_reports.get(vacancy.key, report))
@@ -370,6 +448,16 @@ def run_once(args: argparse.Namespace) -> int:
     # Досье на компании. Идёт после hh.ru и до отправки карточек: без него в
     # карточке не будет самой полезной строки.
     researched: dict[str, dossier.Dossier] = {}
+    # Строка про два порога: в базу попадает всё, что прошло предфильтр, а
+    # досье и контакты — только то, что прошло порог профиля. Без этой строки
+    # «вакансий 19, досье 5» выглядит как потеря данных.
+    log.info("по площадкам — %s", sources.queue_note(seen, drafts))
+    log.info(
+        "в очередь на досье: компаний %s из %s вакансий прогона (порог профиля %.0f)",
+        len(to_research),
+        len(drafts),
+        profiles.min_threshold(bundle),
+    )
     if to_research:
         researched = research_companies(
             conn, db_path, to_research, use_llm=options.use_llm

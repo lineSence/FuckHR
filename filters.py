@@ -34,6 +34,7 @@ import aitext_rules
 import company_score_rules as CSR
 import injection_rules
 import market_rules
+import sources
 
 ANY = ""  # значение «неважно» у выбора
 
@@ -43,6 +44,29 @@ def like(value: str) -> str:
     safe = value.strip().replace("\\", "\\\\")
     safe = safe.replace("%", "\\%").replace("_", "\\_")
     return "%" + safe + "%"
+
+
+def register(conn: sqlite3.Connection) -> None:
+    """Регистрирует `ru_lower` — без неё поиск по-русски учитывает регистр.
+
+    Встроенные `LIKE`, `lower()` и `COLLATE NOCASE` в SQLite приводят регистр
+    только у латиницы: «оператор» не находил «Оператор 1С», а «ООО» не
+    находило «ооо». Собранная без ICU библиотека — норма, поэтому регистр
+    приводит Python.
+    """
+    try:
+        conn.create_function("ru_lower", 1, _lower, deterministic=True)
+    except Exception:  # noqa: BLE001 — старый sqlite3 без deterministic
+        conn.create_function("ru_lower", 1, _lower)
+
+
+def _lower(value: object) -> object:
+    return str(value).lower() if value is not None else None
+
+
+def ilike(column: str) -> str:
+    """Условие поиска без учёта регистра: `ru_lower(<колонка>) LIKE ru_lower(?)`."""
+    return "ru_lower({}) LIKE ru_lower(?) ESCAPE '\\'".format(column)
 
 
 def _days_ago(value: str) -> str:
@@ -112,11 +136,14 @@ VACANCY_FILTERS: tuple[Filter, ...] = (
         "q",
         "Слово в названии или компании",
         "text",
-        lambda v: ("(v.title LIKE ? ESCAPE '\\' OR v.company LIKE ? ESCAPE '\\')", (like(v), like(v))),
+        lambda v: (
+            "({} OR {})".format(ilike("v.title"), ilike("v.company")),
+            (like(v), like(v)),
+        ),
         width="220px",
     ),
     Filter("company", "Компания целиком", "text", lambda v: ("v.company = ?", (v,))),
-    Filter("area", "Город", "text", lambda v: ("v.area LIKE ? ESCAPE '\\'", (like(v),))),
+    Filter("area", "Город", "text", lambda v: (ilike("v.area"), (like(v),))),
     Filter(
         "min_score",
         "Скор не ниже",
@@ -207,6 +234,30 @@ VACANCY_FILTERS: tuple[Filter, ...] = (
             ("any", "хоть какой"),
             ("direct", "не угаданный"),
             ("none", "нет совсем"),
+        ),
+    ),
+    # Площадка, на которой вакансия нашлась. Значения — те же, что в
+    # `vacancies.source`, плюс «есть на нескольких»: одна вакансия, висящая
+    # сразу на четырёх сайтах, — это сама по себе улика (docs/sources.md).
+    Filter(
+        "source",
+        "Площадка",
+        "choice",
+        _choice(
+            {
+                **{
+                    site.source: "v.source = '{}'".format(site.source)
+                    for site in sources.SITES
+                },
+                "many": (
+                    "(SELECT COUNT(*) FROM vacancy_sources s WHERE s.key = v.key) > 1"
+                ),
+            }
+        ),
+        options=(
+            (ANY, "любая"),
+            *((site.source, site.label) for site in sources.SITES),
+            ("many", "есть на нескольких"),
         ),
     ),
     Filter(
@@ -314,7 +365,7 @@ COMPANY_FILTERS: tuple[Filter, ...] = (
         "cq",
         "Название",
         "text",
-        lambda v: ("d.company LIKE ? ESCAPE '\\'", (like(v),)),
+        lambda v: (ilike("d.company"), (like(v),)),
         width="220px",
     ),
     Filter(
@@ -397,13 +448,29 @@ class Preset:
     params: dict = field(default_factory=dict)
 
 
+# Значение «порог профиля» вместо числа: жёсткая цифра в виде расходилась с
+# настройкой профиля, и вид «Стоит открыть» показывал вакансии, на компании
+# которых досье никто не собирал. Подстановку делает ui_views.render_vacancies.
+FIT = "fit"
+
 VACANCY_PRESETS: tuple[Preset, ...] = (
-    Preset("all", "Все", "весь список без условий", {}),
+    Preset(
+        "fit",
+        "Подходящие",
+        "прошли порог профиля: на их компании есть досье и искались контакты",
+        {"min_score": FIT, "sort": "score"},
+    ),
+    Preset(
+        "all",
+        "Все",
+        "весь список, включая те, что ниже порога профиля — досье на них нет",
+        {},
+    ),
     Preset(
         "open",
         "Стоит открыть",
-        "висят, скор от 50, я их ещё не отклонял",
-        {"state": "active", "min_score": "50", "feedback": "none", "sort": "score"},
+        "висят, прошли порог профиля, я их ещё не отклонял",
+        {"state": "active", "min_score": FIT, "feedback": "none", "sort": "score"},
     ),
     Preset(
         "fresh",
@@ -427,7 +494,7 @@ VACANCY_PRESETS: tuple[Preset, ...] = (
         "unseen",
         "Не доехали в Telegram",
         "прошли порог, но карточка не отправлялась",
-        {"notified": "no", "min_score": "50", "sort": "score"},
+        {"notified": "no", "min_score": FIT, "sort": "score"},
     ),
     Preset(
         "money",
@@ -523,11 +590,23 @@ def ensure_tables(conn: sqlite3.Connection) -> None:
     import detector
     import injection_store
 
-    for store in (contacts, detector, injection_store, company_score_store):
+    import source_store
+
+    for store in (
+        contacts,
+        detector,
+        injection_store,
+        company_score_store,
+        source_store,
+    ):
         store.ensure_schema(conn)
+    # Здесь же, а не в db.connect: ensure_tables зовут все страницы с фильтрами,
+    # включая тесты с базой в памяти, и функция нужна ровно там, где LIKE.
+    register(conn)
 
 
 __all__ = (
+    "FIT",
     "ANY",
     "COMPANY_FILTERS",
     "COMPANY_PRESETS",
@@ -539,7 +618,9 @@ __all__ = (
     "VACANCY_SORTS",
     "build_where",
     "ensure_tables",
+    "ilike",
     "like",
+    "register",
     "order_by",
     "preset_of",
     "query_string",

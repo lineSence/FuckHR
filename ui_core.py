@@ -13,7 +13,7 @@ from __future__ import annotations
 import html
 import os
 import sqlite3
-from typing import Sequence
+from typing import Mapping, Sequence
 
 import conditions
 import contacts
@@ -236,18 +236,112 @@ def open_db() -> sqlite3.Connection:
 
 
 def table(
-    headers: Sequence[str], rows: Sequence[Sequence[str]], raw_head: bool = False
+    headers: Sequence[str],
+    rows: Sequence[Sequence[str]],
+    raw_head: bool = False,
+    row_attrs: Sequence[str] = (),
 ) -> str:
     """Ячейки приходят уже готовым HTML: экранирует вызывающая сторона.
 
     raw_head нужен заголовкам со ссылками сортировки — их собирает sort_head.
+    row_attrs — готовые атрибуты строк (например `data-level`), по которым
+    мгновенный отбор в браузере понимает, что прятать.
     """
     head = "".join("<th>{}</th>".format(h if raw_head else esc(h)) for h in headers)
     body = "".join(
-        "<tr>" + "".join("<td>{}</td>".format(cell) for cell in row) + "</tr>"
-        for row in rows
+        "<tr{attrs}>{cells}</tr>".format(
+            attrs=" " + row_attrs[index] if index < len(row_attrs) and row_attrs[index] else "",
+            cells="".join("<td>{}</td>".format(cell) for cell in row),
+        )
+        for index, row in enumerate(rows)
     )
     return "<table><tr>{}</tr>{}</table>".format(head, body)
+
+
+# Мгновенный отбор строк в браузере. Зачем он, если есть фильтры в SQL: поиск
+# с перезагрузкой страницы — это секунда ожидания на каждое слово, и человек
+# перестаёт искать вовсе. Здесь отбор идёт по тем строкам, что уже загружены,
+# и это честно написано под полем: Enter отправляет тот же запрос в базу.
+LIVE_JS = r"""
+<script>
+(function () {
+  var box = document.getElementById("__BOX__");
+  var scope = document.getElementById("__SCOPE__");
+  var note = document.getElementById("__BOX__-note");
+  if (!box || !scope) { return; }
+  var rows = [].slice.call(scope.querySelectorAll("tr")).filter(function (row) {
+    return !row.querySelector("th");
+  });
+  rows.forEach(function (row) { row.dataset.find = row.textContent.toLowerCase(); });
+  function apply() {
+    var words = box.value.toLowerCase().split(/\s+/).filter(Boolean);
+    var shown = 0;
+    rows.forEach(function (row) {
+      var hit = words.every(function (word) { return row.dataset.find.indexOf(word) >= 0; });
+      row.hidden = !hit;
+      if (hit) { shown += 1; }
+    });
+    if (note) {
+      note.textContent = words.length
+        ? "Из загруженных строк подходит " + shown + " из " + rows.length +
+          ". Enter — поиск по всей базе."
+        : "__HINT__";
+    }
+  }
+  box.addEventListener("input", apply);
+  apply();
+})();
+</script>
+"""
+
+
+def live_search(
+    action: str,
+    box_id: str,
+    scope_id: str,
+    value: str = "",
+    placeholder: str = "должность или компания",
+    hint: str = "Отбор идёт сразу, по загруженным строкам. Enter — поиск по всей базе.",
+    hidden: Mapping[str, str] | None = None,
+    name: str = "q",
+) -> str:
+    """Поле поиска, которое отбирает строки по мере набора.
+
+    Одно поле, а не два: мгновенный отбор сужает то, что уже на экране, а
+    Enter отправляет тот же текст в SQL и ищет по всей базе. Два разных поля
+    для «искать здесь» и «искать везде» люди путают.
+    """
+    inputs = "".join(
+        '<input type=hidden name="{}" value="{}">'.format(esc(key), esc(str(item)))
+        for key, item in (hidden or {}).items()
+        if str(item or "").strip()
+    )
+    return (
+        '<form method=get action="{action}" class=filters>{hidden}'
+        '<label class=filt>Поиск<br>'
+        '<input type=search id="{box}" name="{name}" value="{value}" autocomplete=off '
+        'placeholder="{placeholder}" style="width:22em"></label>'
+        '<label class=filt><br><button class=secondary>Искать в базе</button></label>'
+        "</form>"
+        '<p class=hint id="{box}-note">{hint}</p>'
+    ).format(
+        action=esc(action),
+        hidden=inputs,
+        box=esc(box_id),
+        name=esc(name),
+        value=esc(value),
+        placeholder=esc(placeholder),
+        hint=esc(hint),
+    ) + live_js(box_id, scope_id, hint)
+
+
+def live_js(box_id: str, scope_id: str, hint: str = "") -> str:
+    """Скрипт отбора отдельно: карте он нужен без своего поля."""
+    return (
+        LIVE_JS.replace("__BOX__", box_id)
+        .replace("__SCOPE__", scope_id)
+        .replace("__HINT__", esc(hint))
+    )
 
 
 def details(title: str, note: str, body: str, open_: bool = False) -> str:
@@ -343,6 +437,9 @@ def checkbox_field(name: str, label: str, checked: bool, hint: str = "") -> str:
 
 
 __all__ = (
+    "LIVE_JS",
+    "live_js",
+    "live_search",
     "DEFAULT_PORT",
     "HOST",
     "NAV",

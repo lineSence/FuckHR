@@ -36,6 +36,7 @@ X — читайте на …»). Досье собиралось из таки�
     REVIEW_FETCH_TIMEOUT=20
     REVIEW_FETCH_CHARS=8000    # сколько символов текста брать с одной страницы
     REVIEW_FETCH_PAUSE=1.0     # пауза между загрузками, секунды
+    REVIEW_SITE_PAGES=2        # сколько страниц листать у знакомых площадок
     REVIEW_FETCH_CACHE_DAYS=30
     REVIEW_DUMP_PATH=          # пусто — не писать; например data/reviews.txt
 """
@@ -49,13 +50,14 @@ import os
 import re
 import sqlite3
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable, Sequence
 
 import injection
+import reviewsites
 
 log = logging.getLogger(__name__)
 
@@ -78,6 +80,10 @@ BROWSER_HEADERS = {
 }
 
 MAX_PAGE_CHARS = 8000
+
+# Признаки JS-челленджа вместо страницы. Встретили — жаловаться надо на защиту,
+# а не на «страница не открылась»: без прокси её не открыть вовсе.
+GUARD_MARKS = ("just a moment", "cf-chl", "cf_chl", "attention required", "checking your browser")
 CACHE_DAYS = 30
 MIN_LINE_CHARS = 40
 
@@ -171,9 +177,19 @@ def decode_items(raw: str, url: str, text: str) -> tuple[object, ...]:
 
 
 def split_items(raw_html: str, url: str, text: str) -> tuple[object, ...]:
-    """Страница → отдельные отзывы, с откатом на «одна страница — один отзыв»."""
-    import reviewitems
+    """Страница → отдельные отзывы, с откатом на «одна страница — один отзыв».
 
+    Сначала пробуется парсер площадки (`reviewsites`): у знакомых сайтов в
+    разметке лежат должность, город и оценка, которых в тексте нет. Парсер
+    ничего не нашёл — разбираем общим путём, как незнакомую страницу
+    [CORE-017].
+    """
+    import reviewitems
+    import reviewsites
+
+    items = reviewsites.parse(raw_html, url)
+    if items:
+        return items
     items = reviewitems.split_page(raw_html, url=url)
     if items:
         return items
@@ -194,6 +210,14 @@ def strip_tags(page: str) -> str:
     text = html_mod.unescape(text)
     text = SPACES_RE.sub(" ", text)
     return text
+
+
+def guarded(status: int, body: str) -> bool:
+    """Это не страница, а проверка Cloudflare? Тогда повторять бессмысленно."""
+    if status not in (403, 503):
+        return False
+    low = (body or "")[:4000].lower()
+    return any(mark in low for mark in GUARD_MARKS)
 
 
 def looks_like_review(line: str) -> bool:
@@ -247,6 +271,8 @@ class PageFetcher:
         max_chars: int = MAX_PAGE_CHARS,
         cache_days: int = CACHE_DAYS,
         pause: float = 1.0,
+        site_pages: int = 1,
+        proxy: str = "",
         transport: Callable[[str], str] | None = None,
         dump_path: str | None = None,
     ) -> None:
@@ -257,6 +283,11 @@ class PageFetcher:
         self.max_chars = max(500, int(max_chars))
         self.cache_days = max(0, int(cache_days))
         self.pause = max(0.0, float(pause))
+        # Сколько страниц читать у площадок с листанием. Одна — как было.
+        self.site_pages = max(1, int(site_pages))
+        # Прокси нужен ровно одной площадке: Antijob закрыт Cloudflare и
+        # обычному запросу отдаёт 403 вместо страницы.
+        self.proxy = (proxy or "").strip()
         self.transport = transport
         self.dump_path = (dump_path or "").strip() or None
         self.usage = FetchUsage()
@@ -284,6 +315,8 @@ class PageFetcher:
             max_chars=int(number("REVIEW_FETCH_CHARS", str(MAX_PAGE_CHARS))),
             cache_days=int(number("REVIEW_FETCH_CACHE_DAYS", str(CACHE_DAYS))),
             pause=number("REVIEW_FETCH_PAUSE", "1.0"),
+            site_pages=int(number("REVIEW_SITE_PAGES", "2")),
+            proxy=(os.getenv("REVIEW_FETCH_PROXY") or "").strip(),
             dump_path=os.getenv("REVIEW_DUMP_PATH"),
         )
 
@@ -345,7 +378,15 @@ class PageFetcher:
             headers=BROWSER_HEADERS,
             timeout=self.timeout,
             follow_redirects=True,
+            proxy=self.proxy or None,
         )
+        if guarded(response.status_code, response.text):
+            # Отдельное сообщение вместо «403 Forbidden»: за этим кодом стоит
+            # не запрет, а JS-челлендж, и лечится он прокси, а не повтором.
+            raise RuntimeError(
+                "площадка закрыта Cloudflare: обычный запрос получает "
+                "челлендж. Поможет прокси (REVIEW_FETCH_PROXY)"
+            )
         response.raise_for_status()
         return response.text
 
@@ -382,11 +423,54 @@ class PageFetcher:
         if not text:
             log.info("на странице не нашлось текста отзывов: %s", url)
         self.items[url] = split_items(raw, url, text)
+        self._follow(url)
         self._dump(url, text)
         self._cache_put(url, text)
         if self.pause and self.transport is None:
             time.sleep(self.pause)
         return text
+
+    def _follow(self, url: str) -> None:
+        """Догружает следующие страницы знакомой площадки к тем же отзывам.
+
+        У «Верного» на Dream Job двадцать страниц по 50 отзывов, у «Правды
+        сотрудников» — десять по 19. Со страницы поиска приходит только первая,
+        и без листания досье крупной сети строилось по одному проценту отзывов.
+
+        Отзывы всех страниц складываются под адресом первой: для досье это
+        одна площадка, один источник и одна запись в кэше.
+        """
+        extra = reviewsites.next_pages(url, self.site_pages - 1)
+        if not extra:
+            return
+        known = {str(getattr(item, "text", "")).lower() for item in self.items.get(url, ())}
+        for page in extra:
+            if self.usage.fetched >= self.max_pages:
+                log.info("потолок страниц не даёт листать дальше: %s", page)
+                return
+            if self.pause and self.transport is None:
+                time.sleep(self.pause)
+            try:
+                raw = (self.transport or self._http_get)(page)
+            except Exception as exc:  # noqa: BLE001 — [CORE-017]
+                self.usage.failures += 1
+                log.warning("страница %s не открылась: %s", page, exc)
+                return
+            self.usage.fetched += 1
+            items = [
+                item
+                for item in reviewsites.parse(raw, page)
+                if str(getattr(item, "text", "")).lower() not in known
+            ]
+            if not items:
+                log.info("на странице %s новых отзывов нет, останавливаюсь", page)
+                return
+            known.update(str(getattr(item, "text", "")).lower() for item in items)
+            merged = list(self.items.get(url, ())) + items
+            self.items[url] = tuple(
+                replace(item, index=number) for number, item in enumerate(merged)
+            )
+            log.info("%s: отзывов всего %s", url, len(self.items[url]))
 
     def fetch_many(self, urls: Sequence[str]) -> dict[str, str]:
         """Несколько страниц отзывов разом. Сеть — параллельно.
@@ -435,6 +519,7 @@ class PageFetcher:
                 if not text:
                     log.info("на странице не нашлось текста отзывов: %s", url)
                 self.items[url] = split_items(raw, url, text)
+                self._follow(url)
                 self._dump(url, text)
                 self._cache_put(url, text)
                 out[url] = text
@@ -449,6 +534,7 @@ __all__ = (
     "FetchUsage",
     "ensure_cache",
     "extract_reviews",
+    "guarded",
     "looks_like_review",
     "strip_tags",
     "MAX_PAGE_CHARS",

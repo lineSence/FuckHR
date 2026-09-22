@@ -111,8 +111,10 @@ def test_чужой_html_из_базы_не_попадает_в_страницу
 
     html = webui.render_vacancies(conn, min_score=0.0, limit=10)
 
-    assert "<script>" not in html
-    assert "&lt;script&gt;" in html
+    # Свой скрипт на странице есть — это мгновенный отбор строк. Проверяем то,
+    # что важно: из базы не пришло ни тега, ни его содержимого.
+    assert "<script>alert(1)</script>" not in html
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
 
 
 def test_без_адреса_инстанса_страница_поиска_объясняет_причину(
@@ -208,7 +210,9 @@ def test_страница_настроек_складывается_в_подк�
     """
     html = ui_views.render_settings()
 
-    assert html.count("<details class=setgroup") == len(settings.GROUPS)
+    # Групп каталога плюс один блок галочек «искать отзывы только на».
+    assert html.count("<details class=setgroup") == len(settings.GROUPS) + 1
+    assert "Искать отзывы только на" in html
     assert html.count(" open>") == 1  # раскрыт только первый подкат
     assert 'id="setq"' in html or "id=setq" in html
     assert html.index("<details class=setgroup") > html.index("<form method=post")
@@ -272,7 +276,134 @@ def test_блок_эмбеддера_объясняет_пустое_имя_мо
 
     monkeypatch.setenv("LLM_BASE_URL", "http://127.0.0.1:11434/v1")
     monkeypatch.delenv("LLM_STAGE_MODEL_EMBEDDINGS", raising=False)
+    monkeypatch.delenv("LLM_LOCAL_STAGE_MODEL_EMBEDDINGS", raising=False)
     html = ui_forms.embeddings_block(conn, llm.Gateway.from_env(conn))
 
-    assert "LLM_STAGE_MODEL_EMBEDDINGS" in html
+    # Локальное имя модели живёт в своём ключе: подсказка должна называть тот,
+    # который и правда читается шлюзом.
+    assert "LLM_LOCAL_STAGE_MODEL_EMBEDDINGS" in html
     assert "class=warn" in html
+
+
+def test_колонка_площадки_в_списке(conn, make_vacancy) -> None:
+    """Видно, откуда вакансия, и что она есть не на одной площадке."""
+    import source_store
+
+    conditions.ensure_schema(conn)
+    contacts.ensure_schema(conn)
+    db.upsert_vacancy(conn, make_vacancy(external_id="1", source="hh.ru"), 90.0, [])
+    key = conn.execute("SELECT key FROM vacancies").fetchone()["key"]
+    source_store.remember_many(
+        conn, [(key, "hh.ru", "1", ""), (key, "superjob", "9", "")]
+    )
+
+    html = webui.render_vacancies(conn, 0.0, 10)
+
+    assert "Площадка" in html
+    assert "hh.ru" in html
+    assert "+1" in html and "SuperJob" in html
+
+
+def test_карточка_называет_свою_площадку(conn, make_vacancy) -> None:
+    """Вакансия с Работы.ру не должна предлагать «открыть на hh.ru»."""
+    import source_store
+
+    conditions.ensure_schema(conn)
+    contacts.ensure_schema(conn)
+    detector.ensure_schema(conn)
+    db.upsert_vacancy(
+        conn,
+        make_vacancy(
+            external_id="54421864",
+            source="rabota",
+            url="https://www.rabota.ru/vacancy/54421864/",
+        ),
+        70.0,
+        [],
+    )
+    key = conn.execute("SELECT key FROM vacancies").fetchone()["key"]
+    source_store.remember_many(
+        conn,
+        [
+            (key, "rabota", "54421864", "https://www.rabota.ru/vacancy/54421864/"),
+            (key, "zarplata", "77", "https://zarplata.ru/vacancy/77"),
+        ],
+    )
+
+    html = webui.render_vacancy(conn, key, with_draft=False)
+
+    assert "открыть на Работа.ру" in html
+    assert "открыть на Zarplata.ru" in html
+    assert "открыть на hh.ru" not in html
+
+
+def test_список_называет_порог_досье(conn, make_vacancy, monkeypatch) -> None:
+    """«19 вакансий, а досье 5» — это два разных порога, и об этом надо сказать."""
+    import profiles
+
+    monkeypatch.setattr(profiles, "dossier_threshold", lambda: 45.0)
+    conditions.ensure_schema(conn)
+    contacts.ensure_schema(conn)
+    db.upsert_vacancy(conn, make_vacancy(external_id="1"), 42.0, [])
+
+    html = webui.render_vacancies(conn, 0.0, 10)
+
+    assert "от 45 баллов" in html
+
+
+def test_список_по_умолчанию_показывает_подходящие(conn, make_vacancy, monkeypatch) -> None:
+    """Вакансия ниже порога профиля лежит в базе, но в первом виде её нет:
+    досье на её компанию никто не собирал, и «вакансия есть, компании нет»
+    выглядело поломкой."""
+    import profiles
+
+    monkeypatch.setattr(profiles, "dossier_threshold", lambda: 45.0)
+    conditions.ensure_schema(conn)
+    contacts.ensure_schema(conn)
+    db.upsert_vacancy(conn, make_vacancy(external_id="1", title="Прошла порог"), 56.0, [])
+    db.upsert_vacancy(conn, make_vacancy(external_id="2", title="Ниже порога"), 42.0, [])
+
+    default = webui.render_vacancies(conn, 0.0, 10, params={})
+    assert "Прошла порог" in default
+    assert "Ниже порога" not in default
+
+    every = webui.render_vacancies(conn, 0.0, 10, params={"view": "all"})
+    assert "Ниже порога" in every
+
+
+def test_мгновенный_отбор_есть_в_списках(conn, make_vacancy) -> None:
+    """Поле отбирает строки по мере набора, Enter отправляет тот же текст в базу."""
+    conditions.ensure_schema(conn)
+    contacts.ensure_schema(conn)
+    detector.ensure_schema(conn)
+    db.upsert_vacancy(conn, make_vacancy(external_id="1"), 90.0, [])
+
+    html = webui.render_vacancies(conn, 0.0, 10, params={})
+    assert 'id="vq"' in html and "id=vlist" in html
+    assert "Enter — поиск по всей базе" in html
+
+    import ui_companies
+
+    companies = ui_companies.render_companies(conn)
+    assert 'id="cq"' in companies and 'name="cq"' in companies
+
+
+def test_галочки_площадок_отзывов_сохраняются_одной_настройкой() -> None:
+    """Пять площадок в одной строке настройки: галочки удобнее адресов."""
+    import reviewsites
+    import ui_settings
+
+    html = ui_settings.render_settings()
+    for site in reviewsites.SITES:
+        assert 'name="review_site_{}"'.format(site.host) in html
+        assert site.label in html
+    saved = ui_settings.review_sites_value(
+        {"review_sites_form": ["1"], "review_site_dreamjob.ru": ["1"]}
+    )
+    assert saved == {"REVIEW_ONLY_SITES": "dreamjob.ru"}
+    # Ни одной галочки — это «все, у кого есть парсер», а не «ни одной».
+    assert ui_settings.review_sites_value({"review_sites_form": ["1"]}) == {
+        "REVIEW_ONLY_SITES": ""
+    }
+    # Формы в запросе нет — настройку не трогаем.
+    assert ui_settings.review_sites_value({}) == {}

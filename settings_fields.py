@@ -618,5 +618,12 @@ FIELDS: tuple[Field, ...] = (
     ),
 )
 
+# Импорт снизу: дополнительные каталоги берут отсюда Field, и к этой строке он
+# определён. Сами группы живут в settings_fields_*.py [CORE-024].
+from settings_fields_extra import EXTRA_FIELDS, EXTRA_HINTS  # noqa: E402
+
+FIELDS = FIELDS + EXTRA_FIELDS
+GROUP_HINTS.update(EXTRA_HINTS)
+
 FIELD_BY_KEY: dict[str, Field] = {field.key: field for field in FIELDS}
 GROUPS: tuple[str, ...] = tuple(dict.fromkeys(field.group for field in FIELDS))

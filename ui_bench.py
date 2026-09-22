@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 import bench
 import bench_metrics
@@ -33,6 +33,10 @@ ENV_KEYS = (
     | frozenset(llm.STAGE_MODEL_ENV.values())
     | CASCADE_KEYS
 )
+
+# Подписи маршрутов: в форме коротко, в списках моделей — с адресом.
+ROUTE_RU = {llm.ROUTE_PROXY: "Модели с прокси", llm.ROUTE_LOCAL: "Локальные модели"}
+ROUTE_SHORT = {llm.ROUTE_PROXY: "прокси", llm.ROUTE_LOCAL: "локальный адрес"}
 
 # Границы окраски балла: 0.8 — рабочая модель, 0.5 — «иногда врёт», ниже — брак.
 GOOD, SO_SO = 0.8, 0.5
@@ -109,7 +113,8 @@ def render_report(report: dict[str, Any], job: jobs.Job | None = None) -> str:
     )
 
     when = report.get("finished_at")
-    meta = "{when} · {models} · прогонов на кейс: {repeat}".format(
+    meta = "{when} · {route} · {models} · прогонов на кейс: {repeat}".format(
+        route=ROUTE_SHORT.get(report.get("route", ""), "маршрут неизвестен"),
         when=(
             time.strftime("%d.%m %H:%M", time.localtime(when))
             if isinstance(when, (int, float))
@@ -272,13 +277,20 @@ def render_apply_form(rows: Sequence[bench.Row]) -> str:
     )
 
 
-def render_bench_form(note: str = "", known: Sequence[str] = ()) -> str:
-    """Форма сравнения: чекбоксы известных моделей плюс ручной ввод.
+def render_bench_form(
+    note: str = "", known: Mapping[str, Sequence[str]] | None = None
+) -> str:
+    """Форма сравнения: маршрут, чекбоксы известных моделей и ручной ввод.
+
+    Маршрут переключается здесь же: те же кейсы гоняются на прокси или на
+    локальном адресе — иначе локальные модели проверялись бы только из
+    командной строки (`bench.py --route local`).
 
     Имена моделей приходят из браузера, поэтому в команду они попадают только
     после проверки bench_models(): argv собирается из закрытого списка задач,
     а не из строки формы.
     """
+    known = dict(known or {})
     stages = "".join(
         '<label><input type=checkbox name=stage value="{s}" checked> {s}</label>'.format(
             s=esc(stage)
@@ -286,17 +298,29 @@ def render_bench_form(note: str = "", known: Sequence[str] = ()) -> str:
         for stage in bench.STAGES
     )
     picker = ""
-    if known:
+    for route, title in ROUTE_RU.items():
+        names = list(known.get(route) or ())
+        if not names:
+            continue
         boxes = "".join(
             '<label><input type=checkbox name=models value="{m}"> {m}</label>'.format(
                 m=esc(name)
             )
-            for name in known[:30]
+            for name in names[:30]
         )
-        picker = (
-            "<div class=field><label>Модели с прокси</label>"
-            "<div class=checks>{}</div></div>".format(boxes)
+        picker += (
+            "<div class=field><label>{title}</label>"
+            "<div class=checks>{boxes}</div></div>".format(
+                title=esc(title), boxes=boxes
+            )
         )
+
+    routes = "".join(
+        '<label><input type=radio name=route value="{r}"{on}> {t}</label>'.format(
+            r=esc(route), t=esc(title), on=" checked" if route == llm.ROUTE_PROXY else ""
+        )
+        for route, title in ROUTE_SHORT.items()
+    )
 
     job = jobs.runner.last("bench")
     live = render_status(job) if job is not None and job.running else ""
@@ -316,6 +340,10 @@ def render_bench_form(note: str = "", known: Sequence[str] = ()) -> str:
         '<input type=text name=models placeholder="qwen2.5-7b, gpt-4o-mini">'
         "<div class=hint>Имена как в config.yaml прокси. Список живых имён — "
         "по ссылке «Спросить список моделей» выше.</div></div>"
+        '<div class=field><label>Куда гонять</label><div class=checks>{routes}</div>'
+        "<div class=hint>Локальный маршрут гоняет те же кейсы на моделях Ollama: "
+        "имена — из «Спросить список моделей», персональные этапы при этом "
+        "никуда не уходят [CORE-012].</div></div>"
         '<div class=field><label>Этапы</label><div class=checks>{stages}</div></div>'
         '<div class=field><label>Прогонов на кейс</label>'
         '<input type=number name=repeat value="1" min="1" max="5">'
@@ -323,12 +351,14 @@ def render_bench_form(note: str = "", known: Sequence[str] = ()) -> str:
         "каждый прогон — это реальные вызовы и время.</div></div>"
         "<button>Сравнить</button></form>{report}"
     ).format(
-        note=note, live=live, picker=picker, stages=stages, report=report
+        note=note, live=live, picker=picker, routes=routes, stages=stages, report=report
     )
 
 
 __all__ = (
     "CASCADE_KEYS",
+    "ROUTE_RU",
+    "ROUTE_SHORT",
     "ENV_KEYS",
     "REPORT_PATH",
     "load_report",

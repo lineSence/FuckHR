@@ -184,6 +184,49 @@ def test_scan_saves_all_vacancies_without_threshold(conn: sqlite3.Connection) ->
     assert client.calls[0][1] == {"employer_id": "1455"}
 
 
+def test_keys_lists_vacancies_of_this_target(conn: sqlite3.Connection) -> None:
+    tid = targets.add(conn, "Яндекс", employer_id="1455")
+    other = targets.add(conn, "Сбер", employer_id="3529")
+    targets.link(conn, tid, ["hh:1", "hh:2"])
+    targets.link(conn, other, ["hh:9"])
+    assert targets.keys(conn, tid) == ["hh:1", "hh:2"]
+    assert targets.keys(conn, other) == ["hh:9"]
+
+
+def test_scan_all_goes_on_after_a_broken_step(
+    conn: sqlite3.Connection, monkeypatch
+) -> None:
+    """Один шаг упал — остальные всё равно выполняются [CORE-017]."""
+    import pathlib
+
+    import target_scan
+
+    tid = targets.add(conn, "Яндекс", employer_id="1455")
+    target = targets.get(conn, tid)
+    assert target is not None
+    targets.link(conn, tid, ["hh:1"])
+    calls: list[object] = []
+
+    def vacancies_step(db_conn, item, pages):
+        calls.append("vacancies")
+        return targets.keys(db_conn, item.id)
+
+    def geo_step(db_conn, keys, limit=target_scan.GEO_LIMIT):
+        calls.append(("geo", list(keys)))
+        return 1, 1
+
+    def reviews_step(*_args, **_kwargs):
+        raise RuntimeError("отзывы не открылись")
+
+    monkeypatch.setattr(target_scan, "scan_vacancies", vacancies_step)
+    monkeypatch.setattr(target_scan, "scan_geo", geo_step)
+    monkeypatch.setattr(target_scan, "scan_reviews", reviews_step)
+    monkeypatch.setattr(target_scan, "scan_deep", lambda *_: calls.append("deep"))
+    target_scan.scan_all(conn, target, pathlib.Path("data/x.sqlite3"), 0, False)
+    # Адреса добираются только своим вакансиям, а не всей базе.
+    assert calls == ["vacancies", ("geo", ["hh:1"]), "deep"]
+
+
 def test_star_form_knows_existing_target(conn: sqlite3.Connection) -> None:
     assert "★ В цели" in ui_targets.star_form(conn, "Яндекс")
     targets.add(conn, "Яндекс", source="run")
@@ -194,6 +237,7 @@ def test_step_needs_resolved_employer(conn: sqlite3.Connection) -> None:
     tid = targets.add(conn, "ООО Ромашка", inn="7736207543", source="inn")
     problem = ui_targets.start_step(conn, tid, "vacancies")
     assert "hh.ru" in problem
+    assert "hh.ru" in ui_targets.start_step(conn, tid, "all")
 
 
 def test_render_targets_lists_cards(conn: sqlite3.Connection) -> None:
@@ -268,7 +312,8 @@ def test_areas_counts_cities_of_this_target(conn: sqlite3.Connection) -> None:
 def test_target_page_keeps_steps_and_adds_filters(conn: sqlite3.Connection) -> None:
     tid = seeded(conn)
     html = ui_targets.render_target(conn, tid)
-    # Три кнопки шагов остаются как были [CORE-016].
+    # Шаг один: кнопка «Собрать всё по цели».
+    assert len(ui_targets.STEPS) == 1 and ui_targets.STEPS[0][0] == "all"
     for _, label, _hint in ui_targets.STEPS:
         assert label in html
     assert 'name="area"' in html and 'name="sort"' in html and 'name="q"' in html

@@ -11,6 +11,7 @@ from __future__ import annotations
 import sqlite3
 
 import geo
+import geo_query
 import jobs
 import ui_core
 import ui_map
@@ -21,6 +22,7 @@ CREATE TABLE vacancies (
     title TEXT,
     company TEXT,
     area TEXT,
+    source TEXT,
     score REAL,
     url TEXT,
     published_at TEXT,
@@ -41,13 +43,14 @@ def make_db() -> sqlite3.Connection:
     conn.execute(SCHEMA)
     for key, title, company, area, score in ROWS:
         conn.execute(
-            "INSERT INTO vacancies (key, title, company, area, score, url,"
-            " published_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO vacancies (key, title, company, area, source, score, url,"
+            " published_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 key,
                 title,
                 company,
                 area,
+                "hh.ru",
                 score,
                 "https://hh.ru/vacancy/" + key.split(":")[1],
                 "2026-09-01T10:00:00",
@@ -111,19 +114,23 @@ def test_address_of_string_and_missing() -> None:
 
 
 def test_points_and_coverage() -> None:
+    # Отбор переехал в geo_query и берёт условия из filters.py, как список
+    # вакансий: имена параметров теперь те же, что в адресной строке.
     conn = make_db()
     assert geo.coverage(conn) == (2, 3)
-    assert len(geo.points(conn)) == 2
-    assert [p["key"] for p in geo.points(conn, min_score=60.0)] == ["hh:1"]
-    assert [p["key"] for p in geo.points(conn, area="Казань")] == ["hh:2"]
-    assert [p["key"] for p in geo.points(conn, query="Python")] == ["hh:1"]
+    assert len(geo_query.points(conn, {})) == 2
+    assert [p["key"] for p in geo_query.points(conn, {"min_score": "60"})] == ["hh:1"]
+    assert [p["key"] for p in geo_query.points(conn, {"area": "Казань"})] == ["hh:2"]
+    assert [p["key"] for p in geo_query.points(conn, {"q": "Python"})] == ["hh:1"]
 
 
 def test_points_treat_percent_as_text() -> None:
     """Процент в запросе — буква, а не джокер LIKE."""
     conn = make_db()
-    assert [p["key"] for p in geo.points(conn, query="100%")] == ["hh:2"]
-    assert geo.points(conn, query="%") == []
+    assert [p["key"] for p in geo_query.points(conn, {"q": "100%"})] == ["hh:2"]
+    # Один знак процента — это поиск знака процента, а не «покажи всё»:
+    # находится только вакансия, у которой он есть в названии.
+    assert [p["key"] for p in geo_query.points(conn, {"q": "%"})] == ["hh:2"]
 
 
 def test_one_and_areas() -> None:
@@ -135,9 +142,29 @@ def test_one_and_areas() -> None:
     assert dict(geo.areas(conn)) == {"Москва": 1, "Казань": 1}
 
 
-def test_pending_skips_mapped() -> None:
+def test_pending_skips_mapped_and_alien_sites() -> None:
+    """Без точки — hh:3 и вакансия с Работы.ру, но вторую в дозаполнение брать
+    нельзя: её id на hh.ru ведёт на другую, живую вакансию, и на карте появился
+    бы чужой адрес, выданный за наш."""
     conn = make_db()
+    conn.execute(
+        "INSERT INTO vacancies (key, title, company, area, source, score, url,"
+        " published_at, last_seen_at) VALUES ('rb:1', 'С Работы.ру', 'Компания Г',"
+        " 'Тверь', 'rabota', 90.0, 'https://www.rabota.ru/vacancy/54421864/',"
+        " '2026-09-01T10:00:00', '2026-09-02T10:00:00')"
+    )
+    conn.commit()
     assert [row["key"] for row in geo.pending(conn)] == ["hh:3"]
+
+
+def test_pending_can_be_limited_to_given_keys() -> None:
+    """Шаг по цели добирает адреса только своим вакансиям."""
+    conn = make_db()
+    assert [row["key"] for row in geo.pending(conn, keys=["hh:3", "hh:9"])] == ["hh:3"]
+    # Ключи есть, но не те: ходить в сеть незачем.
+    assert geo.pending(conn, keys=["hh:1"]) == []
+    # Пустой список — цель без вакансий, тоже без запросов.
+    assert geo.pending(conn, keys=[]) == []
 
 
 def test_vacancy_id() -> None:
@@ -216,3 +243,20 @@ def test_run_page_keeps_only_regular_tasks() -> None:
         assert hidden not in keys
         # Из командной строки и из своих разделов они всё равно запускаются.
         assert hidden in jobs.TASKS
+
+
+def test_светофор_и_поиск_отбирают_метки_на_месте() -> None:
+    """Галочки уровней и поиск работают в браузере: перезагрузка карты стоит
+    секунды ожидания и сбрасывает масштаб."""
+    conn = make_db()
+    html = ui_map.render_map(conn, {})
+
+    # Легенда стала выключателями, а не только подписью цветов.
+    assert "id=maplevels" in html
+    assert html.count("input type=checkbox class=lvl") == 5
+    # Список адресов помечен уровнем, чтобы прятаться вместе с меткой.
+    assert "id=maprows" in html
+    assert "data-level=" in html
+    # Отбор живёт в скрипте карты, а не в ссылке с перезагрузкой.
+    assert "addEventListener('change', refresh)" in html
+    assert "addEventListener('input', refresh)" in html

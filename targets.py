@@ -243,6 +243,17 @@ def link(conn: sqlite3.Connection, target_id: int, keys: list[str]) -> int:
     return len(fresh)
 
 
+def keys(conn: sqlite3.Connection, target_id: int) -> list[str]:
+    """Ключи вакансий цели. Нужны шагу по цели, чтобы добрать им адреса."""
+    ensure_schema(conn)
+    return [
+        str(row[0])
+        for row in conn.execute(
+            "SELECT key FROM target_vacancies WHERE target_id = ?", (int(target_id),)
+        ).fetchall()
+    ]
+
+
 def _like(value: str) -> str:
     """Шаблон для LIKE: % и _ из поля поиска — обычные символы, не джокеры."""
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
@@ -385,6 +396,7 @@ __all__ = (
     "due",
     "ensure_schema",
     "get",
+    "keys",
     "link",
     "mark_scan",
     "remove",

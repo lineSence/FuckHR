@@ -57,6 +57,7 @@ import fake_company
 import aitext_llm
 import embeddings_tasks
 import fake_llm
+import review_area
 import reviewlegit
 import reviewlegit_store
 import fake_reviews
@@ -90,7 +91,8 @@ from dossier_rules import (  # noqa: F401 — реэкспорт для стар
     PATTERN_RULES,
     POSITIVE_MARKERS,
     RATING_RE,
-    REVIEW_SITES,
+    QUERY_SITES,
+    REVIEW_SITES,  # noqa: F401 — реэкспорт для старых вызовов
     RISK_GREEN,
     RISK_RED,
     RISK_RU,
@@ -205,9 +207,19 @@ def review_queries(company: str) -> list[str]:
     company = (company or "").strip()
     if not company:
         return []
+    import reviewsites
+
+    if reviewsites.only_selected():
+        # Режим «только на этих площадках»: широкие запросы не идут вовсе.
+        # Смысл режима — не тратить запросы на статьи, подборки и агрегаторы,
+        # которые всё равно разберутся общим путём и без разметки [CORE-016].
+        return [
+            '"{}" отзывы сотрудников site:{}'.format(company, host)
+            for host in reviewsites.selected()
+        ]
     queries = [
         '"{}" отзывы сотрудников site:{}'.format(company, host)
-        for host, _name, _trust in REVIEW_SITES[:5]
+        for host in QUERY_SITES
     ]
     queries.append('"{}" отзывы работодатель задержка зарплаты'.format(company))
     queries.append('"{}" как работать отзыв разработчика'.format(company))
@@ -305,6 +317,7 @@ def analyze(
     site_url: str | None = None,
     items: Sequence[ReviewItem] = (),
     verdicts: Sequence[Verdict] = (),
+    area: str = "",
 ) -> Dossier:
     """Детерминированная часть досье: без сети и без модели.
 
@@ -315,7 +328,7 @@ def analyze(
     items = tuple(items)
     verdicts = tuple(verdicts)
     patterns = find_patterns(reviews)
-    mark = fake_company.evaluate(items, verdicts)
+    mark = fake_company.evaluate(items, verdicts, area=area or review_area.owner_code())
     avg = mark.avg_clean if items else average_rating(reviews)
     return Dossier(
         company=company,
@@ -354,6 +367,8 @@ def items_from_reviews(
 
     pages = getattr(fetcher, "items", None) or {}
     out: list[ReviewItem] = []
+    seen_text: set[str] = set()
+    twins = 0
     for review in reviews:
         page_items = list(pages.get(review.url, ()))  # type: ignore[union-attr]
         if not page_items:
@@ -372,7 +387,20 @@ def items_from_reviews(
         marks = _boilerplate(conn, review.site)
         kept, dropped = reviewlegit.filter_items(page_items, marks)
         for item in kept:
-            out.append(replace(item, index=len(out), site=review.site, url=review.url))
+            # Один и тот же отзыв приходит с двух площадок: часть сайтов
+            # пересобирает чужие отзывы. Дважды посчитанный отзыв портит и
+            # среднюю оценку, и детекцию накрутки — «группа похожих» ловит
+            # как раз копии.
+            key = " ".join(str(getattr(item, "text", "")).lower().split())[:200]
+            if key in seen_text:
+                twins += 1
+                continue
+            seen_text.add(key)
+            out.append(
+                review_area.classify_item(
+                    replace(item, index=len(out), site=review.site, url=review.url)
+                )
+            )
         for item, check in dropped:
             log.info("отброшен фрагмент со страницы %s: %s", review.url, check.why)
         _remember_lines(conn, review.site, company, page_items)
@@ -384,6 +412,8 @@ def items_from_reviews(
             dropped=len(dropped),
             no_date=sum(1 for i in kept if not getattr(i, "dated_at", None)),
         )
+    if twins:
+        log.info("копий одного отзыва на разных площадках: %s", twins)
     return tuple(out)
 
 

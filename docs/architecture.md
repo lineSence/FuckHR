@@ -13,7 +13,7 @@ hh.ru, сайты отзывов, свой SearXNG, Telegram и адреса м�
 ## Цепочка одного прогона (`run.py`)
 
 ```
-hh.ru (HTML поиска, ADR-015)
+hh.ru (HTML поиска, ADR-015) + другие площадки (docs/sources.md)
   → зарплатные наблюдения до предфильтра (market.py → market_observations)
   → предфильтр и скоринг (score.py, без модели; метка рынка даёт вес market)
   → страница вакансии (hh_html.py) при включённых деталях
@@ -41,7 +41,8 @@ dossier.build(company)
   → reviewlegit.filter_items   отсев не-отзывов: меню, реклама, отзывы клиентов
   → aitext.assess              признак сгенерированного текста (docs/ai-text.md)
   → fake_reviews.score_items   fake_score по сигналам накрутки, без модели
-  → fake_company.evaluate      метка компании и средняя без заказных отзывов
+  → review_area.classify_item  сфера автора отзыва по словарям (docs/review-area.md)
+  → fake_company.evaluate      метка компании, средняя без заказных и цифра по своей сфере
   → dossier_text.find_patterns словарь маркеров + учёт отрицаний, без модели
   → dossier_summary.summarize  сводка словами (этап dossier), необязательная
   → company_dossier / company_reviews / review_items / review_hashes
@@ -104,7 +105,9 @@ dossier.build(company)
 | `dossier.py` | досье: сборка, риск, реэкспорт имён |
 | `dossier_text.py`, `dossier_summary.py` | разбор текста отзывов и сводка/строки карточки |
 | `reviewlegit.py`, `reviewlegit_rules.py`, `reviewlegit_store.py` | легитимность отзыва, шаблоны площадок, здоровье сбора (`docs/review-quality.md`) |
+| `sources.py`, `source_store.py`, `src_*.py` | другие площадки вакансий: реестр, разметка «где видели», адаптеры (`docs/sources.md`) |
 | `reviewitems.py` | страница → отдельные отзывы: дата, оценка, плюсы, минусы |
+| `review_area.py` | сфера автора отзыва и тема про компанию целиком (`docs/review-area.md`) |
 | `fake_reviews.py`, `fake_rules.py`, `fake_company.py`, `fake_store.py`, `fake_llm.py` | детекция накрученных отзывов: сигналы, пороги, метка компании, хранение, сигнал модели |
 | `company_score.py`, `company_score_rules.py`, `company_score_store.py` | общая оценка работодателя: оси, улики, вето (`docs/company-score.md`) |
 | `injection.py`, `injection_rules.py`, `injection_store.py` | промпт-инъекции: чистка входа модели, скрытый HTML, улики (`docs/prompt-injection.md`) |
@@ -118,27 +121,32 @@ dossier.build(company)
 | `outreach.py`, `outreach_draft.py` | прогон этапа писем и сборка текста черновика |
 | `llm.py`, `llm_profiles.py`, `llm_cascade.py`, `llm_cache.py`, `llm_tasks.py`, `check_llm.py` | шлюз к моделям, карта этапов и профилей, каскад фолбэка, кэш ответов, задачи этапов, диагностика |
 | `bench.py`, `bench_cases.py`, `bench_hard.py`, `bench_metrics.py`, `ui_bench.py` | сравнение моделей: базовые и сложные кейсы, веса уровней, отдельные колонки (`docs/model-bench.md`) |
+| `dataset_core.py`, `dataset_export.py`, `ui_dataset.py` | датасет для дообучения: перехватчик шлюза, примеры из своей базы, кнопка сборки (`docs/dataset.md`) |
+| `stage_gates.py`, `extract_spans.py` | гейты перед этапами модели и разметка условий спанами (`docs/gates.md`) |
 | `bot.py` | карточки и тревоги в Telegram: выключатель отправки, темп, тихие часы |
 | `canary.py` | тревога, когда прогон сломался, с суточным cooldown |
 | `maintenance.py` | очистка кэшей и данных по целям, с отметкой необратимых |
 | `rebuild.py` | пересчёт уже собранной базы по текущим правилам, без сети (`docs/rebuild.md`) |
-| `ui_companies.py` | страницы компаний: досье, оценка работодателя, контакты, вакансии |
+| `reviewsites.py` | парсеры площадок отзывов: Dream Job, «Правда сотрудников», Antijob, schema.org; выбор площадок |
+| `ui_companies.py` | список компаний: фильтры, виды, покрытие досье |
+| `ui_company.py` | карточка работодателя: оценка, накрутка, деньги, сферы отзывов |
+| `ui_company_lists.py` | две таблицы карточки: вакансии компании и её контакты |
 | `ui_cleanup.py` | страница очистки: цели, подтверждение необратимого |
 | `filters.py`, `ui_filters.py` | фильтры и сортировки списков: правила и рисование (`docs/filters.md`) |
 | `ui_injections.py` | страница «Инъекции»: пойманные попытки управлять моделью |
-| `run_setup.py` | обвязка прогона: логи, шлюз модели, отправка тревог |
+| `run_setup.py` | обвязка прогона: логи (включая приглушение чужих логгеров), шлюз модели, отправка тревог |
 | `targets*.py`, `hh_employer.py`, `target_scan.py` | цели: компании, выбранные владельцем, шаги и слежение (ADR-025) |
 | `webui.py`, `webui_profile.py`, `jobs.py`, `ui_*.py` | локальный интерфейс и запуск задач подпроцессами |
 | `ui_run.py` | страница запуска: кнопки задач, галочка режима цикла, полоска, лог |
 | `intake.py`, `ui_intake.py` | разговор о поиске: свободный текст владельца → критерии поиска и блоки резюме |
 | `embeddings.py`, `llm_embed.py`, `embeddings_store.py`, `embeddings_tasks.py` | векторы текстов: перефразированные отзывы и похожие вакансии (`docs/embeddings.md`) |
 | `settings.py`, `settings_fields.py` | чтение и запись `.env`, каталог полей настроек |
-| `ui_views.render_settings` | страница настроек: группы подкатами, живой поиск по ключу, названию и подсказке |
+| `ui_settings.render_settings` | страница настроек: группы подкатами, живой поиск по ключу, названию и подсказке |
 
 ## Хранилище
 
 Один файл SQLite (`data/fuckhr.sqlite3`). Таблицы: `intake_log`, `vacancies`, `vacancy_snapshots`, `vacancy_conditions`,
-`hr_signals`, `company_dossier`, `company_reviews`, `contacts`, `resumes`, `resume_blocks`,
+`vacancy_signals`, `vacancy_profiles`, `vacancy_sources`, `company_dossier`, `company_reviews`, `contacts`, `resumes`, `resume_blocks`,
 `resume_versions`, `review_items`, `review_hashes`, `site_lines`, `site_health`, `market_observations`, `market_stats`, `company_market`, `company_score`,
 `search_cache`, `page_cache`, `llm_cache`, `embeddings`.
 

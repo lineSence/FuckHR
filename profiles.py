@@ -165,6 +165,21 @@ def min_threshold(bundle: Sequence[Loaded]) -> float:
     return min((loaded.profile.min_score for loaded in bundle), default=0.0)
 
 
+def dossier_threshold() -> float:
+    """Порог, от которого компания попадает в досье, контакты и письма.
+
+    Отдельная функция ради интерфейса: страницы показывают эту цифру, чтобы
+    «19 вакансий, но 5 досье» не выглядело поломкой. Профиль не читается —
+    ошибка чтения тоже не должна ронять страницу [CORE-017].
+    """
+    import settings  # локально: settings не нужен остальному модулю
+
+    try:
+        return min_threshold(load_all(settings.get("RUN_PROFILE", "profile.yaml")))
+    except Exception:  # noqa: BLE001 — профиль могли переписать руками
+        return 0.0
+
+
 def facts(bundle: Sequence[Loaded]) -> list[str]:
     """Факты о владельце общие: человек один, профили — его разные интересы."""
     out: list[str] = []

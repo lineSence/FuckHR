@@ -86,6 +86,9 @@ from ui_core import (
     text_field,
 )
 import ui_bench
+import ui_dataset
+import ui_sources
+import ui_stages
 from ui_forms import (
     bench_models,
     profile_summary,
@@ -101,6 +104,7 @@ from ui_forms import (
 import ui_injections
 import ui_map
 import ui_research
+import ui_settings
 import ui_targets
 import ui_run
 import webui_profile
@@ -122,7 +126,10 @@ log = logging.getLogger("webui")
 # Адреса, которые существуют только для форм. GET сюда приходит не от ссылки,
 # а от F5 или «назад», и отвечать на это «такой страницы нет» — грубо.
 POST_ONLY = frozenset(
-    {"/run", "/stop", "/loop", "/bench", "/llm/apply", "/intake/apply", "/map/geo"}
+    {
+        "/run", "/stop", "/loop", "/bench", "/dataset", "/llm/apply",
+        "/intake/apply", "/map/geo", "/sources",
+    }
 )
 
 
@@ -179,7 +186,12 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/":
                 job_id = settings.as_int(one("job"), 0) or None
-                body, refresh = render_run(job_id)
+                # База нужна одному блоку — выбору площадок и их метрике.
+                conn = open_db()
+                try:
+                    body, refresh = render_run(job_id, conn=conn)
+                finally:
+                    conn.close()
                 self._send(page("Запуск", body, refresh, "/"))
                 return
             if parsed.path == "/settings":
@@ -274,7 +286,9 @@ class Handler(BaseHTTPRequestHandler):
                     self._send(
                         page(
                             "Модель",
-                            render_llm(conn, one("probe") == "1", one("embed") == "1"),
+                            render_llm(conn, one("probe") == "1", one("embed") == "1")
+                            + ui_stages.render_stages(conn)
+                            + ui_dataset.render_dataset(conn),
                             ui_bench.refresh_seconds(),
                             "/llm",
                         )
@@ -320,6 +334,16 @@ class Handler(BaseHTTPRequestHandler):
                         self._send(page("Карта", body))
                     finally:
                         conn.close()
+                    return
+                self._redirect("/?job={}".format(job_id))
+                return
+
+            if parsed.path == "/dataset":
+                # Сборка идёт минутами, поэтому уходим на страницу запуска с
+                # логом — как «Адреса для карты» и «Шаг по цели».
+                job_id, problem = ui_dataset.start_dataset(form)
+                if job_id is None:
+                    self._send(page("Модель", ui_dataset.refused(problem)))
                     return
                 self._redirect("/?job={}".format(job_id))
                 return
@@ -388,6 +412,19 @@ class Handler(BaseHTTPRequestHandler):
                 self._redirect("/")
                 return
 
+            if parsed.path == "/sources":
+                saved = ui_sources.save(form)
+                note = "<div class=ok>Площадки сохранены: {}</div>".format(
+                    esc(", ".join(saved) or "без изменений")
+                )
+                conn = open_db()
+                try:
+                    body, refresh = render_run(None, note, conn=conn)
+                finally:
+                    conn.close()
+                self._send(page("Запуск", body, refresh, "/"))
+                return
+
             if parsed.path == "/stop":
                 job_id = settings.as_int((form.get("job") or [""])[0], 0)
                 # soft — прогон дописывает текущий цикл и выходит сам.
@@ -397,6 +434,9 @@ class Handler(BaseHTTPRequestHandler):
 
             if parsed.path == "/settings":
                 updates = settings.form_updates(form)
+                # Галочки площадок отзывов складываются в одну настройку,
+                # поэтому считаются отдельно от полей каталога.
+                updates.update(ui_settings.review_sites_value(form))
                 saved = settings.save(updates)
                 self._send(page("Настройки", render_settings(saved)))
                 return
@@ -494,6 +534,9 @@ def main(argv: list[str] | None = None) -> int:
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    from run_setup import quiet_libraries  # noqa: PLC0415 — цикл импорта
+
+    quiet_libraries(args.verbose)
     try:
         from dotenv import load_dotenv
 
