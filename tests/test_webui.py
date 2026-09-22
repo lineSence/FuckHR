@@ -210,7 +210,9 @@ def test_страница_настроек_складывается_в_подк�
     """
     html = ui_views.render_settings()
 
-    assert html.count("<details class=setgroup") == len(settings.GROUPS)
+    # Групп каталога плюс один блок галочек «искать отзывы только на».
+    assert html.count("<details class=setgroup") == len(settings.GROUPS) + 1
+    assert "Искать отзывы только на" in html
     assert html.count(" open>") == 1  # раскрыт только первый подкат
     assert 'id="setq"' in html or "id=setq" in html
     assert html.index("<details class=setgroup") > html.index("<form method=post")
@@ -384,3 +386,24 @@ def test_мгновенный_отбор_есть_в_списках(conn, make_v
 
     companies = ui_companies.render_companies(conn)
     assert 'id="cq"' in companies and 'name="cq"' in companies
+
+
+def test_галочки_площадок_отзывов_сохраняются_одной_настройкой() -> None:
+    """Пять площадок в одной строке настройки: галочки удобнее адресов."""
+    import reviewsites
+    import ui_settings
+
+    html = ui_settings.render_settings()
+    for site in reviewsites.SITES:
+        assert 'name="review_site_{}"'.format(site.host) in html
+        assert site.label in html
+    saved = ui_settings.review_sites_value(
+        {"review_sites_form": ["1"], "review_site_dreamjob.ru": ["1"]}
+    )
+    assert saved == {"REVIEW_ONLY_SITES": "dreamjob.ru"}
+    # Ни одной галочки — это «все, у кого есть парсер», а не «ни одной».
+    assert ui_settings.review_sites_value({"review_sites_form": ["1"]}) == {
+        "REVIEW_ONLY_SITES": ""
+    }
+    # Формы в запросе нет — настройку не трогаем.
+    assert ui_settings.review_sites_value({}) == {}

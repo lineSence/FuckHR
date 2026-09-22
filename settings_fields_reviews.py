@@ -1,4 +1,4 @@
-"""Каталог настроек: разбивка отзывов по сферам.
+"""Каталог настроек: где искать отзывы и разбивка по сферам.
 
 Отдельный файл по той же причине, что и settings_fields_gates.py:
 settings_fields.py упёрся в 25 КБ [CORE-024]. Поля подмешиваются в общий
@@ -7,9 +7,50 @@ settings_fields.py упёрся в 25 КБ [CORE-024]. Поля подмешив
 
 from __future__ import annotations
 
-from settings_fields import TEXT, Field
+from settings_fields import BOOL, TEXT, Field
 
 import review_area
+import reviewsites
+
+GROUP_SITES = "Площадки отзывов"
+GROUP_SITES_HINT = "где искать отзывы и как их читать"
+
+SITE_FIELDS: tuple[Field, ...] = (
+    Field(
+        "REVIEW_ONLY_PARSED",
+        "Искать отзывы только на выбранных площадках",
+        GROUP_SITES,
+        BOOL,
+        "0",
+        "Включено — поиск идёт только по отмеченным ниже площадкам, у которых "
+        "есть свой парсер: оттуда мы получаем должность, оценку и дату, а не "
+        "обрывок текста. Широкие запросы («задержка зарплаты», «отзыв "
+        "разработчика») при этом не тратятся вовсе. Выключено — как раньше: "
+        "площадки плюс два широких запроса на случай, что единственный отзыв "
+        "лежит в статье или треде.",
+    ),
+    Field(
+        "REVIEW_ONLY_SITES",
+        "Отмеченные площадки",
+        GROUP_SITES,
+        TEXT,
+        "",
+        "Адреса через запятую: {}. Пусто — все, у кого есть парсер. Удобнее "
+        "ставить галочками выше; здесь — чтобы видеть значение целиком.".format(
+            ", ".join(reviewsites.hosts())
+        ),
+    ),
+    Field(
+        "REVIEW_FETCH_PROXY",
+        "Прокси для страниц отзывов",
+        GROUP_SITES,
+        TEXT,
+        "",
+        "Например http://127.0.0.1:8080. Нужен ровно одной площадке: Antijob "
+        "закрыт Cloudflare и обычный запрос получает 403 вместо страницы. "
+        "Остальные читаются и без прокси.",
+    ),
+)
 
 GROUP_AREA = "Отзывы по сферам"
 GROUP_AREA_HINT = "чьими глазами написан отзыв"
@@ -30,4 +71,11 @@ AREA_FIELDS: tuple[Field, ...] = (
     ),
 )
 
-__all__ = ("AREA_FIELDS", "GROUP_AREA", "GROUP_AREA_HINT")
+__all__ = (
+    "AREA_FIELDS",
+    "GROUP_AREA",
+    "GROUP_AREA_HINT",
+    "GROUP_SITES",
+    "GROUP_SITES_HINT",
+    "SITE_FIELDS",
+)

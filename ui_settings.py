@@ -111,6 +111,68 @@ def settings_field(field: "settings.Field", current: str) -> str:
     )
 
 
+def review_sites_block(values: "dict[str, str]") -> str:
+    """Галочки «искать отзывы только на».
+
+    Отдельный блок, а не поле-строка: площадок пять, у каждой своя цена, и
+    выбирать их глазами по подписи «должность и оценка из разметки» проще, чем
+    вписывать адреса через запятую. Само значение лежит в той же настройке
+    REVIEW_ONLY_SITES и видно в группе полей ниже.
+    """
+    import reviewsites
+
+    chosen = set(reviewsites.selected())
+    on = settings.as_bool(values.get("REVIEW_ONLY_PARSED", ""), False)
+    boxes = []
+    for site in reviewsites.SITES:
+        note = site.note
+        if site.guarded and not (values.get("REVIEW_FETCH_PROXY") or "").strip():
+            note += " · без прокси не откроется"
+        boxes.append(
+            (
+                '<label><input type=checkbox name="review_site_{code}" value="1"'
+                "{checked}> {label}</label> <span class=muted>{note}</span><br>"
+            ).format(
+                code=esc(site.host),
+                checked=" checked" if site.host in chosen else "",
+                label=esc(site.label),
+                note=esc(note),
+            )
+        )
+    return (
+        '<details class=setgroup data-open="0"><summary>Искать отзывы только на '
+        "<span class=muted>· площадки с готовым парсером</span></summary>"
+        '<input type=hidden name="review_sites_form" value="1">'
+        '<div class=field data-find="искать отзывы только на площадки парсер '
+        'review_only_parsed">{flag}{boxes}'
+        "<div class=hint>Снятая галочка означает «не искать там вовсе». Режим "
+        "выключен — площадки всё равно опрашиваются, плюс два широких запроса "
+        "на статьи и треды.</div></div></details>"
+    ).format(
+        flag=(
+            '<label><input type=checkbox name="REVIEW_ONLY_PARSED" value="1"{on}> '
+            "Только эти площадки</label><br><br>"
+        ).format(on=" checked" if on else ""),
+        boxes="".join(boxes),
+    )
+
+
+def review_sites_value(form: "dict[str, list[str]]") -> "dict[str, str]":
+    """Отмеченные галочки → значение REVIEW_ONLY_SITES. Формы нет — пусто."""
+    import reviewsites
+
+    if not (form.get("review_sites_form") or [""])[0]:
+        return {}
+    chosen = [
+        site.host
+        for site in reviewsites.SITES
+        if (form.get("review_site_" + site.host) or [""])[0]
+    ]
+    # Ни одной галочки — значение пустое: это «все, у кого есть парсер», а не
+    # «ни одной площадки». Пустой список означал бы досье без отзывов вовсе.
+    return {"REVIEW_ONLY_SITES": ",".join(chosen)}
+
+
 def render_settings(saved: Sequence[str] = ()) -> str:
     """Настройки подкатами: шесть десятков полей одним списком не читаются.
 
@@ -138,6 +200,7 @@ def render_settings(saved: Sequence[str] = ()) -> str:
     )
     parts.append(SETTINGS_SEARCH)
     parts.append('<form method=post action="/settings">')
+    parts.append(review_sites_block(values))
 
     for position, (group, fields) in enumerate(settings.groups()):
         opened = position == 0
@@ -169,4 +232,9 @@ def render_settings(saved: Sequence[str] = ()) -> str:
 
 
 
-__all__ = ("render_settings", "settings_field")
+__all__ = (
+    "render_settings",
+    "review_sites_block",
+    "review_sites_value",
+    "settings_field",
+)

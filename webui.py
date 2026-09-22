@@ -104,6 +104,7 @@ from ui_forms import (
 import ui_injections
 import ui_map
 import ui_research
+import ui_settings
 import ui_targets
 import ui_run
 import webui_profile
@@ -433,6 +434,9 @@ class Handler(BaseHTTPRequestHandler):
 
             if parsed.path == "/settings":
                 updates = settings.form_updates(form)
+                # Галочки площадок отзывов складываются в одну настройку,
+                # поэтому считаются отдельно от полей каталога.
+                updates.update(ui_settings.review_sites_value(form))
                 saved = settings.save(updates)
                 self._send(page("Настройки", render_settings(saved)))
                 return

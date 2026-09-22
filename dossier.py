@@ -207,6 +207,16 @@ def review_queries(company: str) -> list[str]:
     company = (company or "").strip()
     if not company:
         return []
+    import reviewsites
+
+    if reviewsites.only_selected():
+        # Режим «только на этих площадках»: широкие запросы не идут вовсе.
+        # Смысл режима — не тратить запросы на статьи, подборки и агрегаторы,
+        # которые всё равно разберутся общим путём и без разметки [CORE-016].
+        return [
+            '"{}" отзывы сотрудников site:{}'.format(company, host)
+            for host in reviewsites.selected()
+        ]
     queries = [
         '"{}" отзывы сотрудников site:{}'.format(company, host)
         for host in QUERY_SITES

@@ -80,6 +80,10 @@ BROWSER_HEADERS = {
 }
 
 MAX_PAGE_CHARS = 8000
+
+# Признаки JS-челленджа вместо страницы. Встретили — жаловаться надо на защиту,
+# а не на «страница не открылась»: без прокси её не открыть вовсе.
+GUARD_MARKS = ("just a moment", "cf-chl", "cf_chl", "attention required", "checking your browser")
 CACHE_DAYS = 30
 MIN_LINE_CHARS = 40
 
@@ -208,6 +212,14 @@ def strip_tags(page: str) -> str:
     return text
 
 
+def guarded(status: int, body: str) -> bool:
+    """Это не страница, а проверка Cloudflare? Тогда повторять бессмысленно."""
+    if status not in (403, 503):
+        return False
+    low = (body or "")[:4000].lower()
+    return any(mark in low for mark in GUARD_MARKS)
+
+
 def looks_like_review(line: str) -> bool:
     """Похожа ли строка на кусок отзыва, а не на меню и не на рекламу."""
     low = line.lower()
@@ -260,6 +272,7 @@ class PageFetcher:
         cache_days: int = CACHE_DAYS,
         pause: float = 1.0,
         site_pages: int = 1,
+        proxy: str = "",
         transport: Callable[[str], str] | None = None,
         dump_path: str | None = None,
     ) -> None:
@@ -272,6 +285,9 @@ class PageFetcher:
         self.pause = max(0.0, float(pause))
         # Сколько страниц читать у площадок с листанием. Одна — как было.
         self.site_pages = max(1, int(site_pages))
+        # Прокси нужен ровно одной площадке: Antijob закрыт Cloudflare и
+        # обычному запросу отдаёт 403 вместо страницы.
+        self.proxy = (proxy or "").strip()
         self.transport = transport
         self.dump_path = (dump_path or "").strip() or None
         self.usage = FetchUsage()
@@ -300,6 +316,7 @@ class PageFetcher:
             cache_days=int(number("REVIEW_FETCH_CACHE_DAYS", str(CACHE_DAYS))),
             pause=number("REVIEW_FETCH_PAUSE", "1.0"),
             site_pages=int(number("REVIEW_SITE_PAGES", "2")),
+            proxy=(os.getenv("REVIEW_FETCH_PROXY") or "").strip(),
             dump_path=os.getenv("REVIEW_DUMP_PATH"),
         )
 
@@ -361,7 +378,15 @@ class PageFetcher:
             headers=BROWSER_HEADERS,
             timeout=self.timeout,
             follow_redirects=True,
+            proxy=self.proxy or None,
         )
+        if guarded(response.status_code, response.text):
+            # Отдельное сообщение вместо «403 Forbidden»: за этим кодом стоит
+            # не запрет, а JS-челлендж, и лечится он прокси, а не повтором.
+            raise RuntimeError(
+                "площадка закрыта Cloudflare: обычный запрос получает "
+                "челлендж. Поможет прокси (REVIEW_FETCH_PROXY)"
+            )
         response.raise_for_status()
         return response.text
 
@@ -509,6 +534,7 @@ __all__ = (
     "FetchUsage",
     "ensure_cache",
     "extract_reviews",
+    "guarded",
     "looks_like_review",
     "strip_tags",
     "MAX_PAGE_CHARS",

@@ -32,11 +32,77 @@ import html as html_mod
 import json
 import logging
 import re
+from dataclasses import dataclass
 from datetime import date
 from typing import Any, Callable, Sequence
 from urllib.parse import urlsplit, urlunsplit
 
 log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class Site:
+    """Площадка с готовым парсером: код для галочки, подпись, чем платим."""
+
+    host: str
+    label: str
+    note: str = ""
+    # Страница не открывается обычным запросом: нужен прокси или браузер.
+    guarded: bool = False
+
+
+SITES: tuple[Site, ...] = (
+    Site(
+        "dreamjob.ru",
+        "Dream Job",
+        "должность, город, стаж и оценка из разметки; листается страницами",
+    ),
+    Site(
+        "pravda-sotrudnikov.ru",
+        "Правда сотрудников",
+        "оценка по звёздам критериев, город, словесные метки; просит паузу 5 с",
+    ),
+    Site(
+        "jobtrue.ru",
+        "Job True",
+        "schema.org; часть отзывов похожа на пересобранные с Dream Job",
+    ),
+    Site("hrlike.ru", "HRlike", "schema.org, шкала 0–10 приводится к пяти баллам"),
+    Site(
+        "antijob.net",
+        "Antijob",
+        "чёрный список: оценок нет, тема отзыва — в заголовке. Закрыт Cloudflare: "
+        "без прокси страница не открывается",
+        guarded=True,
+    ),
+)
+
+BY_HOST: dict[str, Site] = {site.host: site for site in SITES}
+
+
+def hosts() -> tuple[str, ...]:
+    return tuple(BY_HOST)
+
+
+def selected() -> tuple[str, ...]:
+    """Отмеченные площадки. Пусто в настройке — все, у кого есть парсер."""
+    import settings
+
+    raw = str(settings.get("REVIEW_ONLY_SITES", "") or "")
+    chosen = tuple(
+        host
+        for host in (part.strip().lower() for part in raw.replace(";", ",").split(","))
+        if host in BY_HOST
+    )
+    return chosen or hosts()
+
+
+def only_selected() -> bool:
+    """Режим «искать отзывы только на выбранных площадках»."""
+    import settings
+
+    return settings.flag("REVIEW_ONLY_PARSED")
+
 
 MAX_ITEMS = 60          # столько же, сколько у общего разбора
 BODY_CHARS = 1200
@@ -260,6 +326,60 @@ def _ldjson(html: str, url: str, today: date | None) -> list[dict[str, Any]]:
     return out
 
 
+# --- Antijob ------------------------------------------------------------------
+
+_AJ_TITLE_RE = re.compile(r'<h3[^>]*>\s*<a[^>]+href="(/black_list/[^"]+)"[^>]*>(.*?)</a>', re.S)
+_AJ_BADGE_RE = re.compile(r'<small[^>]*>(.*?)</small>', re.S)
+_AJ_TEXT_RE = re.compile(r'<p[^>]*>(.*?)</p>', re.S)
+_AJ_DATE_RE = re.compile(r'<time[^>]+datetime="(\d{4}-\d{2}-\d{2})"')
+_AJ_CITY_RE = re.compile(r'<footer[^>]*>\s*<span>\s*<span>(.*?)<', re.S)
+
+
+def _antijob(html: str, url: str, today: date | None) -> list[dict[str, Any]]:
+    """Antijob — чёрный список: оценок там нет, все отзывы про плохое.
+
+    Поэтому `rating` остаётся пустым сознательно: выдавать «1 из 5» за оценку
+    автора нельзя, её никто не ставил [CORE-019]. Зато есть метка доверия
+    площадки («Анонимный», «Доверительный») — она уходит в текст отзыва.
+
+    В списке лежит обрезанный текст с кнопкой «Показать полностью»; полный
+    текст — на своей странице отзыва, и ходить за ним мы не будем: досье
+    строится по закономерностям, а не по одной цитате.
+    """
+    out: list[dict[str, Any]] = []
+    for block in _blocks(html, "<article"):
+        title = _AJ_TITLE_RE.search(block)
+        if title is None:
+            continue
+        body = ""
+        for match in _AJ_TEXT_RE.finditer(block):
+            body = _text(match.group(1)).strip("«»„“ ")
+            if body:
+                break
+        if not body:
+            continue
+        badge = _one(_AJ_BADGE_RE, block)
+        city = _one(_AJ_CITY_RE, block).strip(" •")
+        when = _AJ_DATE_RE.search(block)
+        out.append(
+            {
+                "pros": "",
+                # Заголовок отзыва на Antijob — это его суть, а не украшение:
+                # «Устроили травлю», «не выплатили расчёт».
+                "cons": ". ".join(
+                    part for part in (_text(title.group(2)).rstrip("."), body) if part
+                ),
+                "body": " · ".join(part for part in (city, badge) if part),
+                "rating": None,
+                "role": "",
+                "date_source": when.group(1) if when else "",
+            }
+        )
+        if len(out) >= MAX_ITEMS:
+            break
+    return out
+
+
 Parser = Callable[[str, str, "date | None"], list[dict[str, Any]]]
 
 # Площадка → парсер. Список закрытый: парсер по селекторам имеет смысл только
@@ -269,11 +389,12 @@ PARSERS: dict[str, Parser] = {
     "pravda-sotrudnikov.ru": _pravda,
     "jobtrue.ru": _ldjson,
     "hrlike.ru": _ldjson,
+    "antijob.net": _antijob,
 }
 
 # У кого работает листание страницами `?page=N` и сколько их бывает. Dream Job
 # отдаёт до двадцати страниц по 50 отзывов, «Правда» — по 19.
-PAGED: tuple[str, ...] = ("dreamjob.ru", "pravda-sotrudnikov.ru")
+PAGED: tuple[str, ...] = ("dreamjob.ru", "pravda-sotrudnikov.ru", "antijob.net")
 
 
 def known(url: str) -> bool:
@@ -356,12 +477,18 @@ def next_pages(url: str, count: int) -> list[str]:
 
 
 __all__ = (
+    "BY_HOST",
     "MAX_ITEMS",
+    "SITES",
+    "Site",
     "PAGED",
     "PARSERS",
     "host_of",
+    "hosts",
     "known",
     "next_pages",
     "page_url",
     "parse",
+    "only_selected",
+    "selected",
 )
