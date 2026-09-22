@@ -422,13 +422,29 @@ class Preset:
     params: dict = field(default_factory=dict)
 
 
+# Значение «порог профиля» вместо числа: жёсткая цифра в виде расходилась с
+# настройкой профиля, и вид «Стоит открыть» показывал вакансии, на компании
+# которых досье никто не собирал. Подстановку делает ui_views.render_vacancies.
+FIT = "fit"
+
 VACANCY_PRESETS: tuple[Preset, ...] = (
-    Preset("all", "Все", "весь список без условий", {}),
+    Preset(
+        "fit",
+        "Подходящие",
+        "прошли порог профиля: на их компании есть досье и искались контакты",
+        {"min_score": FIT, "sort": "score"},
+    ),
+    Preset(
+        "all",
+        "Все",
+        "весь список, включая те, что ниже порога профиля — досье на них нет",
+        {},
+    ),
     Preset(
         "open",
         "Стоит открыть",
-        "висят, скор от 50, я их ещё не отклонял",
-        {"state": "active", "min_score": "50", "feedback": "none", "sort": "score"},
+        "висят, прошли порог профиля, я их ещё не отклонял",
+        {"state": "active", "min_score": FIT, "feedback": "none", "sort": "score"},
     ),
     Preset(
         "fresh",
@@ -452,7 +468,7 @@ VACANCY_PRESETS: tuple[Preset, ...] = (
         "unseen",
         "Не доехали в Telegram",
         "прошли порог, но карточка не отправлялась",
-        {"notified": "no", "min_score": "50", "sort": "score"},
+        {"notified": "no", "min_score": FIT, "sort": "score"},
     ),
     Preset(
         "money",
@@ -561,6 +577,7 @@ def ensure_tables(conn: sqlite3.Connection) -> None:
 
 
 __all__ = (
+    "FIT",
     "ANY",
     "COMPANY_FILTERS",
     "COMPANY_PRESETS",

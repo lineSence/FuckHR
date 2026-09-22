@@ -94,7 +94,7 @@ def test_пустое_значение_не_становится_условие�
 
 def test_быстрый_вид_подставляет_умолчания_а_явное_сильнее() -> None:
     params = ui_filters.apply_preset(filters.VACANCY_PRESETS, {"view": "open"})
-    assert params["min_score"] == "50"
+    assert params["min_score"] == filters.FIT
     assert params["state"] == "active"
 
     mine = ui_filters.apply_preset(

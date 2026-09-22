@@ -345,3 +345,23 @@ def test_список_называет_порог_досье(conn, make_vacancy,
     html = webui.render_vacancies(conn, 0.0, 10)
 
     assert "от 45 баллов" in html
+
+
+def test_список_по_умолчанию_показывает_подходящие(conn, make_vacancy, monkeypatch) -> None:
+    """Вакансия ниже порога профиля лежит в базе, но в первом виде её нет:
+    досье на её компанию никто не собирал, и «вакансия есть, компании нет»
+    выглядело поломкой."""
+    import profiles
+
+    monkeypatch.setattr(profiles, "dossier_threshold", lambda: 45.0)
+    conditions.ensure_schema(conn)
+    contacts.ensure_schema(conn)
+    db.upsert_vacancy(conn, make_vacancy(external_id="1", title="Прошла порог"), 56.0, [])
+    db.upsert_vacancy(conn, make_vacancy(external_id="2", title="Ниже порога"), 42.0, [])
+
+    default = webui.render_vacancies(conn, 0.0, 10, params={})
+    assert "Прошла порог" in default
+    assert "Ниже порога" not in default
+
+    every = webui.render_vacancies(conn, 0.0, 10, params={"view": "all"})
+    assert "Ниже порога" in every

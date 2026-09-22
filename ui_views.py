@@ -216,7 +216,18 @@ def render_vacancies(
     Старые позиционные аргументы оставлены: их зовут тесты и прежние ссылки.
     Всё остальное приходит словарём параметров адреса.
     """
-    query = ui_filters.apply_preset(filters.VACANCY_PRESETS, dict(params or {}))
+    query = dict(params or {})
+    if params is not None:
+        # Адрес без параметров — это вид «Подходящие», а не «всё подряд». Иначе
+        # первое, что видит владелец, — вакансии ниже порога профиля, на
+        # компании которых досье никто не собирал: вакансия есть, работодателя
+        # нет, и это выглядит поломкой. «Все» остаётся одним щелчком рядом.
+        # params=None означает старый вызов «покажи от min_score»: его зовут
+        # прежние ссылки и тесты, и вид им не навязывается.
+        query.setdefault("view", filters.FIT)
+    query = ui_filters.apply_preset(filters.VACANCY_PRESETS, query)
+    if query.get("min_score") == filters.FIT:
+        query["min_score"] = "{:.0f}".format(profiles.dossier_threshold())
     if min_score and "min_score" not in query:
         query["min_score"] = str(min_score)
     query.setdefault("sort", sort)
