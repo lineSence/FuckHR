@@ -33,6 +33,9 @@ log = logging.getLogger(__name__)
 
 SEARCH_URL = "https://hh.ru/search/vacancy"
 VACANCY_PREFIX = "https://hh.ru/vacancy/"
+
+# hh.ru ограничивает глубину выдачи 2000 результатами.
+HH_MAX_SEARCH_RESULTS = 2000
 FAILURE_DIR = "data/failures"
 FAILURE_KEEP = 5
 
@@ -447,7 +450,8 @@ class HHHtmlClient:
         seen_ids: set[str] = set()
         self.exhausted = False
         page = 0
-        while not max_pages or page < max_pages:
+        max_search_pages = (HH_MAX_SEARCH_RESULTS + per_page - 1) // per_page
+        while (not max_pages or page < max_pages) and page < max_search_pages:
             params: dict[str, Any] = {
                 "text": text,
                 "search_period": period,
@@ -509,7 +513,14 @@ class HHHtmlClient:
                 break
             page += 1
         else:
-            self.exhausted = False
+            if page >= max_search_pages:
+                log.info(
+                    "достигнут конец выдачи hh.ru: лимит %s результатов",
+                    HH_MAX_SEARCH_RESULTS,
+                )
+                self.exhausted = True
+            else:
+                self.exhausted = False
 
     def vacancy(self, vacancy_id: str) -> dict[str, Any]:
         """Карточка вакансии: описание, навыки и адрес из одного состояния."""
