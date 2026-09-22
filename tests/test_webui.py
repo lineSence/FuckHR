@@ -298,3 +298,36 @@ def test_колонка_площадки_в_списке(conn, make_vacancy) -> 
     assert "Площадка" in html
     assert "hh.ru" in html
     assert "+1" in html and "SuperJob" in html
+
+
+def test_карточка_называет_свою_площадку(conn, make_vacancy) -> None:
+    """Вакансия с Работы.ру не должна предлагать «открыть на hh.ru»."""
+    import source_store
+
+    conditions.ensure_schema(conn)
+    contacts.ensure_schema(conn)
+    detector.ensure_schema(conn)
+    db.upsert_vacancy(
+        conn,
+        make_vacancy(
+            external_id="54421864",
+            source="rabota",
+            url="https://www.rabota.ru/vacancy/54421864/",
+        ),
+        70.0,
+        [],
+    )
+    key = conn.execute("SELECT key FROM vacancies").fetchone()["key"]
+    source_store.remember_many(
+        conn,
+        [
+            (key, "rabota", "54421864", "https://www.rabota.ru/vacancy/54421864/"),
+            (key, "zarplata", "77", "https://zarplata.ru/vacancy/77"),
+        ],
+    )
+
+    html = webui.render_vacancy(conn, key, with_draft=False)
+
+    assert "открыть на Работа.ру" in html
+    assert "открыть на Zarplata.ru" in html
+    assert "открыть на hh.ru" not in html

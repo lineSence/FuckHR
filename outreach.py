@@ -419,6 +419,9 @@ def setup_logging(verbose: bool = False) -> None:
         level=logging.DEBUG if verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    from run_setup import quiet_libraries  # noqa: PLC0415 — цикл импорта
+
+    quiet_libraries(verbose)
 
 
 def build_gateway(conn: sqlite3.Connection, disabled: bool) -> llm.Gateway | None:

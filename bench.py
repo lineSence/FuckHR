@@ -404,6 +404,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    # Чужие INFO-строки (httpx на каждый запрос, поиск весов у huggingface_hub)
+    # прячут наши: приглушаем их здесь же, где настраиваем лог.
+    from run_setup import quiet_libraries  # noqa: PLC0415 — цикл импорта
+
+    quiet_libraries()
     try:
         from dotenv import find_dotenv, load_dotenv
 

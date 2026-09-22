@@ -373,5 +373,10 @@ if __name__ == "__main__":
 
     load_dotenv()
     logging.basicConfig(level=logging.INFO)
+    # Чужие INFO-строки (httpx на каждый запрос, поиск весов у huggingface_hub)
+    # прячут наши: приглушаем их здесь же, где настраиваем лог.
+    from run_setup import quiet_libraries  # noqa: PLC0415 — цикл импорта
+
+    quiet_libraries()
     token_env = os.environ["TELEGRAM_BOT_TOKEN"]
     asyncio.run(run_polling(token_env, os.getenv("DB_PATH", "data/fuckhr.sqlite3")))

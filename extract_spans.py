@@ -100,12 +100,30 @@ def weights_ready(name: str = "") -> bool:
     return False
 
 
+def prefer_offline(name: str = "") -> bool:
+    """Запрещает поход в Hugging Face, если веса уже лежат в кэше.
+
+    Иначе каждый старт прогона — семь запросов к huggingface.co ради проверки,
+    не изменился ли конфиг: в логе шум, а без интернета ещё и задержка на
+    таймаутах. Переменную читает сама библиотека при импорте, поэтому вызывать
+    это надо до `import gliner` [CORE-016].
+
+    Уже заданное значение не трогаем: `HF_HUB_OFFLINE` из .env — решение
+    владельца.
+    """
+    if not weights_ready(name):
+        return False
+    os.environ.setdefault("HF_HUB_OFFLINE", "1")
+    return True
+
+
 def load(name: str = "") -> Any:
     """Модель в память, один раз на процесс. Нет пакета — None, не исключение."""
     global _model, _model_name
     want = name or model_name()
     if _model is not None and _model_name == want:
         return _model
+    prefer_offline(want)
     try:
         from gliner import GLiNER  # noqa: PLC0415 — зависимость необязательная
     except ImportError:
@@ -196,6 +214,11 @@ def main(argv=None) -> int:
 
     load_dotenv()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+    # Чужие INFO-строки (httpx на каждый запрос, поиск весов у huggingface_hub)
+    # прячут наши: приглушаем их здесь же, где настраиваем лог.
+    from run_setup import quiet_libraries  # noqa: PLC0415 — цикл импорта
+
+    quiet_libraries()
     if args.force:
         os.environ["GLINER_ENABLED"] = "1"
 
@@ -236,6 +259,7 @@ __all__ = (
     "enabled",
     "installed",
     "load",
+    "prefer_offline",
     "model_name",
     "split",
     "threshold",

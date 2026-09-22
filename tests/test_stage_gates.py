@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from dataclasses import dataclass
 
@@ -184,3 +185,20 @@ def test_спан_берётся_только_дословный(monkeypatch) ->
     assert [item.quote for item in items] == ["Формат работы гибридный"]
     assert items[0].field == "format"
     assert isinstance(items[0], Condition)
+
+
+def test_готовые_веса_запрещают_ходить_в_hugging_face(monkeypatch, tmp_path) -> None:
+    """Семь запросов к huggingface.co на каждом старте — это шум в логе и
+    задержка без интернета. Уже заданное владельцем значение не трогаем."""
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+    monkeypatch.setattr(extract_spans, "weights_ready", lambda name="": False)
+    assert extract_spans.prefer_offline("urchade/gliner_multi-v2.1") is False
+    assert "HF_HUB_OFFLINE" not in os.environ
+
+    monkeypatch.setattr(extract_spans, "weights_ready", lambda name="": True)
+    assert extract_spans.prefer_offline("urchade/gliner_multi-v2.1") is True
+    assert os.environ["HF_HUB_OFFLINE"] == "1"
+
+    monkeypatch.setenv("HF_HUB_OFFLINE", "0")
+    extract_spans.prefer_offline("urchade/gliner_multi-v2.1")
+    assert os.environ["HF_HUB_OFFLINE"] == "0"

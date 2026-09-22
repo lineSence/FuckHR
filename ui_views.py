@@ -349,19 +349,46 @@ MARKET_CLASS = {
 }
 
 
+def _open_links(conn: sqlite3.Connection, row: sqlite3.Row) -> str:
+    """Ссылки «открыть на …» — по всем площадкам, где вакансию видели.
+
+    Раньше подпись была «открыть на hh.ru» литералом, и вакансия с Работы.ру
+    выглядела как hh-евская. Главная ссылка идёт первой (она же в `vacancies`),
+    остальные адреса берутся из `vacancy_sources`: одна и та же вакансия на двух
+    сайтах — это одна запись с двумя адресами (`docs/sources.md`).
+    """
+    main = str(row["url"] or "")
+    main_source = str(row["source"] or "")
+    seen: list[tuple[str, str]] = []
+    if main:
+        seen.append((main_source, main))
+    source_store.ensure_schema(conn)
+    for site, url in conn.execute(
+        "SELECT source, url FROM vacancy_sources WHERE key = ? ORDER BY source",
+        (str(row["key"] or ""),),
+    ):
+        url = str(url or "")
+        if url and url != main:
+            seen.append((str(site), url))
+    links = [
+        '<a href="{url}" target=_blank rel=noreferrer>открыть на {label}</a>'.format(
+            url=esc(url), label=esc(sources.label_of(site) if site else "площадке")
+        )
+        for site, url in seen
+    ]
+    return " · ".join(links)
+
+
 def render_vacancy(conn: sqlite3.Connection, key: str, with_draft: bool) -> str:
     row = vacancy_one(conn, key)
     if row is None:
         return "<p>Вакансия не найдена.</p>"
 
     parts = [
-        (
-            "<p><b>{company}</b> · скоринг <span class=score>{score:.0f}</span> · "
-            '<a href="{url}" target=_blank rel=noreferrer>открыть на hh.ru</a></p>'
-        ).format(
+        "<p><b>{company}</b> · скоринг <span class=score>{score:.0f}</span>{links}</p>".format(
             company=esc(row["company"]),
             score=float(row["score"] or 0),
-            url=esc(row["url"]),
+            links=" · " + _open_links(conn, row) if row["url"] else "",
         )
     ]
 
