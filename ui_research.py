@@ -79,6 +79,13 @@ def render_research(conn: sqlite3.Connection, company: str, note: str = "") -> s
         parts.append("<div class=warn>{}</div>".format(esc(note)))
     parts.append(
         (
+            # Тумблер рядом с кнопкой: раньше выключенный ресёрч было видно
+            # только текстом ошибки после нажатия.
+            '<form method=post action="/deep" class=tasks>'
+            '<input type=hidden name=company value="{company}">'
+            "<label><input type=checkbox name=enabled value=1 {enabled}> "
+            "глубокий ресёрч включён</label> "
+            "<button class=secondary>Сохранить</button></form>"
             '<form method=post action="/research">'
             '<input type=hidden name=company value="{company}">'
             '<input type=hidden name=force value="1">'
@@ -86,7 +93,12 @@ def render_research(conn: sqlite3.Connection, company: str, note: str = "") -> s
             "<p class=muted>Реестр, суды, долги, банкротство и новости. Бюджет "
             "времени {seconds:.0f} с, отчёт считается свежим {ttl} дней. Капча на "
             "источнике не обходится: он пропускается, обход идёт дальше.</p>"
-        ).format(company=esc(company), seconds=opts.seconds, ttl=opts.ttl_days)
+        ).format(
+            company=esc(company),
+            enabled="checked" if opts.enabled else "",
+            seconds=opts.seconds,
+            ttl=opts.ttl_days,
+        )
     )
 
     try:

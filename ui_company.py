@@ -238,6 +238,30 @@ def render_fake(conn: sqlite3.Connection, name: str, row: sqlite3.Row) -> str:
     return "{}{}".format(head, table_html)
 
 
+def area_form(company: str) -> str:
+    """Выбор своей сферы прямо там, где видно разбивку.
+
+    Блок и раньше объяснял, что сфера не выбрана, и отправлял в настройки:
+    три клика и возврат назад вместо одного селекта на месте объяснения.
+    """
+    mine = review_area.owner_code()
+    options = ['<option value="">— не выбрана —</option>']
+    for code in review_area.codes():
+        options.append(
+            '<option value="{code}" {sel}>{label}</option>'.format(
+                code=esc(code),
+                sel="selected" if code == mine else "",
+                label=esc(review_area.label(code)),
+            )
+        )
+    return (
+        '<form method=post action="/area" class=tasks>'
+        '<input type=hidden name=company value="{company}">'
+        "<label>моя сфера <select name=area>{options}</select></label> "
+        "<button class=secondary>Сохранить</button></form>"
+    ).format(company=esc(company), options="".join(options))
+
+
 def render_areas(conn: sqlite3.Connection, name: str) -> str:
     """Отзывы по сферам: сколько их и какая оценка в каждой.
 
@@ -292,9 +316,8 @@ def render_areas(conn: sqlite3.Connection, name: str) -> str:
 
     if not mine:
         note = (
-            "Своя сфера не выбрана: настройка REVIEW_AREA на странице настроек, "
-            "группа «Отзывы по сферам». Пока она пуста, в сводке досье и в "
-            "Telegram разбивки нет — только эта таблица."
+            "Своя сфера не выбрана: пока она пуста, в сводке досье и в Telegram "
+            "разбивки нет — только эта таблица."
         )
     elif counts.get(mine, 0) < fake_company.AREA_MIN_ITEMS or len(items) < fake_company.AREA_MIN_TOTAL:
         note = (
@@ -313,8 +336,9 @@ def render_areas(conn: sqlite3.Connection, name: str) -> str:
             "Твоя сфера — «{label}»: её строка выделена. Расхождение с общей "
             "средней информативнее любой из двух цифр."
         ).format(label=review_area.label(mine))
-    return "{}<p class=muted>{}</p><p class=muted>{}</p>".format(
+    return "{}{}<p class=muted>{}</p><p class=muted>{}</p>".format(
         body,
+        area_form(name),
         esc(note),
         esc(
             "Сфера — не отдел: оргструктуру никто не отдаёт, речь о том, кем "
@@ -470,6 +494,7 @@ def render_company(
 
 
 __all__ = (
+    "area_form",
     "CONTACT_COLUMNS",
     "CONTACT_SORTS",
     "POLARITY_RU",

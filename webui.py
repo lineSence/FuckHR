@@ -128,7 +128,8 @@ log = logging.getLogger("webui")
 POST_ONLY = frozenset(
     {
         "/run", "/stop", "/loop", "/bench", "/dataset", "/llm/apply",
-        "/intake/apply", "/map/geo", "/sources",
+        "/intake/apply", "/map/geo", "/sources", "/runopts", "/cookie",
+        "/area", "/deep",
     }
 )
 
@@ -409,6 +410,27 @@ class Handler(BaseHTTPRequestHandler):
 
             if parsed.path == "/loop":
                 ui_run.save_loop(form)
+                self._redirect("/")
+                return
+
+            if parsed.path in ("/area", "/deep"):
+                # Настройка правится там, где виден её эффект: сфера отзывов —
+                # в блоке разбивки, тумблер ресёрча — у его кнопки.
+                company = (form.get("company") or [""])[0]
+                if parsed.path == "/area":
+                    settings.save({"REVIEW_AREA": (form.get("area") or [""])[0].strip()})
+                else:
+                    settings.save({"DEEP_ENABLED": "1" if form.get("enabled") else "0"})
+                self._redirect("/company?name=" + urllib.parse.quote(company))
+                return
+
+            if parsed.path == "/runopts":
+                ui_run.save_options(form)
+                self._redirect("/")
+                return
+
+            if parsed.path == "/cookie":
+                ui_run.save_cookie(form)
                 self._redirect("/")
                 return
 

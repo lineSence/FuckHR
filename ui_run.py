@@ -94,6 +94,88 @@ def loop_form() -> str:
     )
 
 
+# По этим словам в логе последнего прогона видно, что hh.ru закрылся капчей.
+BLOCK_MARKS = ("капч", "blockederror", "блокирует запросы")
+
+
+def save_options(form: Mapping[str, Sequence[str]]) -> list[str]:
+    """Сохраняет параметры прогона с главной страницы.
+
+    Ключи те же, что на странице настроек: .env один, и прогон читает его на
+    старте. Галочки приходят только в отмеченном виде, поэтому отсутствие
+    ключа в форме — это «снято», а не «не трогали».
+    """
+    return settings.save(
+        {
+            "RUN_LIMIT": str(max(0, settings.as_int((form.get("limit") or ["0"])[0], 0))),
+            "RUN_DETAILS": "1" if form.get("details") else "0",
+            "TELEGRAM_ENABLED": "1" if form.get("telegram") else "0",
+            "OUTREACH_LIMIT": str(
+                max(0, settings.as_int((form.get("letters") or ["0"])[0], 0))
+            ),
+            "OUTREACH_MIN_SCORE": "{:g}".format(
+                max(0.0, settings.as_float((form.get("min_score") or ["0"])[0], 0.0))
+            ),
+        }
+    )
+
+
+def save_cookie(form: Mapping[str, Sequence[str]]) -> list[str]:
+    """Свежие cookie hh.ru из предупреждения о капче."""
+    cookie = (form.get("cookie") or [""])[0].strip()
+    return settings.save({"HH_COOKIE": cookie}) if cookie else []
+
+
+def options_form() -> str:
+    """«Сколько собираем» прямо у кнопки: это решение каждого запуска."""
+    collect = settings.collect_options()
+    outreach = settings.outreach_options()
+    telegram = settings.flag("TELEGRAM_ENABLED")
+    return (
+        '<form method=post action="/runopts" class=tasks>'
+        '<label>собрать вакансий <input type=number name=limit min=0 size=4 '
+        'value="{limit}"></label> '
+        "<label><input type=checkbox name=details value=1 {details}> "
+        "догружать описания</label> "
+        "<label><input type=checkbox name=telegram value=1 {telegram}> "
+        "карточки в Telegram</label> "
+        '<label>письма от скора <input type=number name=min_score min=0 size=3 '
+        'value="{min_score:g}"></label> '
+        '<label>до <input type=number name=letters min=0 size=3 value="{letters}"> '
+        "штук</label> "
+        "<button class=secondary>Сохранить</button></form>"
+        "<p class=muted>Ноль вакансий — сбор без ограничения. Ноль писем — аутрич "
+        "не работает вовсе.</p>"
+    ).format(
+        limit=collect.limit,
+        details="checked" if collect.details else "",
+        telegram="checked" if telegram else "",
+        min_score=outreach.min_score,
+        letters=outreach.limit,
+    )
+
+
+def cookie_block(job: "jobs.Job | None") -> str:
+    """Поле cookie показывается там, где видно капчу, и только тогда.
+
+    Постоянное поле секрета на главной — это приглашение его туда вставить
+    просто так; в предупреждении оно отвечает на уже случившуюся беду.
+    """
+    if job is None:
+        return ""
+    tail = "\n".join(job.tail(200)).lower()
+    if not any(mark in tail for mark in BLOCK_MARKS):
+        return ""
+    return (
+        "<div class=warn><b>hh.ru закрылся капчей.</b> Открой hh.ru в браузере, "
+        "пройди проверку, скопируй строку Cookie из инструментов разработчика и "
+        "вставь сюда — прогон возьмёт её на следующем запуске."
+        '<form method=post action="/cookie" class=tasks>'
+        '<input type=text name=cookie size=60 placeholder="hhuid=…; hhtoken=…">'
+        "<button>Сохранить cookie</button></form></div>"
+    )
+
+
 def render_run(
     active_id: int | None = None,
     note: str = "",
@@ -135,31 +217,29 @@ def render_run(
 
         parts.append(ui_sources.render_sources(conn))
 
+    parts.append(options_form())
+
     collect = settings.collect_options()
-    outreach_opts = settings.outreach_options()
     prefilter = settings.prefilter_options()
     detector_opts = settings.detector_options()
     parts.append(
         (
-            "<p class=muted>Сейчас так: сбор {limit} вакансий, предфильтр {prefilter}, "
-            "детектор брехни {detector}, письма от скора {min_score:.0f} "
-            "до {letters} штук, модель {llm_state}. "
+            "<p class=muted>Остальное: предфильтр {prefilter}, детектор брехни "
+            "{detector}, модель {llm_state}. "
             '<a href="/settings">Изменить</a></p>'
         ).format(
-            limit="без ограничения" if not collect.limit else collect.limit,
             prefilter=(
                 "от {:.0f}".format(prefilter.min_score)
                 if prefilter.enabled
                 else "выключен"
             ),
             detector="включён" if detector_opts.enabled else "выключен",
-            min_score=outreach_opts.min_score,
-            letters=outreach_opts.limit,
             llm_state="включена" if collect.use_llm else "выключена",
         )
     )
 
     job = jobs.runner.get(active_id) if active_id else jobs.runner.last()
+    parts.append(cookie_block(job))
     if job is None:
         parts.append("<p class=muted>Запусков ещё не было.</p>")
         return "".join(parts), 0
@@ -224,4 +304,14 @@ def render_run(
     return "".join(parts), 2 if job.running else 0
 
 
-__all__ = ("loop_form", "progress_block", "render_run", "save_loop", "stop")
+__all__ = (
+    "cookie_block",
+    "loop_form",
+    "options_form",
+    "progress_block",
+    "render_run",
+    "save_cookie",
+    "save_loop",
+    "save_options",
+    "stop",
+)

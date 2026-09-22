@@ -407,3 +407,35 @@ def test_галочки_площадок_отзывов_сохраняются_�
     }
     # Формы в запросе нет — настройку не трогаем.
     assert ui_settings.review_sites_value({}) == {}
+
+
+def test_параметры_прогона_сохраняются_с_главной(tmp_path: Path, monkeypatch) -> None:
+    import ui_run
+
+    env = tmp_path / ".env"
+    monkeypatch.setattr(settings, "ENV_PATH", env)
+    saved = ui_run.save_options(
+        {"limit": ["50"], "details": ["1"], "min_score": ["70"], "letters": ["3"]}
+    )
+    assert "RUN_LIMIT" in saved and "RUN_DETAILS" in saved
+    text = env.read_text(encoding="utf-8")
+    assert "RUN_LIMIT=50" in text and "RUN_DETAILS=1" in text
+    # Галочка снята — приходит не «0», а пустота, и это должно стать нулём.
+    assert "TELEGRAM_ENABLED=0" in text
+    assert "OUTREACH_MIN_SCORE=70" in text and "OUTREACH_LIMIT=3" in text
+
+
+def test_поле_cookie_появляется_только_при_капче() -> None:
+    import ui_run
+
+    class Job:
+        def __init__(self, lines: list[str]) -> None:
+            self._lines = lines
+
+        def tail(self, count: int) -> list[str]:
+            return self._lines
+
+    assert ui_run.cookie_block(None) == ""
+    assert ui_run.cookie_block(Job(["страница 3: вакансий 50"])) == ""
+    block = ui_run.cookie_block(Job(["hh.ru требует капчу или блокирует запросы"]))
+    assert "name=cookie" in block and "class=warn" in block

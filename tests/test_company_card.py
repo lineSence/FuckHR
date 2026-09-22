@@ -156,9 +156,11 @@ def test_сферы_видны_на_странице_и_объясняют_мо�
     html = ui_companies.render_areas(conn, "ООО «Ромашка»")
     assert "розница, склад и линия" in html and "разработка и ИТ" in html
     assert "про компанию целиком" in html and "сфера не определена" in html
-    # Настройка не задана — страница говорит об этом, а не молчит.
-    assert "REVIEW_AREA" in html
+    # Настройка не задана — страница говорит об этом и даёт выбрать сферу
+    # на месте, а не отправляет в настройки.
+    assert "Своя сфера не выбрана" in html
+    assert 'name=area' in html and 'action="/area"' in html
 
     monkeypatch.setattr("settings.get", lambda key, default="": "it" if key == "REVIEW_AREA" else default)
     html = ui_companies.render_areas(conn, "ООО «Ромашка»")
-    assert "разработка и ИТ" in html and "REVIEW_AREA" not in html
+    assert "разработка и ИТ" in html and "Своя сфера не выбрана" not in html
