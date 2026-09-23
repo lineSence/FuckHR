@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import Sequence
 
 import judge_labels
+import linear_model
 import review_gate
 import review_gate_store
 
@@ -49,7 +50,6 @@ PER_COMPANY = 40          # чтобы одна компания не забил
 MIN_CHARS = 40            # короче — решать не по чему
 TEST_SHARE = 5            # каждая пятая компания — в отложенную
 FEW = 50                  # меньше положительных на этап — мерить нечего
-GRID = tuple(round(0.05 * step, 2) for step in range(1, 20))
 OUT = Path("data/bench/review_gate.json")
 
 log = logging.getLogger("fuckhr")
@@ -119,75 +119,6 @@ def import_owner(conn: sqlite3.Connection, path: Path, stage: str) -> int:
     return total
 
 
-def train(
-    rows: Sequence[tuple[Sequence[float], float]],
-    epochs: int = 40,
-    rate: float = 4.0,
-    decay: float = 1e-4,
-) -> tuple[list[float], float]:
-    """Веса и смещение. Полный батч, L2, мягкие метки как есть."""
-    if not rows:
-        return [], 0.0
-    size = len(rows[0][0])
-    weights = [0.0] * size
-    bias = 0.0
-    scale = rate / len(rows)
-    for _ in range(epochs):
-        grad = [0.0] * size
-        grad_bias = 0.0
-        for vector, goal in rows:
-            guess = review_gate.sigmoid(sum(map(float.__mul__, weights, vector)) + bias)
-            error = guess - goal
-            if error:
-                for position, value in enumerate(vector):
-                    grad[position] += error * value
-                grad_bias += error
-        for position in range(size):
-            weights[position] -= scale * grad[position] + decay * weights[position]
-        bias -= scale * grad_bias
-    return weights, bias
-
-
-def yield_of(
-    scores: Sequence[float], labels: Sequence[int], low: float | None, high: float | None
-) -> dict:
-    """Что гейт снял бы с модели на отложенной части и где при этом соврал.
-
-    Главное число всей затеи: AUROC говорит, что модель различает тексты, а
-    вот эта доля — сколько вызовов не случится. Вторая половина — цена: сколько
-    из решённого решено неверно.
-    """
-    if low is None or high is None:
-        return {}
-    да = [(score, label) for score, label in zip(scores, labels) if score >= high]
-    нет = [(score, label) for score, label in zip(scores, labels) if score <= low]
-    решено = len(да) + len(нет)
-    неверно = sum(1 for _, label in да if not label) + sum(1 for _, label in нет if label)
-    return {
-        "решено_без_модели": решено,
-        "доля": round(решено / len(labels), 3) if labels else 0.0,
-        "решено_да": len(да),
-        "решено_нет": len(нет),
-        "неверно": неверно,
-    }
-
-
-def choose(scores: Sequence[float], labels: Sequence[int]) -> tuple[float | None, float | None]:
-    """(low, high) по отложенной части: «нет» без пропусков, «да» без ложных.
-
-    На хорошо разделимой выборке верхняя граница «нет» уезжает выше нижней
-    границы «да» — тогда середины нет вовсе, и `low` прижимается к `high`:
-    перевёрнутые пороги не гейт, а решето (`review_gate.GateOptions.usable`).
-    """
-    highs = [limit for limit in GRID if review_gate.counts(scores, labels, limit)[0] == 0]
-    lows = [limit for limit in GRID if review_gate.counts(scores, labels, limit)[1] == 0]
-    high = min(highs) if highs else None
-    low = max(lows) if lows else None
-    if low is not None and high is not None:
-        low = min(low, high)
-    return low, high
-
-
 def prepare(
     samples: Sequence[Sample], known: dict[str, Sequence[float]]
 ) -> list[tuple[Sequence[float], float]]:
@@ -225,18 +156,18 @@ def evaluate(
     if not train_rows:
         out["итог"] = "нет обучающих примеров с векторами"
         return out
-    weights, bias = train(train_rows, epochs=epochs)
+    weights, bias = linear_model.train(train_rows, epochs=epochs)
     if not test_rows:
         out["итог"] = "отложенная часть пуста: мерить нечем, веса не записаны"
         return out
-    scores = [review_gate.predict(weights, bias, vector) for vector, _ in test_rows]
+    scores = [linear_model.predict(weights, bias, vector) for vector, _ in test_rows]
     labels = [1 if goal >= 0.5 else 0 for _, goal in test_rows]
     positives = sum(labels)
-    low, high = choose(scores, labels)
+    low, high = linear_model.choose(scores, labels)
     out.update(
         {
             "положительных": positives,
-            "auroc": review_gate.auroc(
+            "auroc": linear_model.auroc(
                 [s for s, label in zip(scores, labels) if label],
                 [s for s, label in zip(scores, labels) if not label],
             ),
@@ -247,10 +178,10 @@ def evaluate(
             ),
             "low": low,
             "high": high,
-            "экономия": yield_of(scores, labels, low, high),
+            "экономия": linear_model.yield_of(scores, labels, low, high),
             "пороги": {
                 str(limit): dict(
-                    zip(("ложных", "пропущ"), review_gate.counts(scores, labels, limit))
+                    zip(("ложных", "пропущ"), linear_model.counts(scores, labels, limit))
                 )
                 for limit in (0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9)
             },

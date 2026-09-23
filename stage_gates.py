@@ -6,9 +6,15 @@
 1. **Близость к профилю.** Вектор вакансии против вектора владельца (критерии
    из profile.yaml плюс подтверждённые блоки резюме). Далёкая вакансия не
    доходит до extract и hr_filter: её всё равно не покажут.
-2. **Гейт пустоты.** По ближайшим соседям из базы видно, чем этап кончался на
-   похожих текстах. Если у всех соседей этап вернул пусто, шансов мало.
-   Метки здесь ничьи: их проставил сам пайплайн, когда сохранял результат.
+2. **Гейт пустоты по соседям.** По ближайшим соседям из базы видно, чем этап
+   кончался на похожих текстах. Если у всех соседей этап вернул пусто, шансов
+   мало. Метки здесь ничьи: их проставил сам пайплайн, когда сохранял результат.
+3. **Обученный гейт пустоты.** Те же метки, но вместо k соседей — логистическая
+   регрессия на тех же векторах (`stage_gate_train.py`, веса в `gate_models`).
+   Соседям нужно k текстов ближе 0.85, и на живой базе такая теснота — редкость,
+   поэтому гейт по соседям почти не срабатывает; регрессия смотрит на всю
+   выборку сразу. Работает только «нет»: пропустить этап можно, а вынести за
+   него вердикт нельзя — этапу нужна дословная цитата из текста.
 
 Оба гейта выключены по умолчанию и деградируют в «пропустить дальше»
 [CORE-017]: нет векторов, нет эмбеддера, мало соседей — вакансия идёт в модель,
@@ -27,7 +33,9 @@ from typing import Any, Sequence
 import embeddings
 import embeddings_store as store
 import embeddings_tasks
+import linear_model
 import llm_embed
+import review_gate_store
 import settings
 
 log = logging.getLogger("fuckhr")
@@ -56,6 +64,7 @@ class GateOptions:
     profile_min: float
     empty_k: int
     empty_sim: float
+    learned: bool
 
 
 def options() -> GateOptions:
@@ -63,6 +72,7 @@ def options() -> GateOptions:
         profile_min=max(0.0, min(0.99, settings.as_float(os.getenv("GATE_PROFILE_MIN"), 0.0))),
         empty_k=max(0, min(50, settings.as_int(os.getenv("GATE_EMPTY_K"), 0))),
         empty_sim=max(0.5, min(0.999, settings.as_float(os.getenv("GATE_EMPTY_SIM"), 0.85))),
+        learned=settings.flag("GATE_LEARNED"),
     )
 
 
@@ -129,7 +139,7 @@ def relevance(
     }
 
 
-def _outcomes(conn: sqlite3.Connection, stage: str) -> dict[str, bool]:
+def outcomes(conn: sqlite3.Connection, stage: str) -> dict[str, bool]:
     """{ключ: дал ли этап результат} по всем вакансиям, где этап отрабатывал."""
     seen_sql, outcome_sql = STAGE_SEEN.get(stage), STAGE_OUTCOME.get(stage)
     if not seen_sql or not outcome_sql:
@@ -169,8 +179,8 @@ def likely_empty(
     query = vectors.pop(key, None)
     if query is None:
         return False
-    outcomes = _outcomes(conn, stage)
-    pool = [(other, vector) for other, vector in vectors.items() if other in outcomes]
+    known = outcomes(conn, stage)
+    pool = [(other, vector) for other, vector in vectors.items() if other in known]
     if len(pool) < opts.empty_k:
         return False
     near = embeddings.top_similar(
@@ -178,13 +188,44 @@ def likely_empty(
     )
     if len(near) < opts.empty_k:
         return False
-    if any(outcomes.get(other) for other, _ in near):
+    if any(known.get(other) for other, _ in near):
         return False
     log.info(
         "этап %s пропущен для %s: %s ближайших соседей не дали ничего",
         stage,
         key,
         len(near),
+    )
+    return True
+
+
+def learned_empty(
+    conn: sqlite3.Connection, gateway: Any, stage: str, key: str
+) -> bool:
+    """Вернёт ли этап пустоту, судя по обученным весам.
+
+    Порог берётся из замера и лежит рядом с весами (`gate_models.low`): это
+    самая высокая граница, при которой на отложенной части не потерялось ни
+    одной продуктивной вакансии. Порога нет — гейт молчит: подбирать его на
+    глаз здесь нельзя, ценой будет потерянная вакансия [CORE-017].
+    """
+    if not options().learned:
+        return False
+    model = llm_embed.model_name(gateway)
+    if not model:
+        return False
+    trained = review_gate_store.load(conn, stage, model)
+    if trained is None or trained.low is None:
+        return False
+    vector = store.load(conn, store.KIND_VACANCY, model).get(key)
+    if not vector:
+        return False
+    chance = linear_model.predict(trained.weights, trained.bias, vector)
+    if chance > trained.low:
+        return False
+    log.info(
+        "этап %s пропущен для %s: обученный гейт даёт %.2f при пороге %.2f",
+        stage, key, chance, trained.low,
     )
     return True
 
@@ -198,7 +239,7 @@ def keep_for_stage(
     как есть: включение — осознанное действие владельца, а не сюрприз.
     """
     opts = options()
-    if opts.profile_min <= 0 and opts.empty_k <= 0:
+    if opts.profile_min <= 0 and opts.empty_k <= 0 and not opts.learned:
         return list(vacancies)
     keys = [str(getattr(item, "key", "")) for item in vacancies]
     scores = relevance(conn, gateway, keys) if opts.profile_min > 0 else {}
@@ -215,6 +256,8 @@ def keep_for_stage(
                 opts.profile_min,
             )
             continue
+        if learned_empty(conn, gateway, stage, key):
+            continue
         if likely_empty(conn, gateway, stage, key, embeddings_tasks.vacancy_text(item)):
             continue
         kept.append(item)
@@ -229,7 +272,9 @@ __all__ = (
     "GateOptions",
     "KIND_OWNER",
     "keep_for_stage",
+    "learned_empty",
     "likely_empty",
+    "outcomes",
     "options",
     "owner_text",
     "owner_vector",
