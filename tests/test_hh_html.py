@@ -157,3 +157,42 @@ def test_карточка_без_состояния_разбирается_ра�
 
     assert card["description"] == "Ищем питониста"
     assert card["key_skills"] == []
+
+
+def test_список_в_поле_графика_не_теряется() -> None:
+    """После редизайна hh.ru формат и график приходят массивами.
+
+    Пока `name_of` возвращал на списке None, поля `schedule` и `employment`
+    оставались пустыми почти у всех вакансий: скоринг не видел удалёнку, а
+    пайплайн спрашивал у модели то, что источник уже прислал.
+    """
+    node = dict(
+        NODE,
+        workSchedule=None,
+        workFormat=[{"id": "REMOTE", "name": "Удалённо"}],
+        workScheduleByDays=[{"name": "5/2"}],
+        employmentForm=[{"name": "Полная занятость"}],
+    )
+
+    vacancy = hh_html.node_to_vacancy(node)
+
+    assert vacancy.schedule == "Удалённо, 5/2"
+    assert vacancy.employment == "Полная занятость"
+
+
+def test_карточка_отдаёт_график_и_опыт() -> None:
+    node = dict(
+        NODE,
+        description="<p>Ищем питониста</p>",
+        workFormat=[{"name": "Гибрид"}],
+        workExperience={"name": "От 1 года до 3 лет"},
+    )
+    client = hh_html.HHHtmlClient(pause=0.0, pause_min=0.0, failure_dir=None)
+    client.fetch = lambda url, params=None, attempts=3: page_with_state([node])  # type: ignore[method-assign]
+    try:
+        card = client.vacancy("111")
+    finally:
+        client.close()
+
+    assert card["schedule"]["name"].startswith("Гибрид")
+    assert card["experience"]["name"] == "От 1 года до 3 лет"

@@ -132,6 +132,30 @@ def _agrees(row: sqlite3.Row, field_name: str, value: str) -> bool:
     return False
 
 
+# Поле `vacancies` -> как его звать в отчёте. Заполненность источника — первое,
+# что надо смотреть: пустое поле выглядит в таблице как «модель не дублирует
+# источник», хотя на деле источник просто не разобран.
+SOURCE_FILL = (
+    ("schedule", "график/формат", "schedule IS NOT NULL AND TRIM(schedule) <> ''"),
+    ("salary", "вилка", "salary_from IS NOT NULL OR salary_to IS NOT NULL"),
+    ("experience", "опыт", "experience IS NOT NULL AND TRIM(experience) <> ''"),
+    ("employment", "занятость", "employment IS NOT NULL AND TRIM(employment) <> ''"),
+    ("skills", "навыки", "skills IS NOT NULL AND skills <> '' AND skills <> '[]'"),
+)
+
+
+def fill(conn: sqlite3.Connection) -> list[tuple[str, int, float]]:
+    """Сколько вакансий получили структурное поле от источника."""
+    total = conn.execute("SELECT COUNT(*) FROM vacancies").fetchone()[0]
+    out = []
+    for _, label, where in SOURCE_FILL:
+        count = conn.execute(
+            "SELECT COUNT(*) FROM vacancies WHERE {}".format(where)
+        ).fetchone()[0]
+        out.append((label, int(count), 100.0 * count / total if total else 0.0))
+    return out
+
+
 def report(conn: sqlite3.Connection) -> tuple[dict[str, FieldStat], int, int]:
     """Статистика по полям условий, число вакансий с условиями и всего."""
     stats: dict[str, FieldStat] = {}
@@ -208,6 +232,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     print("условий от модели: {}, из них дублируют поле источника: {} ({:.0f}%)".format(
         rows, covered, 100.0 * covered / rows if rows else 0.0
     ))
+    print()
+    print("заполненность полей источника:")
+    for label, count, share in fill(conn):
+        print("  {:<14} {:>4} ({:.0f}%)".format(label, count, share))
     print()
     print(render(stats))
 

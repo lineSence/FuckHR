@@ -49,6 +49,7 @@ from hh_parse import (  # noqa: F401 — публичные имена оста�
     first_of,
     name_of,
     parse_cards_fallback,
+    schedule_of,
     prune_failures,
     scrub,
 )
@@ -352,7 +353,11 @@ class HHHtmlClient:
             "description": description,
             "key_skills": [{"name": s} for s in skills],
             "address": geo.from_state(state, vacancy_id),
-            "schedule": {"name": name_of(first_of(best, "workSchedule", "schedule"))},
+            "schedule": {"name": schedule_of(best)},
+            "experience": {"name": name_of(first_of(best, "workExperience", "experience"))},
+            "employment": {
+                "name": name_of(first_of(best, "employment", "employmentForm", "employmentType"))
+            },
             "employer": {"name": name_of(first_of(best, "company", "employer"))},
             "published_at": first_of(
                 best, "publicationTime", "publicationDate", "creationTime", "publishedAt"
