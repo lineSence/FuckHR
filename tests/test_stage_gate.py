@@ -118,3 +118,51 @@ def test_замер_без_продуктивных_говорит_что_мер
     assert "мерить" in часть["итог"]
     assert часть.get("auroc") is None
     assert "hr_filter" in train.render([часть])
+
+
+def test_метки_extract_берутся_не_из_таблицы_условий():
+    """Источники «отрабатывал» и «дал результат» обязаны быть разными.
+
+    Пока оба читались из vacancy_conditions, отрицательных примеров не
+    существовало физически: ключ появлялся там только вместе с условием.
+    """
+    conn = база()
+    import conditions
+
+    conditions.ensure_schema(conn)
+    вакансия(conn, "с_условием", "Ромашка")
+    вакансия(conn, "пустая", "Ромашка")
+    conn.execute(
+        "UPDATE vacancies SET description = 'есть описание' WHERE key IN"
+        " ('с_условием', 'пустая')"
+    )
+    conn.execute(
+        "INSERT INTO vacancy_conditions (key, field, value, quote)"
+        " VALUES ('с_условием', 'salary', '100', 'зарплата 100')"
+    )
+    conn.commit()
+    assert stage_gates.outcomes(conn, "extract") == {
+        "с_условием": True,
+        "пустая": False,
+    }
+
+
+def test_вакансия_без_описания_в_метки_не_идёт():
+    conn = база()
+    вакансия(conn, "без_описания", "Ромашка")
+    assert stage_gates.outcomes(conn, "extract") == {}
+
+
+def test_один_класс_в_замере_называется_вырожденным():
+    conn = база()
+    for n in range(4):
+        вакансия(conn, "v{}".format(n), "Компания {}".format(n))
+        сигнал(conn, "v{}".format(n), '{"findings": [{"kind": "llm_claim"}]}')
+    store.save(
+        conn,
+        store.KIND_VACANCY,
+        "bge-m3",
+        [("v{}".format(n), [float(n) + 1.0, 1.0]) for n in range(4)],
+    )
+    часть = train.evaluate(conn, "hr_filter", "bge-m3", epochs=5, save=False)
+    assert "одного класса нет" in часть.get("итог", "") or "мерить нечем" in часть.get("итог", "")
