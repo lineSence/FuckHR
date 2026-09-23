@@ -198,7 +198,7 @@ triggers:
       - docs/laya-finetune.md
 
   - id: dataset
-    keywords: [датасет, dataset, файнтюн, finetune, дообучение, обучающая выборка, jsonl, colab, unsloth, lora, kaggle, разметка, judge_labels]
+    keywords: [датасет, dataset, файнтюн, finetune, дообучение, обучающая выборка, jsonl, colab, unsloth, lora, kaggle, разметка, judge_labels, логрегрессия, векторы вместо модели]
     load:
       - docs/dataset.md
       - docs/laya-finetune.md
