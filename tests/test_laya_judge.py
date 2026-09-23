@@ -49,3 +49,22 @@ def test_падение_модели_не_роняет_этап():
 
     assert laya_judge.probability("текст", "review_fake", agent=Падучая()) is None
     assert laya_judge.flagged(("а",), "review_fake", agent=Падучая()) == set()
+
+
+def test_перевёрнутый_вопрос_читается_по_ключу_B():
+    вопрос = laya_judge.QUESTIONS["review_fake"]
+    assert laya_judge.swapped(вопрос)["criteria"]["B"] == вопрос["criteria"]["A"]
+
+    class ОбаПорядка:
+        calls = 0
+
+        def predict(self, state, questions):  # noqa: ANN001
+            self.calls += 1
+            return {"answers": {
+                laya_judge.KEY: {"probabilities": {"A": 0.8, "B": 0.2}},
+                laya_judge.SWAPPED: {"probabilities": {"A": 0.7, "B": 0.3}},
+            }}
+
+    agent = ОбаПорядка()
+    assert laya_judge.pair("текст", "review_fake", agent=agent) == (0.8, 0.3)
+    assert agent.calls == 1, "оба порядка — один вызов"
