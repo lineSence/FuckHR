@@ -144,15 +144,26 @@ SOURCE_FILL = (
 )
 
 
-def fill(conn: sqlite3.Connection) -> list[tuple[str, int, float]]:
-    """Сколько вакансий получили структурное поле от источника."""
-    total = conn.execute("SELECT COUNT(*) FROM vacancies").fetchone()[0]
+def fill(conn: sqlite3.Connection) -> list[tuple[str, int, list[float]]]:
+    """Заполненность структурных полей по источникам.
+
+    Разрез по источникам обязателен: у Труда России и Работы.ру своих полей
+    почти нет, и их пустота в общей цифре выглядит как поломка разбора hh.ru.
+    """
+    columns = ", ".join(
+        "SUM(CASE WHEN {} THEN 1 ELSE 0 END)".format(where) for _, _, where in SOURCE_FILL
+    )
+    rows = conn.execute(
+        "SELECT source, COUNT(*), {} FROM vacancies GROUP BY source ORDER BY COUNT(*) DESC".format(
+            columns
+        )
+    ).fetchall()
     out = []
-    for _, label, where in SOURCE_FILL:
-        count = conn.execute(
-            "SELECT COUNT(*) FROM vacancies WHERE {}".format(where)
-        ).fetchone()[0]
-        out.append((label, int(count), 100.0 * count / total if total else 0.0))
+    for row in rows:
+        total = int(row[1]) or 1
+        out.append(
+            (str(row[0]), int(row[1]), [100.0 * int(row[index + 2] or 0) / total for index in range(len(SOURCE_FILL))])
+        )
     return out
 
 
@@ -233,9 +244,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         rows, covered, 100.0 * covered / rows if rows else 0.0
     ))
     print()
-    print("заполненность полей источника:")
-    for label, count, share in fill(conn):
-        print("  {:<14} {:>4} ({:.0f}%)".format(label, count, share))
+    labels = [label for _, label, _ in SOURCE_FILL]
+    print("заполненность полей источника, % вакансий:")
+    print("  {:<12} {:>6} {}".format("источник", "всего", " ".join(
+        "{:>12}".format(label) for label in labels
+    )))
+    for source, total_rows, shares in fill(conn):
+        print("  {:<12} {:>6} {}".format(source, total_rows, " ".join(
+            "{:>11.0f}%".format(share) for share in shares
+        )))
     print()
     print(render(stats))
 
