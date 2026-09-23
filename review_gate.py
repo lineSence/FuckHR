@@ -27,13 +27,13 @@
 from __future__ import annotations
 
 import logging
-import math
 import os
 import sqlite3
 from dataclasses import dataclass
 from typing import Mapping, Sequence
 
 import embeddings_store as store
+import linear_model
 import llm_embed
 import review_gate_store
 import settings
@@ -69,39 +69,6 @@ def options() -> GateOptions:
         low=settings.as_float(os.getenv("REVIEW_GATE_LOW"), DEFAULT_LOW),
         high=settings.as_float(os.getenv("REVIEW_GATE_HIGH"), DEFAULT_HIGH),
     )
-
-
-def sigmoid(value: float) -> float:
-    if value < -30:
-        return 0.0
-    if value > 30:
-        return 1.0
-    return 1.0 / (1.0 + math.exp(-value))
-
-
-def predict(weights: Sequence[float], bias: float, vector: Sequence[float]) -> float:
-    """Вероятность «да». Разная длина — 0.5: решать нечем, но и падать незачем."""
-    if not weights or len(weights) != len(vector):
-        return 0.5
-    return sigmoid(sum(map(float.__mul__, weights, vector)) + bias)
-
-
-def auroc(positive: Sequence[float], negative: Sequence[float]) -> float | None:
-    """Доля правильно упорядоченных пар. None — одного из классов нет."""
-    if not positive or not negative:
-        return None
-    wins = 0.0
-    for high in positive:
-        for low in negative:
-            wins += 1.0 if high > low else 0.5 if high == low else 0.0
-    return round(wins / (len(positive) * len(negative)), 3)
-
-
-def counts(scores: Sequence[float], labels: Sequence[int], limit: float) -> tuple[int, int]:
-    """(ложных, пропущенных) при пороге."""
-    wrong = sum(1 for score, label in zip(scores, labels) if score >= limit and not label)
-    missed = sum(1 for score, label in zip(scores, labels) if score < limit and label)
-    return wrong, missed
 
 
 def vectors_for(
@@ -141,7 +108,7 @@ def scores(
     for key, text in texts.items():
         vector = known.get(text_hash(text or ""))
         if vector:
-            out[key] = predict(trained.weights, trained.bias, vector)
+            out[key] = linear_model.predict(trained.weights, trained.bias, vector)
     return out
 
 
@@ -169,6 +136,13 @@ def decide(
         )
     return yes, no, chances
 
+
+# Имена математики остаются видимыми отсюда: они были частью модуля до
+# выделения `linear_model.py`, и звать её через два имени незачем.
+auroc = linear_model.auroc
+counts = linear_model.counts
+predict = linear_model.predict
+sigmoid = linear_model.sigmoid
 
 __all__ = (
     "DEFAULT_HIGH",

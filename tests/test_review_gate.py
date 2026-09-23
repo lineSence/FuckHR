@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlite3
 
 import judge_labels
+import linear_model
 import review_gate
 import review_gate_store as store
 import review_gate_train as train
@@ -99,10 +100,10 @@ def test_неизвестный_этап_не_решается(monkeypatch):
 
 def test_обучение_разделяет_и_подбирает_пороги():
     строки = [([1.0, 0.0], 0.85)] * 20 + [([0.0, 1.0], 0.15)] * 20
-    веса, смещение = train.train(строки, epochs=200)
+    веса, смещение = linear_model.train(строки, epochs=200)
     assert review_gate.predict(веса, смещение, [1.0, 0.0]) > 0.6
     assert review_gate.predict(веса, смещение, [0.0, 1.0]) < 0.4
-    low, high = train.choose([0.9, 0.85, 0.1, 0.2], [1, 1, 0, 0])
+    low, high = linear_model.choose([0.9, 0.85, 0.1, 0.2], [1, 1, 0, 0])
     # Разделимая выборка: середины нет, порог «нет» прижат к порогу «да»,
     # иначе гейт получился бы с перевёрнутыми порогами.
     assert high is not None and low is not None and low <= high
@@ -192,7 +193,7 @@ def test_выключенный_этап_не_зовёт_даже_гейт(monke
 def test_экономия_считает_решённое_и_ошибки():
     оценки = [0.95, 0.9, 0.5, 0.05, 0.1, 0.9]
     метки = [1, 1, 1, 0, 0, 0]
-    итог = train.yield_of(оценки, метки, low=0.2, high=0.8)
+    итог = linear_model.yield_of(оценки, метки, low=0.2, high=0.8)
     # Решено: три «да» (одно зря) и два «нет», середина 0.5 ушла бы в шлюз.
     assert итог["решено_да"] == 3 and итог["решено_нет"] == 2
     assert итог["решено_без_модели"] == 5 and итог["неверно"] == 1
@@ -200,4 +201,4 @@ def test_экономия_считает_решённое_и_ошибки():
 
 
 def test_без_порогов_экономию_не_обещают():
-    assert train.yield_of([0.5], [1], None, 0.8) == {}
+    assert linear_model.yield_of([0.5], [1], None, 0.8) == {}
