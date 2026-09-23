@@ -364,6 +364,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    # Без .env настройка «Чекпойнт решателя» до скрипта не доходит, и замер
+    # молча уезжает на базовый чекпойнт с Hugging Face вместо дообученного.
+    try:
+        from dotenv import find_dotenv, load_dotenv  # noqa: PLC0415
+
+        load_dotenv(find_dotenv(usecwd=True))
+    except ImportError:
+        pass
     stages = tuple(stage.strip() for stage in args.stages.split(",") if stage.strip())
     unknown = [stage for stage in stages if stage not in STAGES]
     if unknown:
@@ -387,6 +395,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             print("кейсы не разобрались ({}): {}".format(path, exc))
             return 2
 
+    checkpoint = (args.laya_model or "").strip() or laya_judge.model_name()
+    print("чекпойнт: {}".format(checkpoint))
     agent = laya_judge.load(args.laya_model or None)
     if agent is None:
         print(
