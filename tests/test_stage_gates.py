@@ -1,7 +1,7 @@
-"""Гейты перед этапами модели: экономят вызовы и не теряют вакансии молча.
+"""Гейт перед этапами модели: экономит вызовы и не теряет вакансии молча.
 
 Сети нет: вместо эмбеддера подставлен шлюз с готовыми векторами. Проверяется
-главное свойство — по умолчанию гейты выключены и список проходит насквозь,
+главное свойство — по умолчанию гейт выключен и список проходит насквозь,
 а включённый гейт объясняет каждый отказ.
 """
 
@@ -13,7 +13,6 @@ from dataclasses import dataclass
 
 import conditions
 import db
-import detector
 import embeddings_store as store
 import extract_spans
 import stage_gates
@@ -49,7 +48,6 @@ def _conn() -> sqlite3.Connection:
     conn = db.connect(":memory:")
     db.init_schema(conn)
     conditions.ensure_schema(conn)
-    detector.ensure_schema(conn)
     store.ensure_schema(conn)
     return conn
 
@@ -58,9 +56,8 @@ def _vector(conn: sqlite3.Connection, kind: str, key: str, values) -> None:
     store.save(conn, kind, MODEL, [(key, values)])
 
 
-def test_по_умолчанию_гейты_пропускают_всё(monkeypatch) -> None:
+def test_по_умолчанию_гейт_пропускает_всё(monkeypatch) -> None:
     monkeypatch.delenv("GATE_PROFILE_MIN", raising=False)
-    monkeypatch.delenv("GATE_EMPTY_K", raising=False)
     conn = _conn()
     items = [FakeVacancy("hh:1"), FakeVacancy("hh:2")]
 
@@ -94,43 +91,6 @@ def test_без_вектора_вакансия_проходит(monkeypatch) ->
     )
 
     assert [item.key for item in kept] == ["hh:unknown"]
-
-
-def test_гейт_пустоты_смотрит_на_соседей(monkeypatch) -> None:
-    monkeypatch.setenv("GATE_EMPTY_K", "2")
-    monkeypatch.setenv("GATE_EMPTY_SIM", "0.7")
-    conn = _conn()
-    # Два соседа, на которых этап отработал и не дал ни одного условия.
-    for number in (1, 2):
-        key = "hh:empty{}".format(number)
-        conn.execute(
-            "INSERT INTO vacancy_signals (key, created_at, flags, payload)"
-            " VALUES (?, '2026-01-01', '', '{}')",
-            (key,),
-        )
-        _vector(conn, store.KIND_VACANCY, key, [0.8, 0.6])
-    conn.commit()
-    _vector(conn, store.KIND_VACANCY, "hh:new", [1.0, 0.0])
-
-    assert stage_gates.likely_empty(conn, FakeGateway(), "hr_filter", "hh:new") is True
-
-    # Достаточно одного соседа с находкой, чтобы вакансия пошла в модель.
-    conn.execute(
-        "INSERT INTO vacancy_signals (key, created_at, flags, payload)"
-        " VALUES ('hh:full', '2026-01-01', '', '{\"findings\": [{\"kind\": \"llm_claim\"}]}')"
-    )
-    conn.commit()
-    _vector(conn, store.KIND_VACANCY, "hh:full", [1.0, 0.0])
-
-    assert stage_gates.likely_empty(conn, FakeGateway(), "hr_filter", "hh:new") is False
-
-
-def test_мало_соседей_гейт_молчит(monkeypatch) -> None:
-    monkeypatch.setenv("GATE_EMPTY_K", "5")
-    conn = _conn()
-    _vector(conn, store.KIND_VACANCY, "hh:new", [1.0, 0.0])
-
-    assert stage_gates.likely_empty(conn, FakeGateway(), "extract", "hh:new") is False
 
 
 def test_текст_владельца_собирается_из_профиля_и_резюме() -> None:

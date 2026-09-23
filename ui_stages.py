@@ -76,13 +76,6 @@ def render_stages(conn: sqlite3.Connection, gateway: Any = None) -> str:
             "нужен вектор владельца и векторы вакансий",
         ],
         [
-            "Гейт пустоты этапа",
-            esc("{} соседей, близость {:g}".format(opts.empty_k, opts.empty_sim))
-            if opts.empty_k
-            else "выключен",
-            "нужны вакансии с известным исходом этапа",
-        ],
-        [
             "Векторы",
             "считаются" if vectors_on else "выключены (EMBEDDINGS_ENABLED)",
             esc("вакансий с вектором: {}".format(vectors)),

@@ -129,9 +129,8 @@ dossier.build(company)
 | `bench.py`, `bench_cases.py`, `bench_hard.py`, `bench_metrics.py`, `ui_bench.py` | сравнение моделей: базовые и сложные кейсы, веса уровней, отдельные колонки (`docs/model-bench.md`) |
 | `dataset_core.py`, `dataset_export.py`, `ui_dataset.py` | датасет для дообучения: перехватчик шлюза, примеры из своей базы, кнопка сборки (`docs/dataset.md`) |
 | `stats.py`, `ui_chart.py`, `ui_stats.py` | страница «Статистика»: счётчики по своей базе, инлайн-SVG без библиотек, сборка страницы (`docs/stats.md`) |
-| `stage_gates.py`, `extract_spans.py` | гейты перед этапами модели и разметка условий спанами (`docs/gates.md`) |
+| `stage_gates.py`, `extract_spans.py` | гейт близости к профилю перед этапами модели и разметка условий спанами (`docs/gates.md`) |
 | `linear_model.py` | логистическая регрессия на готовых векторах: обучение, AUROC, подбор порогов. Общая математика всех гейтов, без numpy и sklearn |
-| `stage_gate_train.py` | обученный гейт пустоты этапов `hr_filter` и `extract`: метки берутся из результатов прошлых прогонов (`docs/gates.md`) |
 | `review_gate.py`, `review_gate_store.py`, `review_gate_train.py` | линейный гейт этапов review_fake и ai_text: логрегрессия на векторах bge-m3, веса в таблице `gate_models`, обучение и замер на своей разметке (`docs/review-gate.md`) |
 | `judge_labels.py`, `ui_gate.py` | разметка учителя рядом с полным текстом, который он видел, поправки владельца кнопкой и страница гейта |
 | `review_scoring.py` | вердикты по отзывам из досье: два LLM-этапа и запись их меток (вынесено из `dossier.py` по [CORE-024]) |
