@@ -195,11 +195,13 @@ triggers:
     load:
       - docs/gates.md
       - docs/laya.md
+      - docs/laya-finetune.md
 
   - id: dataset
-    keywords: [датасет, dataset, файнтюн, finetune, дообучение, обучающая выборка, jsonl, colab, unsloth, lora]
+    keywords: [датасет, dataset, файнтюн, finetune, дообучение, обучающая выборка, jsonl, colab, unsloth, lora, kaggle, разметка, judge_labels]
     load:
       - docs/dataset.md
+      - docs/laya-finetune.md
 
   - id: rules-general
     keywords: [правило, конвенция, стиль, запрет]
