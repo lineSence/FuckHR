@@ -89,6 +89,7 @@ from ui_core import (
 import ui_bench
 import ui_dataset
 import ui_laya
+import ui_stats
 import ui_sources
 import ui_stages
 from ui_forms import (
@@ -308,6 +309,8 @@ class Handler(BaseHTTPRequestHandler):
                             "/llm",
                         )
                     )
+                elif parsed.path == "/stats":
+                    self._send(page("Статистика", ui_stats.render_stats(conn, flat(params))))
                 elif parsed.path == "/laya":
                     self._send(page("Laya", ui_laya.render_laya(conn)))
                 elif parsed.path in POST_ONLY:
