@@ -245,11 +245,11 @@ class Handler(BaseHTTPRequestHandler):
                     )
                     self._send(page("Вакансия", body))
                 elif parsed.path == "/companies":
-                    # Компании и контакты — один раздел: канал без работодателя
+                    # Досье компаний — один раздел: канал без работодателя
                     # ничего не значит, а работодатель без канала — не вход.
                     self._send(
                         page(
-                            "Компании и контакты",
+                            "Досье компаний",
                             render_companies(conn, one("csort"), flat(params))
                             + render_contacts(conn, one("ksort")),
                         )
