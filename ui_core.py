@@ -158,6 +158,7 @@ NAV_ITEMS = (
     ("/search", "Поиск"),
     ("/injections", "Инъекции"),
     ("/llm", "Модель"),
+    ("/laya", "Laya"),
     ("/profile", "Профили"),
     ("/settings", "Настройки"),
     ("/cleanup", "Очистка"),
