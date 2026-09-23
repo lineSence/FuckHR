@@ -88,7 +88,7 @@ from ui_core import (
 )
 import ui_bench
 import ui_dataset
-import ui_laya
+import ui_gate
 import ui_stats
 import ui_sources
 import ui_stages
@@ -133,7 +133,7 @@ POST_ONLY = frozenset(
     {
         "/run", "/stop", "/loop", "/bench", "/dataset", "/llm/apply",
         "/intake/apply", "/map/geo", "/sources", "/runopts", "/cookie",
-        "/laya/stages", "/laya/label", "/laya/dataset", "/laya/bench",
+        "/gate/stages", "/gate/label", "/gate/train",
         "/area", "/deep", "/llm/stages",
     }
 )
@@ -175,13 +175,13 @@ class Handler(BaseHTTPRequestHandler):
         raw = self.rfile.read(length).decode("utf-8")
         return urllib.parse.parse_qs(raw, keep_blank_values=True)
 
-    def _laya(self, path: str, form: dict[str, list[str]]) -> None:
-        """Формы раздела «Laya». Что делать, решает ui_laya: здесь только ответ."""
-        job_id, body = ui_laya.post(path, form)
+    def _gate(self, path: str, form: dict[str, list[str]]) -> None:
+        """Формы раздела «Гейт отзывов». Что делать, решает ui_gate."""
+        job_id, body = ui_gate.post(path, form)
         if job_id is not None:
             self._redirect("/?job={}".format(job_id))
             return
-        self._send(page("Laya", body))
+        self._send(page("Гейт отзывов", body))
 
     def do_GET(self) -> None:  # noqa: N802
         if ui_guard.refuse(self):
@@ -311,8 +311,8 @@ class Handler(BaseHTTPRequestHandler):
                     )
                 elif parsed.path == "/stats":
                     self._send(page("Статистика", ui_stats.render_stats(conn, flat(params))))
-                elif parsed.path == "/laya":
-                    self._send(page("Laya", ui_laya.render_laya(conn)))
+                elif parsed.path == "/gate":
+                    self._send(page("Гейт отзывов", ui_gate.render_gate(conn)))
                 elif parsed.path in POST_ONLY:
                     # Сюда попадают по F5 или по кнопке «назад» после POST.
                     # Главная с историей задач полезнее, чем 404.
@@ -370,8 +370,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._redirect("/?job={}".format(job_id))
                 return
 
-            if parsed.path.startswith("/laya/"):
-                self._laya(parsed.path, form)
+            if parsed.path.startswith("/gate/"):
+                self._gate(parsed.path, form)
                 return
 
             if parsed.path == "/bench":

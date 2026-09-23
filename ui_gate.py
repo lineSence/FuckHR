@@ -1,17 +1,17 @@
-"""Страница «Laya»: разметка, поправки владельца, датасет и дообучение.
+"""Страница «Гейт отзывов»: разметка, поправки владельца, обучение гейта.
 
 Отдельный раздел, а не блок на странице «Модель»: там речь про генеративные
-модели и шлюз, а здесь — свой цикл из четырёх шагов, который идёт неделями.
-Кнопка «собрать датасет» без ответа на вопрос «а сколько разметки уже есть»
-бесполезна, поэтому счётчики и кнопки живут на одном экране.
+модели и шлюз, а здесь свой цикл, который идёт неделями. Кнопка «обучить» без
+ответа на вопрос «а сколько разметки уже есть» бесполезна, поэтому счётчики,
+поправки и кнопка живут на одном экране.
 
 Главное, чего нет в консоли: поправка владельца одной кнопкой. Учитель
 ошибается, а его ошибку видно только в тексте отзыва — значит текст надо
 показать и рядом поставить «верно» и «ошибка». Поправка весит больше вердикта
-учителя и уходит в отложенную выборку (laya_dataset.py).
+учителя и целиком уходит в отложенную часть.
 
-Обучение отсюда не запускается: без видеокарты оно идёт сутками, а в
-песочнице падает по памяти. Здесь только готовая команда и разбор eval.json.
+Обучение отсюда запускается: линейная модель на готовых векторах учится
+секунды, видеокарта не нужна (`review_gate_train.py`).
 """
 
 from __future__ import annotations
@@ -22,19 +22,21 @@ from pathlib import Path
 
 import jobs
 import judge_labels
-import laya_dataset
+import review_gate
+import review_gate_store
+import review_gate_train
 import settings
 from ui_core import details, esc, table
 
 ROOT = Path(__file__).resolve().parent
-OUT_DIR = ROOT / "data" / "train" / "laya"
+REPORT_PATH = ROOT / "data" / "bench" / "review_gate.json"
 
 STAGE_RU = {
     "review_fake": "Заказные отзывы",
     "ai_text": "Текст написан нейросетью",
 }
 # Настройка этапа → подпись. Оба этапа выключены по умолчанию: они стоят
-# вызова модели на отзыв, а до дообучения Laya платить за это незачем.
+# вызова модели на отзыв, поэтому платить за них решает владелец.
 STAGE_ENV = {
     "review_fake": ("FAKE_REVIEW_LLM", "Спрашивать модель про заказные отзывы"),
     "ai_text": ("AI_TEXT_LLM", "Спрашивать модель про ИИ-текст"),
@@ -47,7 +49,7 @@ def counts(conn: sqlite3.Connection) -> dict[str, dict[str, int]]:
     """Сколько меток накопилось: учитель, поправки, компании."""
     judge_labels.ensure_schema(conn)
     out: dict[str, dict[str, int]] = {}
-    for stage in laya_dataset.STAGES:
+    for stage in review_gate.STAGES:
         row = conn.execute(
             """
             SELECT
@@ -89,26 +91,13 @@ def unchecked(conn: sqlite3.Connection, limit: int = SHOW) -> list[sqlite3.Row]:
     )
 
 
-def load_report(path: Path = OUT_DIR / "report.json") -> dict | None:
+def load_report(path: Path = REPORT_PATH) -> list[dict] | None:
+    """Отчёт последнего обучения: то же, что печатает review_gate_train."""
     try:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    return data if isinstance(data, dict) else None
-
-
-def model_eval() -> tuple[str, dict | None]:
-    """Папка дообученной модели из LAYA_MODEL и её eval.json, если есть."""
-    name = settings.get("LAYA_MODEL", "") or ""
-    path = Path(name)
-    if not path.is_absolute():
-        path = ROOT / name
-    if not name or not path.is_dir():
-        return name, None
-    try:
-        return name, json.loads((path / "eval.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return name, None
+    return data if isinstance(data, list) else None
 
 
 def render_counts(data: dict[str, dict[str, int]]) -> str:
@@ -127,9 +116,9 @@ def render_counts(data: dict[str, dict[str, int]]) -> str:
 def enough(c: dict[str, int]) -> str:
     """Дообучение упирается в положительные примеры: их всегда меньше."""
     yes = c["llm_yes"] + c["own_yes"]
-    if yes >= laya_dataset.FEW:
+    if yes >= review_gate_train.FEW:
         return '<span class=ok>да, {} положительных</span>'.format(yes)
-    return '<span class=warn>ещё {} положительных</span>'.format(laya_dataset.FEW - yes)
+    return '<span class=warn>ещё {} положительных</span>'.format(review_gate_train.FEW - yes)
 
 
 def render_stages_form() -> str:
@@ -141,7 +130,7 @@ def render_stages_form() -> str:
             )
         )
     return (
-        '<form method=post action="/laya/stages">{boxes} <button>Сохранить</button></form>'
+        '<form method=post action="/gate/stages">{boxes} <button>Сохранить</button></form>'
         "<p class=muted>Метки копятся сами: этапы спрашивают модель при сборе "
         "вакансий и на шаге по цели, а ответ вместе с полным текстом отзыва "
         "ложится в базу. Каждый отзыв — один вызов модели, поэтому этапы "
@@ -164,7 +153,7 @@ def render_check(rows: list[sqlite3.Row]) -> str:
         cards.append(
             '<div class=panel><p><b>{stage}</b> · учитель сказал «{verdict}»'
             ' · <span class=muted>{company}</span></p><p>{body}</p>'
-            '<form method=post action="/laya/label">'
+            '<form method=post action="/gate/label">'
             '<input type=hidden name=stage value="{stage_id}">'
             '<input type=hidden name=hash value="{hash}">'
             '<button name=verdict value="same">Верно</button> '
@@ -180,72 +169,94 @@ def render_check(rows: list[sqlite3.Row]) -> str:
     return "".join(cards)
 
 
-def render_report(report: dict) -> str:
+def render_report(report: list[dict]) -> str:
+    """Замер последнего обучения: по нему и решается, включать ли гейт."""
     rows = []
-    for stage, parts in sorted(report.items()):
-        for split in ("train", "test"):
-            part = parts.get(split) or {}
-            if not part:
-                continue
-            rows.append([
-                esc(STAGE_RU.get(stage, stage)),
-                "обучающая" if split == "train" else "отложенная",
-                str(part.get("да", 0)),
-                str(part.get("нет", 0)),
-                str(part.get("owner", 0)),
-            ])
-    return table(["Этап", "Часть", "Да", "Нет", "От владельца"], rows)
-
-
-def render_eval(name: str, data: dict) -> str:
-    rows = []
-    for stage, part in sorted(data.items()):
+    for part in report:
         rows.append([
-            esc(STAGE_RU.get(stage, stage)),
-            str(part.get("вопросов", 0)),
-            "{:.2f}".format(part.get("точность", 0.0)),
-            order_cell(part.get("auroc_прямой")),
-            order_cell(part.get("auroc_перевёрнутый")),
+            esc(STAGE_RU.get(part.get("этап", ""), part.get("этап", ""))),
+            str(part.get("обучающих", 0)),
+            "{} из {}".format(part.get("положительных", 0), part.get("отложенных", 0)),
+            score_cell(part.get("auroc")),
+            str(part.get("точность", "—")),
+            "{} / {}".format(part.get("high", "—"), part.get("low", "—")),
         ])
+    notes = [
+        "<p class=warn>{}: {}</p>".format(
+            esc(STAGE_RU.get(part.get("этап", ""), part.get("этап", ""))), esc(part["итог"])
+        )
+        for part in report
+        if part.get("итог")
+    ]
     return (
-        "<p>Замер модели <code>{}</code>:</p>".format(esc(name))
-        + table(["Этап", "Вопросов", "Точность", "AUROC прямой", "AUROC перевёрнутый"], rows)
-        + "<p class=muted>Включать можно, только если оба AUROC не ниже 0.7. "
-        "Высокий прямой при низком перевёрнутом — модель отвечает по позиции "
-        "варианта, а не по смыслу.</p>"
+        table(
+            ["Этап", "Обучающих", "Положительных", "AUROC", "Точность", "Порог да / нет"],
+            rows,
+        )
+        + "".join(notes)
+        + "<p class=muted>Пороги подобраны по отложенной части: «да» — самый "
+        "низкий порог без ложных срабатываний, «нет» — самый высокий порог, "
+        "ниже которого не осталось ни одного положительного. Их и стоит "
+        "поставить в настройках.</p>"
     )
 
 
-def order_cell(value: object) -> str:
+def score_cell(value: object) -> str:
     if not isinstance(value, (int, float)):
         return "<span class=muted>—</span>"
     cls = "ok" if value >= 0.7 else "danger"
-    return '<span class="{}">{:.2f}</span>'.format(cls, value)
+    return '<span class="{}">{:.3f}</span>'.format(cls, value)
+
+
+def render_models(conn: sqlite3.Connection) -> str:
+    """Что лежит в базе сейчас — гейт берёт веса именно оттуда."""
+    models = review_gate_store.all_models(conn)
+    if not models:
+        return (
+            "<p class=muted>Весов в базе нет: гейт молчит, оба этапа работают "
+            "как раньше.</p>"
+        )
+    rows = [
+        [
+            esc(STAGE_RU.get(model.stage, model.stage)),
+            esc(model.model),
+            str(model.rows),
+            score_cell(model.auroc),
+            "{} / {}".format(model.high, model.low),
+            esc(model.trained_at[:16].replace("T", " ")),
+        ]
+        for model in models
+    ]
+    return table(
+        ["Этап", "Модель векторов", "Обучающих", "AUROC", "Порог да / нет", "Обучен"], rows
+    )
 
 
 HOWTO = (
     "<ol>"
-    "<li>Файлы из <code>{out}</code> — приватным датасетом на Kaggle или Colab "
-    "(в отзывах бывают имена сотрудников: публиковать их нельзя).</li>"
-    "<li>Одна карта T4: в Colab открыть <code>training/laya_colab.ipynb</code> "
-    "и пройти его сверху вниз, либо вручную <code>pip install laya</code> и "
-    "<code>python training/laya_finetune.py --data data/train/laya "
-    "--out models/laya-fuckhr</code> — около часа.</li>"
-    "<li>Папку модели положить рядом с проектом и указать её в настройке "
-    "«Чекпойнт решателя» — замер появится здесь.</li>"
+    "<li>Векторы считает эмбеддер (настройка «Модель эмбеддингов», обычно "
+    "<code>bge-m3</code>): без него обучать не на чем.</li>"
+    "<li>Кнопка выше или <code>python review_gate_train.py</code> — минуты на "
+    "тысяче отзывов, видеокарта не нужна. Веса ложатся в базу, рядом с "
+    "векторами, из которых посчитаны.</li>"
+    "<li>Пороги из замера поставить в настройках, затем включить «Гейт этапов "
+    "отзывов». Веса считаются отдельно для каждой модели векторов: сменили "
+    "эмбеддер — обучите заново.</li>"
     "</ol>"
-    "<p class=muted>Подробно — <code>docs/laya-finetune.md</code>. Обучение "
-    "отсюда не запускается: без видеокарты оно не проходит.</p>"
+    "<p class=muted>Подробно — <code>docs/review-gate.md</code>. Там же "
+    "замер, по которому от дообученной Laya отказались: те же цифры ценой "
+    "второго энкодера в памяти.</p>"
 )
 
 
-def render_laya(conn: sqlite3.Connection, note: str = "") -> str:
+def render_gate(conn: sqlite3.Connection, note: str = "") -> str:
     data = counts(conn)
     parts = [
-        "<p class=muted>Laya отвечает «да/нет» одним проходом энкодера вместо "
-        "генерации. Без дообучения она отвечает по позиции варианта, поэтому "
-        "путь один: накопить разметку на своих отзывах, собрать датасет, "
-        "дообучить и только потом включать.</p>",
+        "<p class=muted>Два этапа отзывов стоят вызова модели на каждый текст. "
+        "Гейт — логистическая регрессия на векторах, которые и так считаются: "
+        "уверенное «да» и уверенное «нет» принимаются без модели, середина "
+        "уходит в шлюз, как раньше. Путь один: накопить разметку, обучить, "
+        "поставить пороги из замера и только потом включать.</p>",
         note,
         "<h2>1. Разметка</h2>",
         render_counts(data),
@@ -255,33 +266,19 @@ def render_laya(conn: sqlite3.Connection, note: str = "") -> str:
         "неверным. Проверенные тексты весят больше и идут в отложенную "
         "выборку: мерить надо на правде.</p>",
         render_check(unchecked(conn)),
-        "<h2>3. Датасет</h2>",
-        '<form method=post action="/laya/dataset"><button>Собрать датасет для '
-        "Laya</button></form>",
-        "<p class=muted>Собирается из базы: два порядка вариантов в каждой "
-        "строке, деление отложенной части по компаниям, контакты под масками. "
-        "Ни одного вызова модели и ни одного запроса в сеть.</p>",
+        "<h2>3. Обучение гейта</h2>",
+        '<form method=post action="/gate/train"><button>Обучить гейт на '
+        "разметке</button></form>",
+        "<p class=muted>Учится на разметке из базы: деление отложенной части "
+        "по компаниям, векторы из общего кэша. Ни одной генерации; вызовы "
+        "эмбеддера — только на тексты без вектора.</p>",
+        render_models(conn),
     ]
     report = load_report()
     if report:
+        parts.append("<h2>4. Последний замер</h2>")
         parts.append(render_report(report))
-        parts.append(
-            "<p class=muted>Файлы лежат в <code>{}</code>.</p>".format(esc(str(OUT_DIR)))
-        )
-    parts.append("<h2>4. Дообучение и проверка</h2>")
-    name, evaluated = model_eval()
-    if evaluated:
-        parts.append(render_eval(name, evaluated))
-    parts.append(
-        '<form method=post action="/laya/bench"><button>Сравнить с текущей '
-        "моделью</button></form>"
-    )
-    parts.append(
-        "<p class=muted>Прогон берёт отложенную выборку, если датасет уже "
-        "собран, иначе кейсы бенчмарка. Требует установленной Laya и качает "
-        "веса при первом запуске.</p>"
-    )
-    parts.append(details("Как дообучить", "три шага", HOWTO.format(out=esc(str(OUT_DIR)))))
+    parts.append(details("Как включить", "три шага", HOWTO))
     return "".join(parts)
 
 
@@ -319,19 +316,19 @@ def post(path: str, form: dict) -> tuple[int | None, str]:
     о записи: настройка и поправка выполняются мгновенно, уводить некуда.
     """
     note = ""
-    if path in ("/laya/dataset", "/laya/bench"):
-        job_id, note = start_dataset() if path.endswith("dataset") else start_bench()
+    if path == "/gate/train":
+        job_id, note = start_train()
         if job_id is not None:
             return job_id, ""
     from ui_core import open_db  # noqa: PLC0415 — соединение на запрос, как у остальных форм
 
     conn = open_db()
     try:
-        if path == "/laya/stages":
+        if path == "/gate/stages":
             note = save_stages(form)
-        elif path == "/laya/label":
+        elif path == "/gate/label":
             note = save_label(conn, form)
-        return None, render_laya(conn, note)
+        return None, render_gate(conn, note)
     finally:
         conn.close()
 
@@ -344,25 +341,19 @@ def start(task: str, extra: tuple[str, ...] = ()) -> tuple[int | None, str]:
     return job.id, ""
 
 
-def start_dataset() -> tuple[int | None, str]:
+def start_train() -> tuple[int | None, str]:
     """Аргументов из браузера нет: команда целиком из jobs.TASKS [CORE-023]."""
-    return start("laya-dataset")
-
-
-def start_bench() -> tuple[int | None, str]:
-    cases = OUT_DIR / "bench_cases.json"
-    return start("laya-bench", ("--cases", str(cases)) if cases.exists() else ())
+    return start("gate-train")
 
 
 __all__ = (
     "counts",
-    "post",
     "load_report",
-    "model_eval",
-    "render_laya",
+    "post",
+    "render_gate",
+    "render_models",
     "save_label",
     "save_stages",
-    "start_bench",
-    "start_dataset",
+    "start_train",
     "unchecked",
 )
