@@ -131,7 +131,7 @@ dossier.build(company)
 | `stats.py`, `ui_chart.py`, `ui_stats.py` | страница «Статистика»: счётчики по своей базе, инлайн-SVG без библиотек, сборка страницы (`docs/stats.md`) |
 | `stage_gates.py`, `extract_spans.py` | гейты перед этапами модели и разметка условий спанами (`docs/gates.md`) |
 | `laya_judge.py`, `laya_bench.py` | необязательный решатель Laya на этапах review_fake и ai_text и его сравнение с текущей моделью (`docs/laya.md`) |
-| `laya_dataset.py`, `judge_labels.py`, `training/laya_finetune.py`, `ui_laya.py` | разметка учителя рядом с полным текстом, поправки владельца кнопкой, датасет в формате typed-decisions и дообучение Laya (`docs/laya-finetune.md`) |
+| `laya_dataset.py`, `judge_labels.py`, `training/laya_finetune.py`, `training/laya_colab.ipynb`, `ui_laya.py` | разметка учителя рядом с полным текстом, поправки владельца кнопкой, датасет в формате typed-decisions и дообучение Laya (`docs/laya-finetune.md`) |
 | `review_scoring.py` | вердикты по отзывам из досье: два LLM-этапа и запись их меток (вынесено из `dossier.py` по [CORE-024]) |
 | `bot.py` | карточки и тревоги в Telegram: выключатель отправки, темп, тихие часы |
 | `canary.py` | тревога, когда прогон сломался, с суточным cooldown |
