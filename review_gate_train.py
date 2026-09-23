@@ -148,6 +148,30 @@ def train(
     return weights, bias
 
 
+def yield_of(
+    scores: Sequence[float], labels: Sequence[int], low: float | None, high: float | None
+) -> dict:
+    """Что гейт снял бы с модели на отложенной части и где при этом соврал.
+
+    Главное число всей затеи: AUROC говорит, что модель различает тексты, а
+    вот эта доля — сколько вызовов не случится. Вторая половина — цена: сколько
+    из решённого решено неверно.
+    """
+    if low is None or high is None:
+        return {}
+    да = [(score, label) for score, label in zip(scores, labels) if score >= high]
+    нет = [(score, label) for score, label in zip(scores, labels) if score <= low]
+    решено = len(да) + len(нет)
+    неверно = sum(1 for _, label in да if not label) + sum(1 for _, label in нет if label)
+    return {
+        "решено_без_модели": решено,
+        "доля": round(решено / len(labels), 3) if labels else 0.0,
+        "решено_да": len(да),
+        "решено_нет": len(нет),
+        "неверно": неверно,
+    }
+
+
 def choose(scores: Sequence[float], labels: Sequence[int]) -> tuple[float | None, float | None]:
     """(low, high) по отложенной части: «нет» без пропусков, «да» без ложных.
 
@@ -223,6 +247,7 @@ def evaluate(
             ),
             "low": low,
             "high": high,
+            "экономия": yield_of(scores, labels, low, high),
             "пороги": {
                 str(limit): dict(
                     zip(("ложных", "пропущ"), review_gate.counts(scores, labels, limit))
@@ -261,6 +286,21 @@ def render(report: Sequence[dict]) -> str:
             )
         )
     for part in report:
+        экономия = part.get("экономия")
+        if экономия:
+            lines.append("")
+            lines.append(
+                "{}: гейт решил бы {} из {} ({:.0%}) — {} «да», {} «нет», "
+                "неверно {}".format(
+                    part["этап"],
+                    экономия["решено_без_модели"],
+                    part.get("отложенных", 0),
+                    экономия["доля"],
+                    экономия["решено_да"],
+                    экономия["решено_нет"],
+                    экономия["неверно"],
+                )
+            )
         if part.get("итог"):
             lines.append("")
             lines.append("{}: {}".format(part["этап"], part["итог"]))
