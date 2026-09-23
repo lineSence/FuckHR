@@ -378,6 +378,12 @@ def enrich(vacancy: Vacancy, detail: dict) -> Vacancy:
     data["skills"] = skills or vacancy.skills
     if (detail.get("schedule") or {}).get("name"):
         data["schedule"] = detail["schedule"]["name"]
+    # Опыт и тип занятости карточка знает точнее выдачи, но перетирать
+    # известное нечем: берём только то, чего в выдаче не было.
+    for field in ("experience", "employment"):
+        value = (detail.get(field) or {}).get("name")
+        if value and not data.get(field):
+            data[field] = value
     if (detail.get("employer") or {}).get("name"):
         data["company"] = detail["employer"]["name"]
     # Дата со страницы вакансии надёжнее, чем из выдачи: берём её, если своей нет.

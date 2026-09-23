@@ -98,3 +98,17 @@ def test_поля_без_структурного_ответа_остаются_
     assert stats["process"].covered == 0
     assert stats["office"].covered == 0
     assert "источник" in overlap.render(stats)
+
+
+def test_заполненность_полей_источника_видна_отдельно() -> None:
+    """Пустое поле источника выглядит в таблице как «модель не дублирует», хотя
+    на деле его просто не разобрали. Поэтому оно считается отдельно."""
+    conn = _conn()
+    _vacancy(conn, "hh:4", schedule="Удалённо", salary_from=100000)
+    _vacancy(conn, "hh:5")
+
+    labels = dict((label, count) for label, count, _ in overlap.fill(conn))
+
+    assert labels["график/формат"] == 1
+    assert labels["вилка"] == 1
+    assert labels["навыки"] == 0

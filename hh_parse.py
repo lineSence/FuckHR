@@ -188,7 +188,14 @@ def first_of(node: dict[str, Any], *keys: str) -> Any:
 
 
 def name_of(value: Any) -> str | None:
-    """Поле может быть строкой, либо словарём с name/title/$."""
+    """Поле может быть строкой, словарём с name/title/$ или списком таких.
+
+    Список — не экзотика, а текущая вёрстка hh.ru: после редизайна график и
+    формат работы приходят массивами (`workFormat: [{"name": "Удалённо"}]`).
+    Пока список возвращал None, поля `schedule` и `employment` оставались
+    пустыми у почти всех вакансий, и пайплайн спрашивал у модели то, что
+    источник уже прислал.
+    """
     if value is None:
         return None
     if isinstance(value, str):
@@ -197,7 +204,37 @@ def name_of(value: Any) -> str | None:
         for key in ("name", "title", "text", "$", "trl"):
             if isinstance(value.get(key), str):
                 return value[key]
+        return None
+    if isinstance(value, (list, tuple)):
+        parts: list[str] = []
+        for item in value:
+            part = name_of(item)
+            if part and part not in parts:
+                parts.append(part)
+        return ", ".join(parts) or None
     return None
+
+
+# Один вопрос «как работать» hh.ru разложил по нескольким ключам: формат
+# (удалённо/гибрид/офис), дни недели и часы. Модель вакансии держит одну
+# строку, поэтому склеиваем — скоринг ищет в ней признак удалёнки, а карточка
+# показывает как есть.
+SCHEDULE_KEYS = (
+    "workFormat",
+    "workSchedule",
+    "schedule",
+    "workScheduleByDays",
+    "workingHours",
+)
+
+
+def schedule_of(node: dict[str, Any]) -> str | None:
+    parts: list[str] = []
+    for key in SCHEDULE_KEYS:
+        part = name_of(node.get(key))
+        if part and part not in parts:
+            parts.append(part)
+    return ", ".join(parts) or None
 
 
 def node_to_vacancy(node: dict[str, Any]) -> Vacancy:
@@ -262,9 +299,9 @@ def node_to_vacancy(node: dict[str, Any]) -> Vacancy:
         salary_to=first_of(compensation, "to", "salaryTo"),
         currency=name_of(currency),
         gross=bool(gross) if gross is not None else None,
-        schedule=name_of(first_of(node, "workSchedule", "schedule", "workFormat")),
+        schedule=schedule_of(node),
         experience=name_of(first_of(node, "workExperience", "experience")),
-        employment=name_of(first_of(node, "employment", "employmentForm")),
+        employment=name_of(first_of(node, "employment", "employmentForm", "employmentType")),
         skills=skills,
         description=" ".join(p for p in snippet_parts if p).strip(),
         published_at=normalize_published_at(published_raw),
