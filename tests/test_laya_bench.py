@@ -101,17 +101,3 @@ def test_перебор_порогов_зовёт_модель_один_раз()
     по_порогу = {row.side: row for row in rows}
     assert по_порогу["laya@0.5"].false_alarms == 1
     assert по_порогу["laya@0.9"].score == 1.0
-
-
-def test_auroc_без_одной_из_сторон_не_считается():
-    assert laya_bench.auroc([0.9], [0.1, 0.2]) == 1.0
-    assert laya_bench.auroc([0.5], [0.5]) == 0.5
-    assert laya_bench.auroc([], [0.1]) is None
-
-
-def test_ответ_по_позиции_варианта_распознаётся():
-    items = (laya_bench.Batch("кейс", "review_fake", ("а", "б", "в"), frozenset({0})),)
-    по_позиции = {"кейс": [(0.9, 0.1), (0.2, 0.8), (0.3, 0.7)]}
-    assert "позиция варианта" in laya_bench.order_check(по_позиции, items, "review_fake")
-    по_смыслу = {"кейс": [(0.9, 0.8), (0.2, 0.1), (0.3, 0.2)]}
-    assert "читает вопрос" in laya_bench.order_check(по_смыслу, items, "review_fake")

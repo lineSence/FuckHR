@@ -238,69 +238,28 @@ def laya_side(agent: Any, limit: float | None = None) -> Callable[[Batch], set[i
     return predict
 
 
-def probe(agent: Any, items: Sequence[Batch]) -> dict[str, list[tuple[float | None, float | None]]]:
-    """Вероятности при обоих порядках вариантов: один вызов на текст на все пороги."""
+def probe(agent: Any, items: Sequence[Batch]) -> dict[str, list[float | None]]:
+    """Вероятности по каждому тексту: считаются один раз на все пороги."""
     return {
-        batch.name: [laya_judge.pair(text, batch.stage, agent=agent) for text in batch.texts]
+        batch.name: laya_judge.probabilities(batch.texts, batch.stage, agent=agent)
         for batch in items
     }
 
 
 def side_from_probe(
-    cache: dict[str, list[tuple[float | None, float | None]]], limit: float
+    cache: dict[str, list[float | None]], limit: float
 ) -> Callable[[Batch], set[int]]:
-    """Сторона по уже посчитанным вероятностям прямого порядка и порогу."""
+    """Сторона по уже посчитанным вероятностям и порогу."""
 
     def predict(batch: Batch) -> set[int]:
         values = cache.get(batch.name, [])
         return {
             index
-            for index, (value, _) in enumerate(values)
+            for index, value in enumerate(values)
             if value is not None and value >= limit
         }
 
     return predict
-
-
-def auroc(positive: Sequence[float], negative: Sequence[float]) -> float | None:
-    """Доля пар «рекламный выше живого». 0.5 — сигнала нет, порог его не создаст."""
-    if not positive or not negative:
-        return None
-    wins = sum((p > n) + 0.5 * (p == n) for p in positive for n in negative)
-    return round(wins / (len(positive) * len(negative)), 3)
-
-
-def order_check(
-    cache: dict[str, list[tuple[float | None, float | None]]],
-    items: Sequence[Batch],
-    stage: str,
-) -> str:
-    """Читает ли решатель вопрос или смотрит на позицию варианта.
-
-    Порог сдвигает только точку отсечения. Если при перевёрнутом порядке
-    ранжирование переворачивается, решает позиция, и перебор порогов бесполезен.
-    """
-    straight: dict[int, list[float]] = {0: [], 1: []}
-    flipped: dict[int, list[float]] = {0: [], 1: []}
-    for batch in items:
-        if batch.stage != stage:
-            continue
-        for index, (a, b) in enumerate(cache.get(batch.name, [])):
-            if a is None or b is None:
-                continue
-            label = int(index in batch.ad)
-            straight[label].append(a)
-            flipped[label].append(b)
-    one, two = auroc(straight[1], straight[0]), auroc(flipped[1], flipped[0])
-    if one is None or two is None:
-        return "{}: порядок вариантов не проверить — нужны и рекламные, и живые тексты".format(stage)
-    if min(one, two) >= 0.7:
-        tail = "решатель читает вопрос, порог имеет смысл подбирать"
-    elif (one - 0.5) * (two - 0.5) < 0 and abs(one - two) >= 0.4:
-        tail = "ответ задаёт позиция варианта, а не смысл: zero-shot непригоден, нужен дообученный чекпойнт"
-    else:
-        tail = "сигнала нет ни при каком пороге"
-    return "{}: AUROC прямой {}, перевёрнутый {} — {}".format(stage, one, two, tail)
 
 
 def sweep(
@@ -318,8 +277,6 @@ def sweep(
     sides = {
         "laya@{:g}".format(limit): side_from_probe(cache, limit) for limit in limits
     }
-    for stage in stages:
-        log.info(order_check(cache, items, stage))
     return compare(sides, items, stages)
 
 

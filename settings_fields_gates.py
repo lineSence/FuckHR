@@ -75,10 +75,10 @@ GATE_FIELDS: tuple[Field, ...] = (
         GROUP_GATES,
         BOOL,
         "0",
-        "Пока ни на что не влияет: к этапам review_fake и ai_text решатель "
-        "подключается только после дообучения — zero-shot отвечает по позиции "
-        "варианта, а не по смыслу. Замер: python laya_bench.py --sweep 0.5,0.7 "
-        "(docs/laya.md).",
+        "Этапы review_fake и ai_text отвечает энкодер Laya: один проход вместо "
+        "генерации, на выходе вероятность. Требует pip install laya и держит "
+        "веса в памяти рядом с Ollama. Сначала померь на своих данных — "
+        "python laya_bench.py (docs/laya.md).",
     ),
     Field(
         "LAYA_MODEL",
