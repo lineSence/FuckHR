@@ -213,3 +213,28 @@ def test_ключ_с_решёткой_читается_как_обычный() -
     # Идентификатор разворачивается в название: скоринг ищет удалёнку по-русски.
     assert vacancy.schedule == "Удалённая работа"
     assert vacancy.employment == "Полная занятость"
+
+
+def test_график_и_занятость_из_живого_узла() -> None:
+    """Формы полей взяты из настоящей выдачи hh.ru (probe_hh.py, 24.09.2026).
+
+    Занятость лежит как `{"@type": "FULL"}`, дни и часы — обёртками вокруг
+    списка идентификаторов. Опыт при этом остаётся идентификатором нарочно:
+    `profile.yaml` фильтрует по id, перевод на русский сломал бы отбор.
+    """
+    node = dict(
+        NODE,
+        workSchedule=None,
+        workFormats=[{"workFormatsElement": ["REMOTE"]}],
+        workScheduleByDays=[{"workScheduleByDaysElement": ["FIVE_ON_TWO_OFF"]}],
+        workingHours=[{"workingHoursElement": ["HOURS_8"]}],
+        employment={"@type": "FULL"},
+        workExperience="between3And6",
+    )
+    node["@workSchedule"] = "fullDay"
+
+    vacancy = hh_html.node_to_vacancy(node)
+
+    assert vacancy.schedule == "Удалённая работа, Полный день, 5/2, 8 часов"
+    assert vacancy.employment == "Полная занятость"
+    assert vacancy.experience == "between3And6"

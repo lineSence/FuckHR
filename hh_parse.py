@@ -215,6 +215,21 @@ HH_NAMES = {
     "FULL": "Полная занятость",
     "PART": "Частичная занятость",
     "PROJECT": "Проектная работа",
+    # Дни и часы приходят своими идентификаторами.
+    "FIVE_ON_TWO_OFF": "5/2",
+    "TWO_ON_TWO_OFF": "2/2",
+    "SIX_ON_ONE_OFF": "6/1",
+    "THREE_ON_THREE_OFF": "3/3",
+    "FOUR_ON_FOUR_OFF": "4/4",
+    "FOUR_ON_THREE_OFF": "4/3",
+    "ONE_ON_THREE_OFF": "1/3",
+    "HOURS_4": "4 часа",
+    "HOURS_6": "6 часов",
+    "HOURS_8": "8 часов",
+    "HOURS_12": "12 часов",
+    "HOURS_24": "24 часа",
+    "START_AFTER_SIXTEEN": "старт после 16:00",
+    "FROM_FOUR_TO_SIX_HOURS_IN_A_DAY": "4–6 часов в день",
 }
 
 
@@ -232,11 +247,14 @@ def name_of(value: Any) -> str | None:
     if isinstance(value, str):
         return HH_NAMES.get(value, value)
     if isinstance(value, dict):
-        for key in ("name", "title", "text", "$", "trl"):
+        for key in ("name", "title", "text", "$", "trl", "@type", "type", "id"):
             if isinstance(value.get(key), str):
                 return HH_NAMES.get(value[key], value[key])
-        if isinstance(value.get("id"), str):
-            return HH_NAMES.get(value["id"], value["id"])
+        # Обёртка вокруг одного значения: `{"workScheduleByDaysElement":
+        # ["FIVE_ON_TWO_OFF"]}`. Имя ключа своё у каждого поля, поэтому
+        # разворачиваем по форме, а не по списку имён.
+        if len(value) == 1:
+            return name_of(next(iter(value.values())))
         return None
     if isinstance(value, (list, tuple)):
         parts: list[str] = []
@@ -254,6 +272,7 @@ def name_of(value: Any) -> str | None:
 # показывает как есть.
 SCHEDULE_KEYS = (
     "workFormat",
+    "workFormats",
     "workSchedule",
     "schedule",
     "workScheduleByDays",
@@ -334,7 +353,7 @@ def node_to_vacancy(node: dict[str, Any]) -> Vacancy:
         gross=bool(gross) if gross is not None else None,
         schedule=schedule_of(node),
         experience=name_of(first_of(node, "workExperience", "experience")),
-        employment=name_of(first_of(node, "employment", "employmentForm", "employmentType")),
+        employment=name_of(first_of(node, "employmentForm", "employment", "employmentType")),
         skills=skills,
         description=" ".join(p for p in snippet_parts if p).strip(),
         published_at=normalize_published_at(published_raw),
