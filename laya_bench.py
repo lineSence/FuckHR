@@ -238,6 +238,48 @@ def laya_side(agent: Any, limit: float | None = None) -> Callable[[Batch], set[i
     return predict
 
 
+def probe(agent: Any, items: Sequence[Batch]) -> dict[str, list[float | None]]:
+    """Вероятности по каждому тексту: считаются один раз на все пороги."""
+    return {
+        batch.name: laya_judge.probabilities(batch.texts, batch.stage, agent=agent)
+        for batch in items
+    }
+
+
+def side_from_probe(
+    cache: dict[str, list[float | None]], limit: float
+) -> Callable[[Batch], set[int]]:
+    """Сторона по уже посчитанным вероятностям и порогу."""
+
+    def predict(batch: Batch) -> set[int]:
+        values = cache.get(batch.name, [])
+        return {
+            index
+            for index, value in enumerate(values)
+            if value is not None and value >= limit
+        }
+
+    return predict
+
+
+def sweep(
+    agent: Any,
+    items: Sequence[Batch],
+    limits: Sequence[float],
+    stages: Sequence[str] = STAGES,
+) -> list[Outcome]:
+    """Один и тот же прогон при разных порогах: где решатель перестаёт шуметь.
+
+    Модель зовётся один раз на текст, дальше считается арифметика: перебор
+    порогов не должен стоить ещё десяти прогонов.
+    """
+    cache = probe(agent, items)
+    sides = {
+        "laya@{:g}".format(limit): side_from_probe(cache, limit) for limit in limits
+    }
+    return compare(sides, items, stages)
+
+
 def model_side(gateway: Any) -> Callable[[Batch], set[int]]:
     """Сторона текущей модели: те же функции, что работают в пайплайне."""
 
@@ -271,6 +313,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--threshold", type=float, default=None, help="порог «да»")
     parser.add_argument("--cases", default="", help="свои кейсы в JSON")
     parser.add_argument("--json", action="store_true", help="печатать отчёт как JSON")
+    parser.add_argument(
+        "--sweep",
+        default="",
+        help="пороги через запятую: один прогон, несколько порогов (0.5,0.7,0.9)",
+    )
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -282,7 +329,20 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     items = batches(stages)
     if args.cases:
-        items = items + batches_from_file(args.cases, stages[0])
+        path = Path(args.cases)
+        if not path.exists():
+            print(
+                "файла с кейсами нет: {}\n"
+                "формат: [{{\"name\": \"мои отзывы\", \"texts\": [\"...\"], \"ad\": [1]}}]".format(
+                    path
+                )
+            )
+            return 2
+        try:
+            items = items + batches_from_file(path, stages[0])
+        except (json.JSONDecodeError, TypeError, ValueError, AttributeError) as exc:
+            print("кейсы не разобрались ({}): {}".format(path, exc))
+            return 2
 
     agent = laya_judge.load(args.laya_model or None)
     if agent is None:
@@ -292,15 +352,29 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 1
 
-    sides: dict[str, Callable[[Batch], set[int]]] = {"laya": laya_side(agent, args.threshold)}
-    if args.model:
-        import bench  # noqa: PLC0415 — нужен только при второй стороне
-        import llm  # noqa: PLC0415
+    if args.sweep:
+        limits = [float(part) for part in args.sweep.split(",") if part.strip()]
+        rows = sweep(agent, items, limits, stages)
+    else:
+        sides: dict[str, Callable[[Batch], set[int]]] = {
+            "laya": laya_side(agent, args.threshold)
+        }
+        if args.model:
+            try:
+                import bench  # noqa: PLC0415 — нужен только при второй стороне
+                import llm  # noqa: PLC0415
+            except ImportError as exc:
+                print(
+                    "сторона модели не поехала: в этом окружении нет зависимостей "
+                    "проекта ({}).\nПоставь их рядом с Laya: python -m pip install "
+                    "-r requirements.txt".format(exc.name or exc)
+                )
+                return 1
 
-        route = llm.ROUTE_LOCAL if args.route == "local" else llm.ROUTE_PROXY
-        sides[args.model] = model_side(bench.gateway_for(args.model, route))
+            route = llm.ROUTE_LOCAL if args.route == "local" else llm.ROUTE_PROXY
+            sides[args.model] = model_side(bench.gateway_for(args.model, route))
 
-    rows = compare(sides, items, stages)
+        rows = compare(sides, items, stages)
     path = save_report(rows)
     print(json.dumps([asdict(row) for row in rows], ensure_ascii=False, indent=2) if args.json else render(rows))
     print("\nотчёт: {}".format(path))

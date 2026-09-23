@@ -87,3 +87,17 @@ def test_без_пакета_laya_решатель_молчит(monkeypatch):
     monkeypatch.setitem(__import__("sys").modules, "laya", None)
     assert laya_judge.probability("текст", "ai_text") is None
     laya_judge.reset()
+
+
+def test_перебор_порогов_зовёт_модель_один_раз():
+    agent = FakeAgent({"реклама": 0.95, "живой отзыв": 0.6})
+    items = (
+        laya_bench.Batch(
+            "кейс", "review_fake", ("реклама", "живой отзыв"), frozenset({0})
+        ),
+    )
+    rows = laya_bench.sweep(agent, items, (0.5, 0.9), ("review_fake",))
+    assert agent.calls == 2, "вероятности считаются один раз на все пороги"
+    по_порогу = {row.side: row for row in rows}
+    assert по_порогу["laya@0.5"].false_alarms == 1
+    assert по_порогу["laya@0.9"].score == 1.0
