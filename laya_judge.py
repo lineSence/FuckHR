@@ -31,6 +31,7 @@ import settings
 DEFAULT_MODEL = "convaiinnovations/laya-multilingual"
 MAX_CHARS = 4000
 KEY = "verdict"
+SWAPPED = "verdict_swapped"
 YES, NO = "A", "B"
 
 QUESTIONS: dict[str, dict[str, Any]] = {
@@ -104,14 +105,25 @@ def load(name: str | None = None) -> Any | None:
     return _agent
 
 
-def _yes_probability(answer: Any) -> float | None:
+def swapped(question: dict[str, Any]) -> dict[str, Any]:
+    """Тот же вопрос с описаниями вариантов местами: «да» теперь под ключом B.
+
+    Зачем. Решатель, который читает вопрос, ответит одинаково при любом порядке;
+    zero-shot чекпойнт на наших отзывах отвечает по позиции (docs/laya.md).
+    """
+    criteria = question["criteria"]
+    return {**question, "criteria": {YES: criteria[NO], NO: criteria[YES]}}
+
+
+def _yes_probability(answer: Any, yes: str = YES) -> float | None:
     """Вероятность «да» из ответа Laya. Форма ответа проверяется, а не верится."""
     if not isinstance(answer, dict):
         return None
+    no = NO if yes == YES else YES
     probabilities = answer.get("probabilities")
-    if isinstance(probabilities, dict) and YES in probabilities:
+    if isinstance(probabilities, dict) and yes in probabilities:
         try:
-            return float(probabilities[YES])
+            return float(probabilities[yes])
         except (TypeError, ValueError):
             return None
     if "noul" in answer:
@@ -124,9 +136,9 @@ def _yes_probability(answer: Any) -> float | None:
         confidence = float(answer.get("confidence"))
     except (TypeError, ValueError):
         return None
-    if choice == YES:
+    if choice == yes:
         return confidence
-    if choice == NO:
+    if choice == no:
         return 1.0 - confidence
     return None
 
@@ -146,6 +158,30 @@ def probability(text: str, stage: str, agent: Any | None = None) -> float | None
         return None
     answers = (result or {}).get("answers") if isinstance(result, dict) else None
     return _yes_probability((answers or {}).get(KEY))
+
+
+def pair(text: str, stage: str, agent: Any | None = None) -> tuple[float | None, float | None]:
+    """Вероятность «да» при прямом и перевёрнутом порядке вариантов.
+
+    Оба вопроса уходят одним вызовом `predict` — у Laya это один пакет на
+    прямой проход, а не два прогона.
+    """
+    question = QUESTIONS.get(stage)
+    if question is None or not (text or "").strip():
+        return None, None
+    model = agent if agent is not None else load()
+    if model is None:
+        return None, None
+    try:
+        result = model.predict(
+            {"text": text[:MAX_CHARS]}, {KEY: question, SWAPPED: swapped(question)}
+        )
+    except Exception as exc:  # noqa: BLE001 — [CORE-017]
+        log.warning("Laya не ответила на этапе %s: %s", stage, exc)
+        return None, None
+    answers = (result or {}).get("answers") if isinstance(result, dict) else None
+    answers = answers or {}
+    return _yes_probability(answers.get(KEY)), _yes_probability(answers.get(SWAPPED), yes=NO)
 
 
 def probabilities(
@@ -181,8 +217,10 @@ __all__ = (
     "flagged",
     "load",
     "model_name",
+    "pair",
     "probabilities",
     "probability",
     "reset",
+    "swapped",
     "threshold",
 )
