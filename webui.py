@@ -88,6 +88,7 @@ from ui_core import (
 )
 import ui_bench
 import ui_dataset
+import ui_laya
 import ui_sources
 import ui_stages
 from ui_forms import (
@@ -131,6 +132,7 @@ POST_ONLY = frozenset(
     {
         "/run", "/stop", "/loop", "/bench", "/dataset", "/llm/apply",
         "/intake/apply", "/map/geo", "/sources", "/runopts", "/cookie",
+        "/laya/stages", "/laya/label", "/laya/dataset", "/laya/bench",
         "/area", "/deep", "/llm/stages",
     }
 )
@@ -171,6 +173,14 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(length).decode("utf-8")
         return urllib.parse.parse_qs(raw, keep_blank_values=True)
+
+    def _laya(self, path: str, form: dict[str, list[str]]) -> None:
+        """Формы раздела «Laya». Что делать, решает ui_laya: здесь только ответ."""
+        job_id, body = ui_laya.post(path, form)
+        if job_id is not None:
+            self._redirect("/?job={}".format(job_id))
+            return
+        self._send(page("Laya", body))
 
     def do_GET(self) -> None:  # noqa: N802
         if ui_guard.refuse(self):
@@ -298,6 +308,8 @@ class Handler(BaseHTTPRequestHandler):
                             "/llm",
                         )
                     )
+                elif parsed.path == "/laya":
+                    self._send(page("Laya", ui_laya.render_laya(conn)))
                 elif parsed.path in POST_ONLY:
                     # Сюда попадают по F5 или по кнопке «назад» после POST.
                     # Главная с историей задач полезнее, чем 404.
@@ -353,6 +365,10 @@ class Handler(BaseHTTPRequestHandler):
                     self._send(page("Модель", ui_dataset.refused(problem)))
                     return
                 self._redirect("/?job={}".format(job_id))
+                return
+
+            if parsed.path.startswith("/laya/"):
+                self._laya(parsed.path, form)
                 return
 
             if parsed.path == "/bench":
