@@ -41,6 +41,11 @@ triggers:
       - wiki/references/contact-discovery.md
       - wiki/rules/outreach.md
 
+  - id: text-matching
+    keywords: [словарь, игла, регулярка, совпадение, граница слова, регистр, кириллица, LIKE, поиск по тексту, ложное срабатывание]
+    load:
+      - wiki/rules/text-matching.md
+
   - id: performance
     keywords: [скорость, ускорить, медленно, паузы, бутылочное горлышко, производительность, сколько идёт прогон, темп запросов, кроулер, фетчер, robots.txt]
     load:
@@ -73,11 +78,13 @@ triggers:
     keywords: [html hh, разбор страницы, селектор, вёрстка hh, fallback разбора, 403]
     load:
       - wiki/architecture/hh-html-scraping.md
+      - wiki/rules/scraping.md
 
   - id: scraping-sources
-    keywords: [hh.ru, hh, джобборд, карьерная страница, greenhouse, lever, ashby, скрейпинг, парсер, капча, open api]
+    keywords: [hh.ru, hh, джобборд, карьерная страница, greenhouse, lever, ashby, скрейпинг, парсер, капча, open api, площадка, адаптер, дамп страницы, cloudflare, 406]
     load:
       - wiki/references/data-sources.md
+      - wiki/rules/scraping.md
       - wiki/rules/legal.md
 
   - id: hr-bullshit-detector

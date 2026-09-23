@@ -9,6 +9,8 @@
 - `wiki/rules/legal.md` — 152-ФЗ/GDPR: что собираем и что нет.
 - `wiki/rules/hr-signal-detection.md` — правила детектора HR-брехни и формат выводов.
 - `wiki/rules/outreach.md` — прямой контакт в обход HR: кому, куда и как писать.
+- `wiki/rules/text-matching.md` — поиск по русскому тексту: границы слов, сильнейшее совпадение, регистр кириллицы.
+- `wiki/rules/scraping.md` — разбор чужих страниц: дампы вместо синтетики, чужие ключи, Cloudflare.
 
 ## references
 
