@@ -21,9 +21,7 @@ import embeddings_tasks
 import contacts
 import db
 import detector
-import company_score_store
 import filters
-import injection_store
 import llm
 import ui_filters
 import aitext

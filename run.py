@@ -41,15 +41,12 @@ RUN_LIMIT ограничивает именно сбор: как только н
 from __future__ import annotations
 
 import argparse
-import asyncio
 import logging
 import os
 from pathlib import Path
-from typing import Any
 
 from dotenv import load_dotenv
 
-import bot as tg
 import canary
 import company_score_rules
 import company_score_store
@@ -57,17 +54,14 @@ import conditions
 import contact_finds
 import db
 import detector
-import detector_llm
 import dossier
 import geo
 import hh_pages
-import llm
 import injection_store
 import aitext
 import aitext_rules
 import market_company
 import market_store
-import llm_tasks
 import outreach
 import settings
 import source_store

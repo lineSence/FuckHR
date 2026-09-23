@@ -27,8 +27,8 @@ webui.render_vacancies и подобные продолжали работать
 
 Границы, которые не нарушаются:
 
-- слушает только 127.0.0.1: ни авторизации, ни CSRF-защиты здесь нет, и выставлять
-  его наружу нельзя;
+- слушает только 127.0.0.1 и отвечает только своим страницам (`ui_guard.py`):
+  авторизации нет, выставлять его наружу нельзя;
 - ничего не отправляет — ни писем, ни сообщений [CORE-023];
 - на диск пишет только .env, profile.yaml и логи задач;
 - без новых зависимостей: http.server из стандартной библиотеки справляется с одним
@@ -102,6 +102,7 @@ from ui_forms import (
     search_updates,
     start_bench,
 )
+import ui_guard
 import ui_injections
 import ui_map
 import ui_research
@@ -172,6 +173,8 @@ class Handler(BaseHTTPRequestHandler):
         return urllib.parse.parse_qs(raw, keep_blank_values=True)
 
     def do_GET(self) -> None:  # noqa: N802
+        if ui_guard.refuse(self):
+            return
         parsed = urllib.parse.urlparse(self.path)
         params = urllib.parse.parse_qs(parsed.query)
 
@@ -308,6 +311,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(page("Ошибка", "<pre>{}</pre>".format(esc(exc))), 500)
 
     def do_POST(self) -> None:  # noqa: N802
+        if ui_guard.refuse(self):
+            return
         parsed = urllib.parse.urlparse(self.path)
         try:
             form = self._form()
@@ -651,6 +656,7 @@ __all__ = (
     "table",
     "text_field",
     "vacancy_one",
+    "vacancy_rows",
 )
 
 

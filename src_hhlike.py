@@ -66,7 +66,8 @@ def search(
         for node in nodes:
             try:
                 vacancy = hh_html.node_to_vacancy(node)
-            except Exception:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001
+                log.debug("%s: карточка не разобралась: %s", CODE, exc)
                 continue
             if vacancy is None or not vacancy.title:
                 continue

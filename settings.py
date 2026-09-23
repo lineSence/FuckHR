@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
@@ -50,6 +51,10 @@ from settings_fields import (  # noqa: F401 — публичные имена о
     Field,
 )
 
+KEY_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+# Обратная сторона quote(): без неё каждый путь Windows с пробелом удваивал слэши.
+_UNESCAPE_RE = re.compile(r'\\([\\"])')
+
 TRUE_VALUES = {"1", "true", "yes", "on", "да"}
 
 
@@ -77,7 +82,9 @@ def parse_env(text: str) -> dict[str, str]:
         key = key.strip()
         value = raw.strip()
         if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-            value = value[1:-1]
+            quoted, value = value[0], value[1:-1]
+            if quoted == '"':
+                value = _UNESCAPE_RE.sub(r"\1", value)
         if key:
             values[key] = value
     return values
@@ -132,6 +139,10 @@ def save(updates: Mapping[str, str], path: str | Path | None = None) -> list[str
     Значения сразу попадают и в os.environ: интерфейс должен показать новое
     состояние поиска и модели без перезапуска.
     """
+    for key, value in updates.items():
+        # Перенос строки в значении дописал бы в .env чужой ключ.
+        if not KEY_RE.fullmatch(key) or any(ch in value for ch in "\r\n\0"):
+            raise ValueError("настройка {!r} не записана: значение должно быть в одну строку".format(key))
     target = Path(path or ENV_PATH)
     current = load(target)
     changed = {

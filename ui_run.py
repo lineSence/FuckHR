@@ -149,7 +149,8 @@ def save_options(form: Mapping[str, Sequence[str]]) -> list[str]:
 
 def save_cookie(form: Mapping[str, Sequence[str]]) -> list[str]:
     """Свежие cookie hh.ru из предупреждения о капче."""
-    cookie = (form.get("cookie") or [""])[0].strip()
+    # Cookie из DevTools бывает в несколько строк, а .env — построчный.
+    cookie = " ".join((form.get("cookie") or [""])[0].split())
     return settings.save({"HH_COOKIE": cookie}) if cookie else []
 
 

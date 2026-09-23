@@ -115,7 +115,7 @@ _SPACE_RE = re.compile(r"\s+")
 
 
 def host_of(url: str) -> str:
-    return (urlsplit(url or "").hostname or "").lower().lstrip("www.")
+    return (urlsplit(url or "").hostname or "").lower().removeprefix("www.")
 
 
 def _text(raw: str) -> str:

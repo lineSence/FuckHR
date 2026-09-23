@@ -23,7 +23,6 @@ from typing import Sequence
 import yaml
 
 import bench  # noqa: F401 — STAGES нужен вызывающим
-import ui_bench
 from ui_bench import render_bench_form  # реэкспорт: имя осталось прежним
 import contacts
 import embeddings_store

@@ -315,8 +315,8 @@ def polish_draft(gateway: Any, draft: Any, facts: Sequence[str] = ()) -> Any:
         import outreach
 
         limit = int(getattr(outreach, "MAX_LETTER_CHARS", limit))
-    except Exception:  # noqa: BLE001 — лимит не повод падать
-        pass
+    except Exception as exc:  # noqa: BLE001 — лимит не повод падать
+        log.debug("лимит письма по умолчанию: %s", exc)
 
     prompt = (
         "Перепиши письмо живым языком без канцелярита и без клише про «динамично "
