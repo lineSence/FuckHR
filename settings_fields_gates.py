@@ -69,6 +69,35 @@ GATE_FIELDS: tuple[Field, ...] = (
         "0.5",
         "Ниже — спан не берётся. Слишком низкий порог засоряет условия обрывками.",
     ),
+    Field(
+        "LAYA_ENABLED",
+        "Решать классификаторы через Laya",
+        GROUP_GATES,
+        BOOL,
+        "0",
+        "Этапы review_fake и ai_text отвечает энкодер Laya: один проход вместо "
+        "генерации, на выходе вероятность. Требует pip install laya и держит "
+        "веса в памяти рядом с Ollama. Сначала померь на своих данных — "
+        "python laya_bench.py (docs/laya.md).",
+    ),
+    Field(
+        "LAYA_MODEL",
+        "Чекпойнт решателя",
+        GROUP_GATES,
+        TEXT,
+        "convaiinnovations/laya-multilingual",
+        "Имя на Hugging Face. Мультиязычный чекпойнт обязателен: тексты на "
+        "русском, английский на них разваливается.",
+    ),
+    Field(
+        "LAYA_THRESHOLD",
+        "Порог решателя",
+        GROUP_GATES,
+        FLOAT,
+        "0.5",
+        "Ниже — решение «нет». На этих этапах ложное срабатывание дороже "
+        "пропуска, поэтому порог поднимают, а не опускают.",
+    ),
 )
 
 __all__ = ("GATE_FIELDS", "GROUP_GATES", "GROUP_GATES_HINT")
