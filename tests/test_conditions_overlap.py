@@ -107,8 +107,14 @@ def test_заполненность_полей_источника_видна_о�
     _vacancy(conn, "hh:4", schedule="Удалённо", salary_from=100000)
     _vacancy(conn, "hh:5")
 
-    labels = dict((label, count) for label, count, _ in overlap.fill(conn))
+    _vacancy(conn, "tv:1", source="trudvsem", schedule="Полный день")
 
-    assert labels["график/формат"] == 1
-    assert labels["вилка"] == 1
-    assert labels["навыки"] == 0
+    rows = {source: shares for source, _, shares in overlap.fill(conn)}
+    index = {label: number for number, (_, label, _) in enumerate(overlap.SOURCE_FILL)}
+
+    assert rows["hh"][index["график/формат"]] == 50.0
+    assert rows["hh"][index["вилка"]] == 50.0
+    assert rows["hh"][index["навыки"]] == 0.0
+    # Разрез по источникам: у Труда России своих полей почти нет, и его пустота
+    # не должна выглядеть как поломка разбора hh.ru.
+    assert rows["trudvsem"][index["график/формат"]] == 100.0
