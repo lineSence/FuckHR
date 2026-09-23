@@ -152,6 +152,7 @@ input:focus, textarea:focus, select:focus { outline: 0; background: #fff; border
 NAV_ITEMS = (
     ("/", "Запуск"),
     ("/vacancies", "Вакансии"),
+    ("/stats", "Статистика"),
     ("/map", "Карта"),
     ("/companies", "Досье компаний"),
     ("/targets", "Цели"),

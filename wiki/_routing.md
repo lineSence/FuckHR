@@ -203,6 +203,11 @@ triggers:
       - docs/dataset.md
       - docs/laya-finetune.md
 
+  - id: stats
+    keywords: [статистика, график, дашборд, воронка, метрика, сколько собрано, динамика, гистограмма, svg]
+    load:
+      - docs/stats.md
+
   - id: rules-general
     keywords: [правило, конвенция, стиль, запрет]
     load:
