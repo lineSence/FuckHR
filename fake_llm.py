@@ -60,11 +60,17 @@ def _parse(raw: str) -> list[dict[str, Any]]:
     return [i for i in items if isinstance(i, dict)] if isinstance(items, list) else []
 
 
-def ad_indexes(gateway: Any, items: Sequence[Any], force: bool = False) -> set[int]:
+def ad_indexes(
+    gateway: Any,
+    items: Sequence[Any],
+    force: bool = False,
+    seen: dict[str, bool] | None = None,
+) -> set[int]:
     """Индексы отзывов, которые модель прочитала как рекламные.
 
     `force` обходит выключатель и нужен только бенчмарку: там этап гоняется
-    осознанно, чтобы сравнить модели между собой.
+    осознанно, чтобы сравнить модели между собой. `seen` получает разметку
+    учителя «текст, который видела модель → да/нет» (judge_labels.py).
 
     Никогда не бросает исключение: досье важнее одного сигнала веса 0.5.
     """
@@ -85,19 +91,25 @@ def ad_indexes(gateway: Any, items: Sequence[Any], force: bool = False) -> set[i
         log.warning("сигнал review_fake не получен: %s", exc)
         return set()
 
+    shown = {item.index: (item.text or "")[:MAX_CHARS] for item in chosen}
     texts = {item.index: normalize(item.text) for item in chosen}
     out: set[int] = set()
     for answer in _parse(raw or ""):
-        if str(answer.get("verdict") or "").strip().lower() != "ad":
-            continue
+        verdict = str(answer.get("verdict") or "").strip().lower()
         try:
             index = int(answer.get("id"))
         except (TypeError, ValueError):
+            continue
+        if verdict == "experience" and seen is not None and index in shown:
+            seen[shown[index]] = False
+        if verdict != "ad":
             continue
         quote = normalize(str(answer.get("quote") or ""))
         # Без дословной цитаты вывод нечем проверить, поэтому он не считается.
         if quote and quote in texts.get(index, ""):
             out.add(index)
+            if seen is not None:
+                seen[shown[index]] = True
         else:
             log.info("цитата модели не найдена в отзыве %s, сигнал отброшен", index)
     return out

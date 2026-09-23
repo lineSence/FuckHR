@@ -66,12 +66,16 @@ def _parse(raw: str) -> list[dict[str, Any]]:
 
 
 def generated_indexes(
-    gateway: Any, texts: Mapping[int, str], force: bool = False
+    gateway: Any,
+    texts: Mapping[int, str],
+    force: bool = False,
+    seen: dict[str, bool] | None = None,
 ) -> set[int]:
     """Индексы текстов, которые модель прочитала как сгенерированные.
 
-    `force` обходит выключатель и нужен бенчмарку. Никогда не бросает
-    исключение: детектор важнее одного сигнала [CORE-017].
+    `force` обходит выключатель и нужен бенчмарку. `seen` получает разметку
+    учителя (judge_labels.py). Никогда не бросает исключение: детектор важнее
+    одного сигнала [CORE-017].
     """
     if not (force or enabled()) or gateway is None or not getattr(gateway, "enabled", False):
         return set()
@@ -93,15 +97,20 @@ def generated_indexes(
     normalized = {index: _normalize(text) for index, text in chosen.items()}
     out: set[int] = set()
     for answer in _parse(raw or ""):
-        if str(answer.get("verdict") or "").strip().lower() != "generated":
-            continue
+        verdict = str(answer.get("verdict") or "").strip().lower()
         try:
             index = int(answer.get("id"))
         except (TypeError, ValueError):
             continue
+        if verdict == "human" and seen is not None and index in chosen:
+            seen[chosen[index]] = False
+        if verdict != "generated":
+            continue
         quote = _normalize(str(answer.get("quote") or ""))
         if quote and quote in normalized.get(index, ""):
             out.add(index)
+            if seen is not None:
+                seen[chosen[index]] = True
         else:
             log.info("цитата модели не найдена в тексте %s, сигнал отброшен", index)
     return out

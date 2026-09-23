@@ -54,15 +54,10 @@ from typing import Sequence
 
 import contacts
 import fake_company
-import aitext_llm
-import embeddings_tasks
-import fake_llm
 import review_area
 import reviewlegit
 import reviewlegit_store
-import fake_reviews
 import fake_rules
-import fake_store
 import reviewpage
 from dossier_summary import (  # noqa: F401 — реэкспорт для старых вызовов
     format_lines,
@@ -81,6 +76,7 @@ from dossier_text import (  # noqa: F401 — реэкспорт для стар�
 from fake_company import CompanyMark
 from fake_reviews import Verdict
 from reviewitems import ReviewItem, extract_rating  # noqa: F401 — реэкспорт
+from review_scoring import score_reviews  # noqa: F401 — реэкспорт, [CORE-024]
 from dossier_rules import (  # noqa: F401 — реэкспорт для старых вызовов
     MAX_LLM_CHARS,
     MAX_LLM_REVIEWS,
@@ -451,32 +447,6 @@ def _note_site(conn: object | None, site: str, **counters: int) -> None:
         reviewlegit_store.note(conn, site, **counters)  # type: ignore[arg-type]
     except Exception as exc:  # noqa: BLE001 — [CORE-017]
         log.warning("итоги площадки %s не записаны: %s", site, exc)
-
-
-def score_reviews(
-    company: str,
-    items: Sequence[ReviewItem],
-    conn: object | None = None,
-    gateway: object | None = None,
-) -> tuple[Verdict, ...]:
-    """Считает fake_score. Хэши чужих компаний берутся из базы, если она есть."""
-    if not items:
-        return ()
-    known: dict[str, str] = {}
-    if conn is not None:
-        try:
-            known = fake_store.known_hashes(conn, company)  # type: ignore[arg-type]
-        except Exception as exc:  # noqa: BLE001 — детекция важнее одного сигнала
-            log.warning("хэши отзывов не прочитаны: %s", exc)
-    return fake_reviews.score_items(
-        items,
-        known_hashes=known,
-        llm_ads=fake_llm.ad_indexes(gateway, items),
-        ai_texts=aitext_llm.generated_indexes(
-            gateway, {item.index: item.text for item in items}
-        ),
-        near_pairs=embeddings_tasks.review_pairs(conn, gateway, items),
-    )
 
 
 def reviews_from_hits(
