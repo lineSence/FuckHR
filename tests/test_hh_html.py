@@ -124,3 +124,36 @@ def test_короткий_сниппет_zarplata_даёт_описание() ->
     assert "Знание 1С" in vacancy.description
     assert "Вести учёт" in vacancy.description
     assert "ДМС" in vacancy.description
+
+
+def test_карточка_отдаёт_описание_без_тегов() -> None:
+    """Описание карточки чистится от HTML прямо здесь.
+
+    Регрессия: `strip_html` и `re` не были импортированы, и каждая карточка,
+    у которой в состоянии есть описание, падала на `NameError`. Снаружи это
+    выглядело как «нет деталей по 136955454» — вакансия оставалась без
+    описания, а значит без условий и без HR-флагов.
+    """
+    node = dict(NODE, description="<p>Ищем <b>питониста</b></p>")
+    client = hh_html.HHHtmlClient(pause=0.0, pause_min=0.0, failure_dir=None)
+    client.fetch = lambda url, params=None, attempts=3: page_with_state([node])  # type: ignore[method-assign]
+    try:
+        card = client.vacancy("111")
+    finally:
+        client.close()
+
+    assert card["description"] == "Ищем питониста"
+
+
+def test_карточка_без_состояния_разбирается_разметкой() -> None:
+    """Запасной путь тоже трогает `re` и `strip_html` — и тоже падал."""
+    client = hh_html.HHHtmlClient(pause=0.0, pause_min=0.0, failure_dir=None)
+    body = '<div data-qa="vacancy-description"><p>Ищем <b>питониста</b></p></div>'
+    client.fetch = lambda url, params=None, attempts=3: body  # type: ignore[method-assign]
+    try:
+        card = client.vacancy("111")
+    finally:
+        client.close()
+
+    assert card["description"] == "Ищем питониста"
+    assert card["key_skills"] == []

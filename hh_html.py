@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import random
+import re
 import time
 from pathlib import Path
 from typing import Any, Callable, Iterator, Sequence
@@ -24,7 +25,7 @@ import httpx
 
 import net_rate
 
-from hh import Vacancy
+from hh import Vacancy, strip_html
 from hh_parse import (  # noqa: F401 — публичные имена остаются у hh_html
     BROWSER_HEADERS,
     CAPTCHA_MARKERS,
