@@ -1,26 +1,22 @@
-"""Гейты перед этапами модели: не звать её там, где ответ предсказуем.
+"""Гейт перед этапами модели: не звать её там, где ответ предсказуем.
 
-Два вопроса, оба решаются уже посчитанными векторами и своей же базой — без
-разметки руками и без новых зависимостей [CORE-015], [CORE-025].
+Остался один вопрос, и он решается уже посчитанными векторами, без разметки
+руками и без новых зависимостей [CORE-015], [CORE-025]: **близость к профилю**.
+Вектор вакансии против вектора владельца (критерии из profile.yaml плюс
+подтверждённые блоки резюме). Далёкая вакансия не доходит до extract и
+hr_filter: её всё равно не покажут.
 
-1. **Близость к профилю.** Вектор вакансии против вектора владельца (критерии
-   из profile.yaml плюс подтверждённые блоки резюме). Далёкая вакансия не
-   доходит до extract и hr_filter: её всё равно не покажут.
-2. **Гейт пустоты по соседям.** По ближайшим соседям из базы видно, чем этап
-   кончался на похожих текстах. Если у всех соседей этап вернул пусто, шансов
-   мало. Метки здесь ничьи: их проставил сам пайплайн, когда сохранял результат.
-3. **Обученный гейт пустоты.** Те же метки, но вместо k соседей — логистическая
-   регрессия на тех же векторах (`stage_gate_train.py`, веса в `gate_models`).
-   Соседям нужно k текстов ближе 0.85, и на живой базе такая теснота — редкость,
-   поэтому гейт по соседям почти не срабатывает; регрессия смотрит на всю
-   выборку сразу. Работает только «нет»: пропустить этап можно, а вынести за
-   него вердикт нельзя — этапу нужна дословная цитата из текста.
+Гейты пустоты — по соседям и обученный — были здесь же и удалены после замера:
+на 80 вакансиях AUROC 0.579 у `hr_filter` и 0.480 у `extract`, то есть монетка
+(docs/gates.md, «Гейт пустоты: опровергнут замером»). Вектор bge-m3 кодирует
+тему вакансии, а находка этапа зависит от конкретных формулировок.
 
-Оба гейта выключены по умолчанию и деградируют в «пропустить дальше»
-[CORE-017]: нет векторов, нет эмбеддера, мало соседей — вакансия идёт в модель,
-как и раньше. Гейт экономит вызовы [CORE-016], но не имеет права терять
-вакансии молча, поэтому каждый отказ пишется в лог.
+Гейт выключен по умолчанию и деградирует в «пропустить дальше» [CORE-017]: нет
+векторов, нет эмбеддера — вакансия идёт в модель, как и раньше. Гейт экономит
+вызовы [CORE-016], но не имеет права терять вакансии молча, поэтому каждый
+отказ пишется в лог.
 """
+
 
 from __future__ import annotations
 
@@ -32,10 +28,7 @@ from typing import Any, Sequence
 
 import embeddings
 import embeddings_store as store
-import embeddings_tasks
-import linear_model
 import llm_embed
-import review_gate_store
 import settings
 
 log = logging.getLogger("fuckhr")
@@ -43,46 +36,16 @@ log = logging.getLogger("fuckhr")
 KIND_OWNER = "owner"
 OWNER_KEY = "profile"
 
-# Этап -> SQL, отвечающий «этап что-то дал по этому ключу».
-STAGE_OUTCOME = {
-    "extract": "SELECT 1 FROM vacancy_conditions WHERE key = ? LIMIT 1",
-    "hr_filter": (
-        "SELECT 1 FROM vacancy_signals WHERE key = ? AND payload LIKE '%llm_claim%' LIMIT 1"
-    ),
-}
-# Ключи, на которых этап мог отработать. Это не то же, что «дал результат»:
-# источник обязан быть другой таблицей, иначе отрицательных примеров не
-# существует физически и обучать гейт пустоты не на чем.
-#
-# Для `extract` это вакансии со скачанным описанием: без описания этап не
-# запускается вовсе, а с описанием — запускается и может вернуть пусто.
-# Оговорка: вакансия, скачанная при выключенном этапе, попадёт в отрицательные
-# зря. Лечится прогоном с включённым этапом, а не запросом.
-STAGE_SEEN = {
-    "extract": (
-        "SELECT key FROM vacancies WHERE description IS NOT NULL"
-        " AND TRIM(description) <> ''"
-    ),
-    "hr_filter": "SELECT key FROM vacancy_signals",
-}
-
-
 @dataclass(frozen=True)
 class GateOptions:
-    """Пороги гейтов. Нули означают «выключено»."""
+    """Порог гейта. Ноль означает «выключено»."""
 
     profile_min: float
-    empty_k: int
-    empty_sim: float
-    learned: bool
 
 
 def options() -> GateOptions:
     return GateOptions(
         profile_min=max(0.0, min(0.99, settings.as_float(os.getenv("GATE_PROFILE_MIN"), 0.0))),
-        empty_k=max(0, min(50, settings.as_int(os.getenv("GATE_EMPTY_K"), 0))),
-        empty_sim=max(0.5, min(0.999, settings.as_float(os.getenv("GATE_EMPTY_SIM"), 0.85))),
-        learned=settings.flag("GATE_LEARNED"),
     )
 
 
@@ -149,110 +112,19 @@ def relevance(
     }
 
 
-def outcomes(conn: sqlite3.Connection, stage: str) -> dict[str, bool]:
-    """{ключ: дал ли этап результат} по всем вакансиям, где этап отрабатывал."""
-    seen_sql, outcome_sql = STAGE_SEEN.get(stage), STAGE_OUTCOME.get(stage)
-    if not seen_sql or not outcome_sql:
-        return {}
-    try:
-        keys = [str(row[0]) for row in conn.execute(seen_sql).fetchall()]
-        productive = {
-            str(key)
-            for key in keys
-            if conn.execute(outcome_sql, (key,)).fetchone() is not None
-        }
-    except sqlite3.Error:
-        return {}
-    return {key: key in productive for key in keys}
-
-
-def likely_empty(
-    conn: sqlite3.Connection,
-    gateway: Any,
-    stage: str,
-    key: str,
-    text: str = "",
-) -> bool:
-    """Вернёт ли этап пустоту, судя по соседям. Сомнение трактуется как «нет».
-
-    Соседей ищем среди вакансий, где этап уже отрабатывал. Нужно ровно k
-    соседей ближе порога, и у всех k результат должен быть пустым: одного
-    продуктивного соседа хватает, чтобы вакансия пошла в модель.
-    """
-    opts = options()
-    if opts.empty_k <= 0:
-        return False
-    model = llm_embed.model_name(gateway)
-    if not model:
-        return False
-    vectors = store.load(conn, store.KIND_VACANCY, model)
-    query = vectors.pop(key, None)
-    if query is None:
-        return False
-    known = outcomes(conn, stage)
-    pool = [(other, vector) for other, vector in vectors.items() if other in known]
-    if len(pool) < opts.empty_k:
-        return False
-    near = embeddings.top_similar(
-        query, pool, limit=opts.empty_k, threshold=opts.empty_sim
-    )
-    if len(near) < opts.empty_k:
-        return False
-    if any(known.get(other) for other, _ in near):
-        return False
-    log.info(
-        "этап %s пропущен для %s: %s ближайших соседей не дали ничего",
-        stage,
-        key,
-        len(near),
-    )
-    return True
-
-
-def learned_empty(
-    conn: sqlite3.Connection, gateway: Any, stage: str, key: str
-) -> bool:
-    """Вернёт ли этап пустоту, судя по обученным весам.
-
-    Порог берётся из замера и лежит рядом с весами (`gate_models.low`): это
-    самая высокая граница, при которой на отложенной части не потерялось ни
-    одной продуктивной вакансии. Порога нет — гейт молчит: подбирать его на
-    глаз здесь нельзя, ценой будет потерянная вакансия [CORE-017].
-    """
-    if not options().learned:
-        return False
-    model = llm_embed.model_name(gateway)
-    if not model:
-        return False
-    trained = review_gate_store.load(conn, stage, model)
-    if trained is None or trained.low is None:
-        return False
-    vector = store.load(conn, store.KIND_VACANCY, model).get(key)
-    if not vector:
-        return False
-    chance = linear_model.predict(trained.weights, trained.bias, vector)
-    if chance > trained.low:
-        return False
-    log.info(
-        "этап %s пропущен для %s: обученный гейт даёт %.2f при пороге %.2f",
-        stage, key, chance, trained.low,
-    )
-    return True
-
-
 def keep_for_stage(
     conn: sqlite3.Connection, gateway: Any, stage: str, vacancies: Sequence[Any]
 ) -> list[Any]:
     """Отсеивает вакансии, на которых этап не имеет смысла.
 
-    Оба гейта выключены по умолчанию, поэтому по умолчанию список возвращается
-    как есть: включение — осознанное действие владельца, а не сюрприз.
+    Гейт выключен по умолчанию, поэтому по умолчанию список возвращается как
+    есть: включение — осознанное действие владельца, а не сюрприз.
     """
     opts = options()
-    if opts.profile_min <= 0 and opts.empty_k <= 0 and not opts.learned:
+    if opts.profile_min <= 0:
         return list(vacancies)
     keys = [str(getattr(item, "key", "")) for item in vacancies]
-    scores = relevance(conn, gateway, keys) if opts.profile_min > 0 else {}
+    scores = relevance(conn, gateway, keys)
     kept = []
     for item in vacancies:
         key = str(getattr(item, "key", ""))
@@ -266,15 +138,9 @@ def keep_for_stage(
                 opts.profile_min,
             )
             continue
-        if learned_empty(conn, gateway, stage, key):
-            continue
-        if likely_empty(conn, gateway, stage, key, embeddings_tasks.vacancy_text(item)):
-            continue
         kept.append(item)
     if len(kept) != len(vacancies):
-        log.info(
-            "гейты этапа %s: осталось %s из %s", stage, len(kept), len(vacancies)
-        )
+        log.info("гейт этапа %s: осталось %s из %s", stage, len(kept), len(vacancies))
     return kept
 
 
@@ -282,9 +148,6 @@ __all__ = (
     "GateOptions",
     "KIND_OWNER",
     "keep_for_stage",
-    "learned_empty",
-    "likely_empty",
-    "outcomes",
     "options",
     "owner_text",
     "owner_vector",
