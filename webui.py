@@ -1,0 +1,664 @@
+"""Локальный веб-интерфейс: единственный пульт управления программой.
+
+Здесь четыре вещи, которые раньше жили в терминале:
+
+- запуск: сбор, проверка модели и тесты — кнопками, с полоской и живым
+  логом; тот же вывод дублируется в терминал, где запущен интерфейс;
+- настройки: весь .env формой, профили поиска карточками и подробные параметры поиска;
+- выдача: вакансии, условия, HR-флаги, карта, досье на компании, контакты, выдача
+  поиска, маршруты модели;
+- очистка: удаление накопленных данных по целям, с подтверждением там, где
+  потеря необратима.
+
+На странице запуска только то, что гоняется регулярно. Задачи, привязанные к
+своим данным — шаг по цели, сбор адресов для карты — запускаются из своих
+разделов, где видно, зачем они нужны. Отладочные прогоны без записи и подготовка
+писем остаются в командной строке: python run.py --dry-run, python outreach.py.
+
+В командной строке остаётся и запуск самих программ: python run.py без флагов,
+параметры они берут из .env. Так же их запускает планировщик Windows, и настройки
+у них одни и те же.
+
+Файл сознательно тонкий: здесь только сервер и маршруты. Страницы живут в
+`ui_views.py`, `ui_forms.py`, `ui_resume.py`, `ui_map.py` и `ui_companies.py`, раздел профилей
+целиком — в `webui_profile.py` и `ui_profiles.py`,
+общие детали — в `ui_core.py`. Имена страниц проброшены сюда же, чтобы
+webui.render_vacancies и подобные продолжали работать.
+
+Границы, которые не нарушаются:
+
+- слушает только 127.0.0.1 и отвечает только своим страницам (`ui_guard.py`):
+  авторизации нет, выставлять его наружу нельзя;
+- ничего не отправляет — ни писем, ни сообщений [CORE-023];
+- на диск пишет только .env, profile.yaml и логи задач;
+- без новых зависимостей: http.server из стандартной библиотеки справляется с одним
+  пользователем.
+
+Карта сама по себе эти границы не двигает: сервер отдаёт точки из базы, в сеть
+ходит только браузер — за тайлами и Leaflet. Сбор адресов со страницы карты — это
+та же фоновая задача из jobs.TASKS, что и из CLI.
+
+Запуск:
+    python webui.py                 # http://127.0.0.1:8765
+    python webui.py --port 9000
+
+В фоне (Windows) — без консольного окна, через pythonw.exe:
+    .venv\\Scripts\\pythonw.exe webui.py
+
+Точка входа внизу файла обязательна и проверяется тестом: без неё
+`python webui.py` просто импортирует модуль и молча выходит с кодом 0 —
+самый неприятный вид поломки: пустой вывод и нулевой статус.
+"""
+
+from __future__ import annotations
+
+import argparse
+import errno
+import logging
+import os
+import urllib.parse
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+import jobs
+import llm_profiles
+import llm
+import settings
+from ui_companies import (
+    apply_cleanup,
+    company_rows,
+    render_cleanup,
+    render_companies,
+    render_company,
+)
+from ui_core import (
+    DEFAULT_PORT,
+    HOST,
+    NAV,
+    NAV_ITEMS,
+    STYLE,
+    area_field,
+    checkbox_field,
+    db_path,
+    esc,
+    number_field,
+    open_db,
+    page,
+    table,
+    text_field,
+)
+import ui_bench
+import ui_dataset
+import ui_sources
+import ui_stages
+from ui_forms import (
+    bench_models,
+    profile_summary,
+    render_llm,
+    render_profile,
+    render_search,
+    save_facts,
+    save_profile,
+    search_settings_form,
+    search_updates,
+    start_bench,
+)
+import ui_guard
+import ui_injections
+import ui_map
+import ui_research
+import ui_settings
+import ui_targets
+import ui_run
+import webui_profile
+from ui_resume import render_resume, save_resume
+from ui_views import (
+    vacancy_rows,
+    contact_rows,
+    progress_block,
+    render_contacts,
+    render_run,
+    render_settings,
+    render_vacancies,
+    render_vacancy,
+    vacancy_one,
+)
+
+log = logging.getLogger("webui")
+
+# Адреса, которые существуют только для форм. GET сюда приходит не от ссылки,
+# а от F5 или «назад», и отвечать на это «такой страницы нет» — грубо.
+POST_ONLY = frozenset(
+    {
+        "/run", "/stop", "/loop", "/bench", "/dataset", "/llm/apply",
+        "/intake/apply", "/map/geo", "/sources", "/runopts", "/cookie",
+        "/area", "/deep", "/llm/stages",
+    }
+)
+
+
+class Handler(BaseHTTPRequestHandler):
+    server_version = "FuckHR-webui"
+    profile_path = "profile.yaml"
+
+    def log_message(self, format: str, *args: object) -> None:  # noqa: A002
+        log.debug("%s", format % args)
+
+    def _send(self, body: str, status: int = 200) -> None:
+        payload = body.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def _send_json(self, body: str, status: int = 200) -> None:
+        """Единственный не-HTML ответ: точки карты грузятся отдельно от страницы."""
+        payload = body.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def _redirect(self, location: str) -> None:
+        """После POST всегда редирект: иначе F5 повторяет запуск задачи."""
+        self.send_response(303)
+        self.send_header("Location", location)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def _form(self) -> dict[str, list[str]]:
+        length = int(self.headers.get("Content-Length") or 0)
+        raw = self.rfile.read(length).decode("utf-8")
+        return urllib.parse.parse_qs(raw, keep_blank_values=True)
+
+    def do_GET(self) -> None:  # noqa: N802
+        if ui_guard.refuse(self):
+            return
+        parsed = urllib.parse.urlparse(self.path)
+        params = urllib.parse.parse_qs(parsed.query)
+
+        def one(name: str, default: str = "") -> str:
+            return (params.get(name) or [default])[0]
+
+        def flat(values: dict) -> dict:
+            """Первое значение каждого параметра. Списки странице не нужны."""
+            return {key: (value or [""])[0] for key, value in values.items()}
+
+        try:
+            if parsed.path == "/favicon.ico":
+                self._send("", 404)
+                return
+            if parsed.path == "/":
+                job_id = settings.as_int(one("job"), 0) or None
+                # База нужна одному блоку — выбору площадок и их метрике.
+                conn = open_db()
+                try:
+                    body, refresh = render_run(job_id, conn=conn)
+                finally:
+                    conn.close()
+                self._send(page("Запуск", body, refresh, "/"))
+                return
+            if parsed.path == "/settings":
+                self._send(page("Настройки", render_settings()))
+                return
+
+            conn = open_db()
+            try:
+                if parsed.path == "/vacancies":
+                    # Параметры уходят страницей целиком: какие из них фильтры,
+                    # знает filters.py, а не маршрут. Неизвестные там молча
+                    # игнорируются, в SQL попадает только белый список.
+                    limit = min(settings.as_int(one("limit", "50"), 50), 500)
+                    self._send(
+                        page(
+                            "Вакансии",
+                            ui_map.hint(conn)
+                            + render_vacancies(conn, 0.0, limit, "score", flat(params)),
+                        )
+                    )
+                elif parsed.path == "/map":
+                    # Карта читает те же вакансии, что и список: отдельного сбора
+                    # для неё нет, точки — это адреса из базы.
+                    self._send(page("Карта", ui_map.render_map(conn, flat(params))))
+                elif parsed.path == "/map/points.json":
+                    # Точки отдельным ответом: страница открывается сразу, а метки
+                    # приезжают следом и только если Leaflet загрузился.
+                    self._send_json(ui_map.points_json(conn, flat(params)))
+                elif parsed.path == "/vacancy":
+                    # GET ничего не запускает: сбор черновика дёргает внешний
+                    # поиск и модель, и обновление страницы жгло бы бюджет
+                    # SEARCH_MAX_CALLS/LLM_MAX_CALLS [CORE-016].
+                    key = one("key")
+                    body = ui_map.link(conn, key) + render_vacancy(
+                        conn, key, with_draft=False
+                    )
+                    self._send(page("Вакансия", body))
+                elif parsed.path == "/companies":
+                    # Компании и контакты — один раздел: канал без работодателя
+                    # ничего не значит, а работодатель без канала — не вход.
+                    self._send(
+                        page(
+                            "Компании и контакты",
+                            render_companies(conn, one("csort"), flat(params))
+                            + render_contacts(conn, one("ksort")),
+                        )
+                    )
+                elif parsed.path == "/company":
+                    # Звёздочка сверху: компанию из прогона можно перенести
+                    # в «Цели» и дальше копать её отдельно (ADR-025).
+                    body = (
+                        ui_targets.star_form(conn, one("name"))
+                        + render_company(conn, one("name"), one("jsort"), one("ksort"))
+                        + ui_research.render_research(conn, one("name"))
+                    )
+                    self._send(page("Досье", body))
+                elif parsed.path == "/targets":
+                    self._send(page("Цели", ui_targets.render_targets(conn)))
+                elif parsed.path == "/target":
+                    body = ui_targets.render_target(
+                        conn, settings.as_int(one("id"), 0)
+                    )
+                    self._send(page("Цель", body))
+                elif parsed.path == "/cleanup":
+                    self._send(page("Очистка", render_cleanup(conn)))
+                elif parsed.path == "/contacts":
+                    self._redirect("/companies")
+                elif parsed.path == "/profile":
+                    # Без id — карточки всех профилей, с id — редактор одного.
+                    self._send(
+                        page(
+                            webui_profile.TITLE,
+                            webui_profile.body(conn, self.profile_path, one("id")),
+                        )
+                    )
+                elif parsed.path == "/resume":
+                    # Раздел один: резюме и критерии поиска — это один разговор.
+                    self._redirect("/profile")
+                elif parsed.path == "/search":
+                    body = render_search(conn, one("q"), one("company"))
+                    self._send(page("Проверка поиска", body))
+                elif parsed.path == "/injections":
+                    self._send(
+                        page(
+                            "Инъекции",
+                            ui_injections.render_injections(conn, one("level")),
+                        )
+                    )
+                elif parsed.path == "/llm":
+                    # Пока идёт сравнение, страница обновляет себя сама: результат
+                    # появляется на месте формы, уходить в лог не нужно.
+                    self._send(
+                        page(
+                            "Модель",
+                            render_llm(conn, one("probe") == "1", one("embed") == "1")
+                            + ui_stages.render_stages(conn)
+                            + ui_dataset.render_dataset(conn),
+                            ui_bench.refresh_seconds(),
+                            "/llm",
+                        )
+                    )
+                elif parsed.path in POST_ONLY:
+                    # Сюда попадают по F5 или по кнопке «назад» после POST.
+                    # Главная с историей задач полезнее, чем 404.
+                    self._redirect("/")
+                else:
+                    self._send(page("Не найдено", "<p>Такой страницы нет.</p>"), 404)
+            finally:
+                conn.close()
+        except Exception as exc:  # noqa: BLE001 — интерфейс не должен падать целиком
+            log.exception("ошибка при обработке %s", self.path)
+            self._send(page("Ошибка", "<pre>{}</pre>".format(esc(exc))), 500)
+
+    def do_POST(self) -> None:  # noqa: N802
+        if ui_guard.refuse(self):
+            return
+        parsed = urllib.parse.urlparse(self.path)
+        try:
+            form = self._form()
+
+            if parsed.path == "/run":
+                task = (form.get("task") or [""])[0]
+                try:
+                    job = jobs.runner.start(task)
+                except (KeyError, RuntimeError) as exc:
+                    body, refresh = render_run(
+                        None, "<div class=warn>{}</div>".format(esc(exc))
+                    )
+                    self._send(page("Запуск", body, refresh, "/"))
+                    return
+                self._redirect("/?job={}".format(job.id))
+                return
+
+            if parsed.path == "/map/geo":
+                # Сбор всех недостающих адресов. Из браузера не приходит ни
+                # одного аргумента: команда целиком взята из jobs.TASKS [CORE-023].
+                job_id, problem = ui_map.start_backfill()
+                if job_id is None:
+                    conn = open_db()
+                    try:
+                        body = ui_map.render_map(conn, {}, problem)
+                        self._send(page("Карта", body))
+                    finally:
+                        conn.close()
+                    return
+                self._redirect("/?job={}".format(job_id))
+                return
+
+            if parsed.path == "/dataset":
+                # Сборка идёт минутами, поэтому уходим на страницу запуска с
+                # логом — как «Адреса для карты» и «Шаг по цели».
+                job_id, problem = ui_dataset.start_dataset(form)
+                if job_id is None:
+                    self._send(page("Модель", ui_dataset.refused(problem)))
+                    return
+                self._redirect("/?job={}".format(job_id))
+                return
+
+            if parsed.path == "/bench":
+                note = start_bench(form)
+                if note:
+                    conn = open_db()
+                    try:
+                        self._send(page("Модель", render_llm(conn) + note))
+                    finally:
+                        conn.close()
+                    return
+                self._redirect("/llm")
+                return
+
+            if parsed.path == "/llm/stages":
+                # Имена ключей сверяются с закрытым списком: из браузера
+                # приходит только то, что мы сами нарисовали в таблице.
+                allowed = set(llm_profiles.STAGE_MODEL_ENV.values()) | set(
+                    llm_profiles.LOCAL_STAGE_MODEL_ENV.values()
+                )
+                updates = {
+                    key: (values or [""])[0].strip()
+                    for key, values in form.items()
+                    if key in allowed
+                }
+                settings.save(updates)
+                self._redirect("/llm")
+                return
+
+            if parsed.path == "/llm/apply":
+                # Из браузера приходят имя ключа и имя модели: ключ сверяется
+                # с закрытым списком LLM_PROXY_MODEL_*, имя — с bench_models.
+                updates = {}
+                for key in form.get("apply") or []:
+                    if key not in ui_bench.ENV_KEYS:
+                        continue
+                    names = bench_models((form.get("model:" + key) or [""])[0])
+                    if not names:
+                        continue
+                    # Каскадный ключ хранит порядок кандидатов, обычный — одно имя.
+                    updates[key] = (
+                        ",".join(names[: llm.MAX_CANDIDATES])
+                        if key in ui_bench.CASCADE_KEYS
+                        else names[0]
+                    )
+                saved = settings.save(updates) if updates else []
+                if saved:
+                    note = "<div class=ok>Записано в .env: {}</div>".format(
+                        esc(", ".join(saved))
+                    )
+                else:
+                    note = (
+                        "<div class=warn>Ничего не изменилось: либо профили не "
+                        "отмечены, либо там уже стоят эти модели.</div>"
+                    )
+                conn = open_db()
+                try:
+                    self._send(page("Модель", note + render_llm(conn)))
+                finally:
+                    conn.close()
+                return
+
+            if parsed.path == "/research":
+                # Глубокий ресёрч по одной компании (ADR-019). Название из
+                # браузера сверяется со своей базой внутри ui_research.
+                conn = open_db()
+                try:
+                    problem = ui_research.handle(conn, form)
+                finally:
+                    conn.close()
+                if problem:
+                    self._send(page("Досье", problem))
+                    return
+                self._redirect("/?job={}".format(jobs.runner.last().id))
+                return
+
+            if parsed.path == "/loop":
+                ui_run.save_loop(form)
+                self._redirect("/")
+                return
+
+            if parsed.path in ("/area", "/deep"):
+                # Настройка правится там, где виден её эффект: сфера отзывов —
+                # в блоке разбивки, тумблер ресёрча — у его кнопки.
+                company = (form.get("company") or [""])[0]
+                if parsed.path == "/area":
+                    settings.save({"REVIEW_AREA": (form.get("area") or [""])[0].strip()})
+                else:
+                    settings.save({"DEEP_ENABLED": "1" if form.get("enabled") else "0"})
+                self._redirect("/company?name=" + urllib.parse.quote(company))
+                return
+
+            if parsed.path == "/runopts":
+                ui_run.save_options(form)
+                self._redirect("/")
+                return
+
+            if parsed.path == "/cookie":
+                ui_run.save_cookie(form)
+                self._redirect("/")
+                return
+
+            if parsed.path == "/sources":
+                saved = ui_sources.save(form)
+                note = "<div class=ok>Площадки сохранены: {}</div>".format(
+                    esc(", ".join(saved) or "без изменений")
+                )
+                conn = open_db()
+                try:
+                    body, refresh = render_run(None, note, conn=conn)
+                finally:
+                    conn.close()
+                self._send(page("Запуск", body, refresh, "/"))
+                return
+
+            if parsed.path == "/stop":
+                job_id = settings.as_int((form.get("job") or [""])[0], 0)
+                # soft — прогон дописывает текущий цикл и выходит сам.
+                ui_run.stop(job_id, bool(form.get("soft")))
+                self._redirect("/?job={}".format(job_id))
+                return
+
+            if parsed.path == "/settings":
+                updates = settings.form_updates(form)
+                # Галочки площадок отзывов складываются в одну настройку,
+                # поэтому считаются отдельно от полей каталога.
+                updates.update(ui_settings.review_sites_value(form))
+                saved = settings.save(updates)
+                self._send(page("Настройки", render_settings(saved)))
+                return
+
+            if parsed.path == "/cleanup":
+                # Удаление единственное место, где результат показывается сразу, а не через
+                # редирект: владелец должен видеть, сколько строк исчезло.
+                conn = open_db()
+                try:
+                    removed, problems = apply_cleanup(conn, form)
+                    body = render_cleanup(conn, removed=removed, problems=problems)
+                    self._send(page("Очистка", body))
+                finally:
+                    conn.close()
+                return
+
+            if parsed.path == "/search":
+                updates = search_updates(form)
+                saved = settings.save(updates)
+                # Параметры нужны уже на следующей странице, а не после перезапуска:
+                # поиск живёт в этом же процессе, поэтому обновляем окружение.
+                for key, value in updates.items():
+                    if value:
+                        os.environ[key] = value
+                    else:
+                        os.environ.pop(key, None)
+                conn = open_db()
+                try:
+                    body = render_search(conn, "", "", saved)
+                    self._send(page("Проверка поиска", body))
+                finally:
+                    conn.close()
+                return
+
+            if parsed.path.startswith("/targets/"):
+                # Раздел целей: добавление, выбор кандидата, шаги, слежение.
+                # В подпроцесс уходит только id цели из своей базы (ADR-025).
+                conn = open_db()
+                try:
+                    note = ui_targets.handle(conn, parsed.path, form)
+                    if parsed.path == "/targets/step":
+                        body = ui_targets.render_target(
+                            conn, settings.as_int((form.get("id") or [""])[0], 0), note
+                        )
+                        self._send(page("Цель", body))
+                        return
+                    body = ui_targets.render_targets(
+                        conn, note, ui_targets.last_query(form)
+                    )
+                    self._send(page("Цели", body))
+                finally:
+                    conn.close()
+                return
+
+            if parsed.path in webui_profile.POST_PATHS:
+                # Весь раздел профилей в одном месте: карточки, выключатель,
+                # критерии, разговор и резюме правят одни и те же файлы.
+                title, body, new_path = webui_profile.handle(
+                    parsed.path, form, self.profile_path
+                )
+                # Каталог профилей мог появиться прямо сейчас (первое «Добавить
+                # профиль»), и RUN_PROFILE уже переписан — подхватываем без
+                # перезапуска сервера.
+                Handler.profile_path = new_path
+                self._send(page(title, body))
+                return
+
+            if parsed.path == "/vacancy":
+                # Черновик собирается только по явному действию, а не по открытию
+                # страницы: у шага есть внешние вызовы и бюджет [CORE-016].
+                key = (form.get("key") or [""])[0]
+                conn = open_db()
+                try:
+                    body = ui_map.link(conn, key) + render_vacancy(
+                        conn, key, with_draft=True
+                    )
+                    self._send(page("Вакансия", body))
+                finally:
+                    conn.close()
+                return
+
+            self._send(page("Не найдено", "<p>Такой страницы нет.</p>"), 404)
+        except Exception as exc:  # noqa: BLE001
+            log.exception("ошибка при обработке POST %s", self.path)
+            self._send(page("Ошибка", "<pre>{}</pre>".format(esc(exc))), 500)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Локальный интерфейс FuckHR")
+    parser.add_argument("--port", type=int, default=DEFAULT_PORT)
+    parser.add_argument("--verbose", action="store_true")
+    args = parser.parse_args(argv)
+
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    from run_setup import quiet_libraries  # noqa: PLC0415 — цикл импорта
+
+    quiet_libraries(args.verbose)
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv()
+    except ImportError:
+        log.warning("python-dotenv не установлен: читаю только переменные окружения")
+
+    Handler.profile_path = settings.get("RUN_PROFILE", "profile.yaml")
+    try:
+        server = HTTPServer((HOST, args.port), Handler)
+    except OSError as exc:
+        # Самый частый случай — интерфейс уже запущен в фоне. Трасса здесь
+        # бесполезна, полезна подсказка.
+        if exc.errno in (errno.EADDRINUSE, getattr(errno, "WSAEADDRINUSE", 10048)):
+            log.error(
+                "порт %s уже занят: интерфейс либо уже работает на http://%s:%s, "
+                "либо порт занял другой процесс; возьми другой через --port",
+                args.port,
+                HOST,
+                args.port,
+            )
+            return 1
+        raise
+    log.info("интерфейс здесь: http://%s:%s (Ctrl+C чтобы остановить)", HOST, args.port)
+    log.info("база: %s · настройки: %s", db_path(), settings.ENV_PATH)
+    log.info("лог задач дублируется в этот терминал")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        log.info("остановлен")
+    finally:
+        server.server_close()
+    return 0
+
+
+__all__ = (
+    "DEFAULT_PORT",
+    "HOST",
+    "Handler",
+    "NAV",
+    "NAV_ITEMS",
+    "POST_ONLY",
+    "STYLE",
+    "apply_cleanup",
+    "area_field",
+    "checkbox_field",
+    "company_rows",
+    "contact_rows",
+    "db_path",
+    "esc",
+    "main",
+    "number_field",
+    "open_db",
+    "page",
+    "profile_summary",
+    "progress_block",
+    "render_cleanup",
+    "render_companies",
+    "render_company",
+    "render_contacts",
+    "render_llm",
+    "render_profile",
+    "render_resume",
+    "render_run",
+    "render_search",
+    "render_settings",
+    "render_vacancies",
+    "render_vacancy",
+    "save_facts",
+    "save_profile",
+    "save_resume",
+    "search_settings_form",
+    "search_updates",
+    "table",
+    "text_field",
+    "vacancy_one",
+    "vacancy_rows",
+)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

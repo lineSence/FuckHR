@@ -1,0 +1,506 @@
+"""Локальный интерфейс: что именно здесь проверяется.
+
+Рисование табличек тестами не ловится и ловиться не должно. Важны две вещи,
+которые ломаются тихо и дорого:
+
+1. Сохранение facts через форму перезаписывает profile.yaml. Если оно затрёт
+   queries или min_score, пользователь узнает об этом через день, когда утренний
+   прогон вернёт пустоту.
+2. Экранирование. В описаниях вакансий и сниппетах поиска постоянно встречается
+   сырой HTML; без экранирования чужая разметка выполнится в браузере владельца.
+
+Сеть не трогаем: провайдер поиска либо выключен, либо подменяется transport.
+
+Про ключи вакансий. Vacancy.key считается от названия и компании, а не от id или URL:
+две вакансии с одинаковыми названием и компанией — одна и та же строка в базе, и
+второй upsert перезапишет скор первой. Именно на этом раньше ломался тест фильтра.
+
+Про тексты предупреждений. Проверяем факт предупреждения и класс блока, а не
+формулировку целиком: иначе любая правка текста в интерфейсе красит тесты
+красным, не найдя ни одной ошибки.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+import yaml
+
+import conditions
+import contacts
+import db
+import detector
+import settings
+import ui_views
+import webui
+import websearch
+
+
+def test_сохранение_фактов_не_трогает_остальной_профиль(tmp_path: Path) -> None:
+    profile = tmp_path / "profile.yaml"
+    profile.write_text(
+        "min_score: 45\nskills:\n  - python\nfacts: []\n", encoding="utf-8"
+    )
+
+    facts = webui.save_facts(profile, "ускорил импорт в 12 раз\nсобрал пайплайн на 159 вакансий\n")
+
+    assert facts == ("ускорил импорт в 12 раз", "собрал пайплайн на 159 вакансий")
+    data = yaml.safe_load(profile.read_text(encoding="utf-8"))
+    assert data["facts"] == list(facts)
+    assert data["min_score"] == 45
+    assert data["skills"] == ["python"]
+
+
+def test_пустые_строки_формы_не_становятся_фактами(tmp_path: Path) -> None:
+    """Тот же класс ошибки, что и пустой пункт YAML: мусор уезжает в письмо."""
+    profile = tmp_path / "profile.yaml"
+
+    facts = webui.save_facts(profile, "\n  \nединственный факт\n\n")
+
+    assert facts == ("единственный факт",)
+    assert yaml.safe_load(profile.read_text(encoding="utf-8"))["facts"] == ["единственный факт"]
+
+
+def test_список_вакансий_фильтруется_по_скору(conn, make_vacancy) -> None:
+    db.upsert_vacancy(
+        conn,
+        make_vacancy(external_id="1", title="Python разработчик", company="ООО Ромашка"),
+        80.0,
+        ["высокий"],
+    )
+    db.upsert_vacancy(
+        conn,
+        make_vacancy(external_id="2", title="Backend Python", company="ООО Ландыш"),
+        30.0,
+        ["низкий"],
+    )
+
+    rows = webui.vacancy_rows(conn, min_score=60.0, limit=10)
+
+    assert [row["score"] for row in rows] == [80.0]
+
+
+def test_одинаковые_название_и_компания_считаются_одной_вакансией(conn, make_vacancy) -> None:
+    """Закрепляет поведение дедупа, на котором споткнулся тест выше.
+
+    Разные external_id и разные URL новой строки не дают: ключ считается от названия
+    и компании, и это сознательное решение: перепубликацию мы как раз ловим.
+    """
+    db.upsert_vacancy(conn, make_vacancy(external_id="1", url="https://hh.ru/vacancy/1"), 80.0, [])
+    db.upsert_vacancy(conn, make_vacancy(external_id="2", url="https://hh.ru/vacancy/2"), 30.0, [])
+
+    rows = webui.vacancy_rows(conn, min_score=0.0, limit=10)
+
+    assert len(rows) == 1
+    assert rows[0]["score"] == 30.0  # последний upsert перезаписал скор
+
+
+def test_чужой_html_из_базы_не_попадает_в_страницу(conn, make_vacancy) -> None:
+    # Страница вакансий показывает покрытие контактов и условий, а фикстура conn
+    # создаёт только базовую схему. В живом интерфейсе это делает open_db().
+    contacts.ensure_schema(conn)
+    conditions.ensure_schema(conn)
+    detector.ensure_schema(conn)
+    db.upsert_vacancy(
+        conn,
+        make_vacancy(company="<script>alert(1)</script>"),
+        90.0,
+        ["тест"],
+    )
+
+    html = webui.render_vacancies(conn, min_score=0.0, limit=10)
+
+    # Свой скрипт на странице есть — это мгновенный отбор строк. Проверяем то,
+    # что важно: из базы не пришло ни тега, ни его содержимого.
+    assert "<script>alert(1)</script>" not in html
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
+
+
+def test_без_адреса_инстанса_страница_поиска_объясняет_причину(
+    conn, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SEARCH_PROVIDER", "searxng")
+    monkeypatch.delenv("SEARCH_BASE_URL", raising=False)
+
+    html = webui.render_search(conn, query="любой запрос", company="")
+
+    assert "SEARCH_BASE_URL" in html
+
+
+def test_сводка_профиля_читается_без_падения_на_отсутствующем_файле(tmp_path: Path) -> None:
+    rows = webui.profile_summary(tmp_path / "нет-такого.yaml")
+
+    assert rows and "не найден" in rows[0][1]
+
+
+def test_страница_профиля_предупреждает_о_пустых_фактах(tmp_path: Path) -> None:
+    """Без фактов письма собираются без конкретики, и это надо говорить вслух."""
+    profile = tmp_path / "profile.yaml"
+    profile.write_text("facts: []\n", encoding="utf-8")
+
+    html = webui.render_profile(str(profile))
+
+    assert "Факты о себе" in html
+    assert "class=warn" in html
+
+
+def test_страница_профиля_предупреждает_о_пустых_запросах(tmp_path: Path) -> None:
+    """Без запросов сбор молча возвращает нуль вакансий — самая обидная тишина."""
+    profile = tmp_path / "profile.yaml"
+    profile.write_text("queries: []\nfacts:\n  - факт\n", encoding="utf-8")
+
+    html = webui.render_profile(str(profile))
+
+    assert "Запросы не заданы" in html
+
+
+def test_выдача_поиска_показывается_с_доменом(conn, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Провайдер подменён: ни одного сетевого вызова."""
+    hits = [
+        websearch.Hit(
+            title="Команда разработки",
+            url="https://example.com/team",
+            snippet="<b>Руководитель</b> разработки",
+        )
+    ]
+    fake = websearch.SearchProvider(
+        provider=websearch.SEARXNG,
+        conn=conn,
+        transport=lambda provider, query, limit: hits,
+    )
+    monkeypatch.setattr(websearch.SearchProvider, "from_env", classmethod(lambda cls, c=None: fake))
+
+    html = webui.render_search(conn, query="example руководитель разработки", company="")
+
+    assert "example.com" in html
+    assert "&lt;b&gt;" in html  # сниппет экранирован, а не вставлен разметкой
+
+
+def test_сортировка_списка_вакансий(conn, make_vacancy) -> None:
+    conditions.ensure_schema(conn)
+    contacts.ensure_schema(conn)
+    db.upsert_vacancy(
+        conn,
+        make_vacancy(external_id="1", title="Аналитик", company="ООО Ромашка"),
+        90.0,
+        [],
+    )
+    db.upsert_vacancy(
+        conn,
+        make_vacancy(external_id="2", title="Backend Python", company="ООО Ландыш"),
+        10.0,
+        [],
+    )
+
+    by_score = webui.render_vacancies(conn, 0.0, 10, sort="score")
+    assert by_score.index("Аналитик") < by_score.index("Backend Python")
+    # По алфавиту латиница идёт раньше кириллицы — порядок меняется на обратный.
+    by_title = webui.render_vacancies(conn, 0.0, 10, sort="title")
+    assert by_title.index("Backend Python") < by_title.index("Аналитик")
+    # Неизвестное имя сортировки не роняет страницу и не уходит в SQL.
+    assert "Аналитик" in webui.render_vacancies(conn, 0.0, 10, sort="1=1")
+
+
+def test_страница_настроек_складывается_в_подкаты() -> None:
+    """Подкаты и поиск: проверяем каркас, а не вёрстку.
+
+    Важно ровно одно — поля остаются внутри формы. Если группа однажды окажется
+    после </form>, свёрнутые настройки перестанут сохраняться молча.
+    """
+    html = ui_views.render_settings()
+
+    # Групп каталога плюс блок галочек «искать отзывы только на», минус
+    # «Модель по этапам»: она уехала в таблицу маршрутов.
+    assert html.count("<details class=setgroup") == len(settings.GROUPS)
+    assert settings.GROUP_LLM_STAGES not in html
+    assert 'href="/llm"' in html
+    assert "Искать отзывы только на" in html
+    assert html.count(" open>") == 1  # раскрыт только первый подкат
+    assert 'id="setq"' in html or "id=setq" in html
+    assert html.index("<details class=setgroup") > html.index("<form method=post")
+    assert html.rindex("</details>") < html.index("</form>")
+    # data-find даёт поиску по чему искать: ключ, название, подсказка.
+    assert 'data-find="сколько вакансий собирать за прогон run_limit' in html
+
+
+def test_мёртвые_ключи_hh_api_убраны_из_настроек() -> None:
+    """HH_TOKEN и HH_USER_AGENT не читает ни один модуль: HHClient не в пайплайне."""
+    assert "HH_TOKEN" not in settings.FIELD_BY_KEY
+    assert "HH_USER_AGENT" not in settings.FIELD_BY_KEY
+
+
+def test_самообновление_возвращает_на_свой_адрес() -> None:
+    """Из-за пустого url страница уходила на «такой страницы нет».
+
+    Воспроизведение владельца: нажать задачу, пока идёт сбор. Ответ на POST
+    рисуется по адресу /run, где GET-обработчика нет, а мета-обновление без
+    адреса перезагружало именно его.
+    """
+    import ui_core
+
+    html = ui_core.page("Запуск", "тело", 2, "/")
+    assert 'content="2;url=/"' in html
+    assert ui_core.page("Модель", "тело", 2, "/llm").count('url=/llm') == 1
+    # Без обновления мета-тега нет вовсе.
+    assert "http-equiv=refresh" not in ui_core.page("Запуск", "тело")
+
+
+def test_адреса_форм_не_отвечают_404_на_get() -> None:
+    """F5 и «назад» после POST не должны показывать «такой страницы нет»."""
+    import webui
+
+    assert "/run" in webui.POST_ONLY
+    assert "/bench" in webui.POST_ONLY
+    # Настоящие страницы в список не попали: у них есть GET-обработчик.
+    assert not (webui.POST_ONLY & {"/", "/llm", "/settings"})
+
+
+def test_блок_эмбеддера_виден_на_странице_модели(conn, monkeypatch) -> None:
+    """У эмбеддера своя модель, и проверять её надо отдельно от чата."""
+    import llm
+    import ui_forms
+
+    monkeypatch.setenv("LLM_BASE_URL", "http://127.0.0.1:11434/v1")
+    monkeypatch.setenv("LLM_STAGE_MODEL_EMBEDDINGS", "bge-m3:latest")
+    gateway = llm.Gateway.from_env(conn)
+    html = ui_forms.embeddings_block(conn, gateway)
+
+    assert "Векторы текстов" in html
+    assert "bge-m3:latest" in html
+    assert "/llm?embed=1" in html
+    # Сеть не трогаем: без probe живого вызова нет.
+    assert "вектор из" not in html
+
+
+def test_блок_эмбеддера_объясняет_пустое_имя_модели(conn, monkeypatch) -> None:
+    import llm
+    import ui_forms
+
+    monkeypatch.setenv("LLM_BASE_URL", "http://127.0.0.1:11434/v1")
+    monkeypatch.delenv("LLM_STAGE_MODEL_EMBEDDINGS", raising=False)
+    monkeypatch.delenv("LLM_LOCAL_STAGE_MODEL_EMBEDDINGS", raising=False)
+    html = ui_forms.embeddings_block(conn, llm.Gateway.from_env(conn))
+
+    # Локальное имя модели живёт в своём ключе: подсказка должна называть тот,
+    # который и правда читается шлюзом.
+    assert "LLM_LOCAL_STAGE_MODEL_EMBEDDINGS" in html
+    assert "class=warn" in html
+
+
+def test_колонка_площадки_в_списке(conn, make_vacancy) -> None:
+    """Видно, откуда вакансия, и что она есть не на одной площадке."""
+    import source_store
+
+    conditions.ensure_schema(conn)
+    contacts.ensure_schema(conn)
+    db.upsert_vacancy(conn, make_vacancy(external_id="1", source="hh.ru"), 90.0, [])
+    key = conn.execute("SELECT key FROM vacancies").fetchone()["key"]
+    source_store.remember_many(
+        conn, [(key, "hh.ru", "1", ""), (key, "superjob", "9", "")]
+    )
+
+    html = webui.render_vacancies(conn, 0.0, 10)
+
+    assert "Площадка" in html
+    assert "hh.ru" in html
+    assert "+1" in html and "SuperJob" in html
+
+
+def test_карточка_называет_свою_площадку(conn, make_vacancy) -> None:
+    """Вакансия с Работы.ру не должна предлагать «открыть на hh.ru»."""
+    import source_store
+
+    conditions.ensure_schema(conn)
+    contacts.ensure_schema(conn)
+    detector.ensure_schema(conn)
+    db.upsert_vacancy(
+        conn,
+        make_vacancy(
+            external_id="54421864",
+            source="rabota",
+            url="https://www.rabota.ru/vacancy/54421864/",
+        ),
+        70.0,
+        [],
+    )
+    key = conn.execute("SELECT key FROM vacancies").fetchone()["key"]
+    source_store.remember_many(
+        conn,
+        [
+            (key, "rabota", "54421864", "https://www.rabota.ru/vacancy/54421864/"),
+            (key, "zarplata", "77", "https://zarplata.ru/vacancy/77"),
+        ],
+    )
+
+    html = webui.render_vacancy(conn, key, with_draft=False)
+
+    assert "открыть на Работа.ру" in html
+    assert "открыть на Zarplata.ru" in html
+    assert "открыть на hh.ru" not in html
+
+
+def test_список_называет_порог_досье(conn, make_vacancy, monkeypatch) -> None:
+    """«19 вакансий, а досье 5» — это два разных порога, и об этом надо сказать."""
+    import profiles
+
+    monkeypatch.setattr(profiles, "dossier_threshold", lambda: 45.0)
+    conditions.ensure_schema(conn)
+    contacts.ensure_schema(conn)
+    db.upsert_vacancy(conn, make_vacancy(external_id="1"), 42.0, [])
+
+    html = webui.render_vacancies(conn, 0.0, 10)
+
+    assert "от 45 баллов" in html
+
+
+def test_список_по_умолчанию_показывает_подходящие(conn, make_vacancy, monkeypatch) -> None:
+    """Вакансия ниже порога профиля лежит в базе, но в первом виде её нет:
+    досье на её компанию никто не собирал, и «вакансия есть, компании нет»
+    выглядело поломкой."""
+    import profiles
+
+    monkeypatch.setattr(profiles, "dossier_threshold", lambda: 45.0)
+    conditions.ensure_schema(conn)
+    contacts.ensure_schema(conn)
+    db.upsert_vacancy(conn, make_vacancy(external_id="1", title="Прошла порог"), 56.0, [])
+    db.upsert_vacancy(conn, make_vacancy(external_id="2", title="Ниже порога"), 42.0, [])
+
+    default = webui.render_vacancies(conn, 0.0, 10, params={})
+    assert "Прошла порог" in default
+    assert "Ниже порога" not in default
+
+    every = webui.render_vacancies(conn, 0.0, 10, params={"view": "all"})
+    assert "Ниже порога" in every
+
+
+def test_мгновенный_отбор_есть_в_списках(conn, make_vacancy) -> None:
+    """Поле отбирает строки по мере набора, Enter отправляет тот же текст в базу."""
+    conditions.ensure_schema(conn)
+    contacts.ensure_schema(conn)
+    detector.ensure_schema(conn)
+    db.upsert_vacancy(conn, make_vacancy(external_id="1"), 90.0, [])
+
+    html = webui.render_vacancies(conn, 0.0, 10, params={})
+    assert 'id="vq"' in html and "id=vlist" in html
+    assert "Enter — поиск по всей базе" in html
+
+    import ui_companies
+
+    companies = ui_companies.render_companies(conn)
+    assert 'id="cq"' in companies and 'name="cq"' in companies
+
+
+def test_галочки_площадок_отзывов_сохраняются_одной_настройкой() -> None:
+    """Пять площадок в одной строке настройки: галочки удобнее адресов."""
+    import reviewsites
+    import ui_settings
+
+    html = ui_settings.render_settings()
+    for site in reviewsites.SITES:
+        assert 'name="review_site_{}"'.format(site.host) in html
+        assert site.label in html
+    saved = ui_settings.review_sites_value(
+        {"review_sites_form": ["1"], "review_site_dreamjob.ru": ["1"]}
+    )
+    assert saved == {"REVIEW_ONLY_SITES": "dreamjob.ru"}
+    # Ни одной галочки — это «все, у кого есть парсер», а не «ни одной».
+    assert ui_settings.review_sites_value({"review_sites_form": ["1"]}) == {
+        "REVIEW_ONLY_SITES": ""
+    }
+    # Формы в запросе нет — настройку не трогаем.
+    assert ui_settings.review_sites_value({}) == {}
+
+
+def test_параметры_прогона_сохраняются_с_главной(tmp_path: Path, monkeypatch) -> None:
+    import ui_run
+
+    env = tmp_path / ".env"
+    monkeypatch.setattr(settings, "ENV_PATH", env)
+    saved = ui_run.save_options(
+        {"limit": ["50"], "details": ["1"], "min_score": ["70"], "letters": ["3"]}
+    )
+    assert "RUN_LIMIT" in saved and "RUN_DETAILS" in saved
+    text = env.read_text(encoding="utf-8")
+    assert "RUN_LIMIT=50" in text and "RUN_DETAILS=1" in text
+    # Галочка снята — приходит не «0», а пустота, и это должно стать нулём.
+    assert "TELEGRAM_ENABLED=0" in text
+    assert "OUTREACH_MIN_SCORE=70" in text and "OUTREACH_LIMIT=3" in text
+
+
+def test_поле_cookie_появляется_только_при_капче() -> None:
+    import ui_run
+
+    class Job:
+        def __init__(self, lines: list[str]) -> None:
+            self._lines = lines
+
+        def tail(self, count: int) -> list[str]:
+            return self._lines
+
+    assert ui_run.cookie_block(None) == ""
+    assert ui_run.cookie_block(Job(["страница 3: вакансий 50"])) == ""
+    block = ui_run.cookie_block(Job(["hh.ru требует капчу или блокирует запросы"]))
+    assert "name=cookie" in block and "class=warn" in block
+
+
+def test_фильтр_только_изменённые_отмечает_поля(monkeypatch) -> None:
+    import ui_settings
+
+    field = settings.FIELD_BY_KEY["RUN_LIMIT"]
+    assert ui_settings.changed(field, "30") is False  # значение по умолчанию
+    assert ui_settings.changed(field, "") is False
+    assert ui_settings.changed(field, "50") is True
+
+    monkeypatch.setattr(settings, "load", lambda path=None: {"RUN_LIMIT": "50"})
+    html = ui_settings.render_settings()
+    assert "id=setdiff" in html and 'data-changed="1"' in html
+
+
+def test_установочные_настройки_собраны_в_одну_группу() -> None:
+    names = dict(settings.groups())
+    assert "Установка" in names
+    keys = {field.key for field in names["Установка"]}
+    assert {"DB_PATH", "LOG_PATH", "HH_PAUSE", "RESEARCH_WORKERS"} <= keys
+    # Пауза цикла спрашивается на главной вместе с самим циклом.
+    assert "RUN_LOOP_PAUSE" not in keys
+
+
+def test_консоль_лога_держит_прокрутку(monkeypatch) -> None:
+    import jobs
+    import ui_run
+
+    class Job:
+        id = 1
+        title = "Сбор"
+        status = "идёт"
+        duration = 1.0
+        lines = ["строка"]
+        running = True
+        task = "collect"
+        progress = None
+
+        def tail(self, count: int) -> list[str]:
+            return self.lines
+
+    monkeypatch.setattr(jobs.runner, "last", lambda: Job())
+    monkeypatch.setattr(jobs.runner, "history", lambda: [])
+    body, refresh = ui_run.render_run()
+    assert "id=log" in body and "sessionStorage" in body
+    assert refresh == 2
+
+
+def test_модель_этапа_правится_в_строке_таблицы(conn, monkeypatch) -> None:
+    import llm_profiles
+    import ui_forms
+
+    monkeypatch.setattr(settings, "flag", lambda key: key == "LLM_ENABLED")
+    html = ui_forms.render_llm(conn)
+    # Поле стоит в строке этапа и правит настройку того маршрута, который сейчас.
+    assert 'action="/llm/stages"' in html
+    assert any(
+        'name="{}"'.format(env) in html
+        for env in llm_profiles.LOCAL_STAGE_MODEL_ENV.values()
+    ) or any(
+        'name="{}"'.format(env) in html for env in llm_profiles.STAGE_MODEL_ENV.values()
+    )

@@ -1,0 +1,68 @@
+# Эталонный профиль для тестов скоринга.
+#
+# Раньше tests/test_score.py грузил рабочий profile.yaml из корня, и любая
+# настройка фильтра под себя роняла три теста: сменил навыки — уехал скор,
+# убрал стоп-слово — перестал работать тест отказа. Формула скоринга и личные
+# предпочтения — разные сущности, и проверять надо первое.
+#
+# Файл подогнан под фикстуру make_vacancy из conftest.py. Менять его стоит
+# только вместе с ожиданиями тестов, а не «под себя»: для себя есть /profile.
+
+queries:
+  - text: Python разработчик
+    area: 113
+    period: 7
+    max_pages: 2
+
+skills:
+  - python
+  - asyncio
+  - fastapi
+  - postgresql
+  - docker
+  - sql
+
+nice_to_have:
+  - kubernetes
+  - clickhouse
+
+# Стоп-слова в двух раскладках: в описаниях встречаются и латинская c, и русская с.
+stop_words:
+  - 1c
+  - 1с
+  - битрикс
+  - вахта
+  - стажировка
+  - менеджер по продажам
+
+salary:
+  min_net: 250000
+  currency: RUR
+  allow_missing: true
+
+geo:
+  areas:
+    - 113
+  remote_ok: true
+
+experience_ok:
+  - between1And3
+  - between3And6
+
+importance:
+  skills: 5
+  salary: 2
+  nice_to_have: 1
+  remote: 1
+  experience: 1
+
+weights:
+  skills: 55
+  salary: 20
+  nice_to_have: 10
+  remote: 10
+  experience: 5
+
+min_score: 45
+
+facts: []

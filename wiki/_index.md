@@ -24,6 +24,17 @@
 - `wiki/architecture/overview.md` — модули, границы, ADR.
 - `wiki/architecture/pipeline.md` — этапы обработки вакансии от сбора до Telegram.
 - `wiki/architecture/model-routing.md` — FreeLLMAPI, профили, маршрутизация по этапам.
+- `wiki/architecture/profiles.md` — несколько профилей поиска: что общее, что на профиль (ADR-023), раздел «Профили» в интерфейсе (ADR-024).
+- `wiki/architecture/targets.md` — цели: компании, выбранные владельцем, шаги и слежение (ADR-025).
+- `wiki/architecture/map.md` — карта вакансий: откуда координаты, фильтры, метро и радиус без геокодера (ADR-026).
+- `wiki/architecture/tech-stack.md` — замысел стека и рассмотренные альтернативы.
+- `wiki/architecture/sources-and-outreach.md` — источники контактов и поисковый API этапа писем.
+- `wiki/architecture/runtime-windows.md` — запуск по расписанию на Windows (ADR-014).
+- `wiki/architecture/hh-html-scraping.md` — разбор HTML hh.ru и его fallback-стратегии (ADR-015).
+- `wiki/architecture/company-score.md` — общая оценка работодателя: оси, улики, вето (ADR-018, замысел).
+- `wiki/architecture/prompt-injection.md` — инъекции в чужих текстах: чистка входа, улика, скрытый HTML (ADR-020, замысел).
+- `wiki/architecture/embeddings.md` — локальные эмбеддинги: модель, хранение, две задачи (ADR-021).
+- `wiki/architecture/deep-research.md` — глубокий ресёрч по компании: источники, капча, потолок по времени (ADR-019, замысел).
 
 ## workflows
 
