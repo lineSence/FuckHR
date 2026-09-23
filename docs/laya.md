@@ -53,28 +53,31 @@ python laya_bench.py --stages review_fake --cases my.json --threshold 0.6
 
 ## Установка
 
-Нужен Python 3.10+ и своё виртуальное окружение (torch тянет ~2 ГБ).
+Ставить надо в **основное** окружение проекта. `laya_judge` грузит модель в том
+же процессе, что `run.py` и `webui.py`: из отдельного окружения пайплайн её не
+увидит и молча пойдёт без решателя [CORE-017]. Отдельное окружение годится
+только для самостоятельных замеров `laya_bench.py`.
 
 ```powershell
 cd C:\dev\fuckhr
-py -3.11 -m venv .venv-laya
-.\.venv-laya\Scripts\python.exe -m pip install laya
-.\.venv-laya\Scripts\python.exe -I -c "import laya; print(laya.__version__)"
+.venv\Scripts\python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+.venv\Scripts\python -m pip install laya
+.venv\Scripts\python -c "import laya; print(laya.__version__)"
 ```
 
-Только CPU (без CUDA, экономит место и не спорит с Ollama за видеопамять):
-
-```powershell
-.\.venv-laya\Scripts\python.exe -m pip install torch --index-url https://download.pytorch.org/whl/cpu
-.\.venv-laya\Scripts\python.exe -m pip install laya
-```
+Torch ставится первым и в сборке под CPU: так он не тянет CUDA (~2 ГБ лишних)
+и не спорит с Ollama за видеопамять. В `requirements.txt` пакета нет сознательно.
 
 Первый запуск качает веса с Hugging Face в `%USERPROFILE%\.cache\huggingface`
 (мультиязычный чекпойнт ~650 МБ). Проверка и сравнение:
 
 ```powershell
-.\.venv-laya\Scripts\python.exe laya_bench.py
+.venv\Scripts\python laya_bench.py
 ```
+
+Чекпойнт скрипт печатает первой строкой. Свой берётся из `LAYA_MODEL` в `.env`
+или из `--laya-model`; если в строке оказался
+`convaiinnovations/laya-multilingual`, мерится базовая модель, а не дообученная.
 
 ## Включение в пайплайне
 
