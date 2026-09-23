@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+from typing import Any, Sequence
 
 import hh_pages
 import market
@@ -16,6 +17,7 @@ import market_store
 import settings
 from hh import Vacancy
 from hh_html import HHHtmlClient
+import query_plan
 from score import Profile, evaluate
 
 log = logging.getLogger("fuckhr")
@@ -126,3 +128,97 @@ def collect(
         market_store.record(conn, observations)
         log.info("зарплатных наблюдений записано: %s", len(observations))
     return seen, passed
+
+
+def collect_plan(
+    client: HHHtmlClient,
+    bundle: Sequence[Any],
+    limit: int = 0,
+    prefilter: settings.PrefilterOptions | None = None,
+    conn: sqlite3.Connection | None = None,
+) -> tuple[dict[str, Vacancy], dict[str, Vacancy], dict[str, list[str]]]:
+    """Сбор по плану: каждый запрос выполняется один раз на все профили.
+
+    Отличие от `collect` — не в сборе, а в том, кому достаётся страница. Раньше
+    обход шёл по профилям, и одинаковый запрос двух профилей стоил двух обходов
+    (кэш снимал только дословные повторы внутри своего срока). Теперь запросы
+    сведены в план (`query_plan`), а предфильтр считается по каждому профилю,
+    который этот запрос заказывал.
+
+    Лимит по-прежнему на профиль: он ограничивает, сколько вакансий профиль
+    забирает в прогон. Запрос перестаёт читаться, когда все его профили набрали
+    своё.
+    """
+    prefilter = prefilter or settings.prefilter_options()
+    known_page = hh_pages.known_page_checker(conn)
+    stop_kwargs = {"known_page": known_page} if known_page is not None else {}
+    observations: list[market.Observation] = []
+    seen: dict[str, Vacancy] = {}
+    passed: dict[str, Vacancy] = {}
+    owners: dict[str, list[str]] = {}
+    taken: dict[str, int] = {loaded.id: 0 for loaded in bundle}
+
+    tasks = query_plan.build(bundle)
+    for index, task in enumerate(tasks, start=1):
+        hungry = [lo for lo in task.owners if not limit or taken[lo.id] < limit]
+        if not hungry:
+            log.info("запрос %r пропущен: его профили уже набрали лимит", task.text)
+            continue
+        log.info(
+            "[%s/%s] запрос: %s (профилей: %s)",
+            index,
+            len(tasks),
+            task.text,
+            ", ".join(lo.id for lo in hungry),
+        )
+        pages = client.search(**task.kwargs(), **stop_kwargs)
+        try:
+            for draft in pages:
+                if draft.key not in seen:
+                    point = market.observe(draft)
+                    if point is not None:
+                        observations.append(point)
+                seen.setdefault(draft.key, draft)
+                for loaded in hungry:
+                    if limit and taken[loaded.id] >= limit:
+                        continue
+                    if loaded.id in owners.get(draft.key, []):
+                        continue
+                    rough = evaluate(draft, loaded.profile, prefilter.fuzzy)
+                    if prefilter.enabled and rough.rejected:
+                        log.debug(
+                            "профиль %s отбросил на предфильтре: %s (%s)",
+                            loaded.id,
+                            draft.title,
+                            rough.reject_reason,
+                        )
+                        continue
+                    if prefilter.enabled and rough.score < prefilter.min_score:
+                        log.debug(
+                            "профиль %s отбросил на предфильтре: %s (%.1f < %.1f)",
+                            loaded.id,
+                            draft.title,
+                            rough.score,
+                            prefilter.min_score,
+                        )
+                        continue
+                    passed.setdefault(draft.key, draft)
+                    owners.setdefault(draft.key, []).append(loaded.id)
+                    taken[loaded.id] += 1
+                if limit and all(taken[lo.id] >= limit for lo in hungry):
+                    log.info(
+                        "профили этого запроса набрали по %s вакансий, страницы дальше не нужны",
+                        limit,
+                    )
+                    break
+        finally:
+            # Генератор закрываем явно: иначе он доживает до сборки мусора и не
+            # очевидно когда отпустит соединение.
+            pages.close()
+
+    for loaded in bundle:
+        log.info("профиль %s: забрал %s вакансий", loaded.id, taken[loaded.id])
+    if conn is not None and observations:
+        market_store.record(conn, observations)
+        log.info("зарплатных наблюдений записано: %s", len(observations))
+    return seen, passed, owners

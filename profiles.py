@@ -92,28 +92,17 @@ def collect_all(
 ) -> tuple[dict[str, Vacancy], dict[str, Vacancy], dict[str, list[str]]]:
     """Сбор по всем профилям. Третья карта — кто из профилей забрал вакансию.
 
-    Лимит действует на каждый профиль отдельно: он ограничивает обход hh.ru, а
-    обходов теперь столько же, сколько профилей. Одна и та же вакансия у двух
-    профилей остаётся одной записью — здесь же и склеивается.
+    Лимит действует на каждый профиль отдельно: он ограничивает, сколько
+    вакансий профиль забирает в прогон. Одна и та же вакансия у двух профилей
+    остаётся одной записью — она просто получает двух владельцев.
     """
-    from collector import collect
+    from collector import collect_plan
 
-    seen: dict[str, Vacancy] = {}
-    drafts: dict[str, Vacancy] = {}
-    owners: dict[str, list[str]] = {}
-    for loaded in bundle:
-        found, passed = collect(client, loaded.profile, limit, prefilter, conn=conn)
-        log.info(
-            "профиль %s: увидел %s, прошло предфильтр %s",
-            loaded.id,
-            len(found),
-            len(passed),
-        )
-        seen.update(found)
-        drafts.update(passed)
-        for key in passed:
-            owners.setdefault(key, []).append(loaded.id)
-    return seen, drafts, owners
+    if not bundle:
+        return {}, {}, {}
+    # Запросы всех профилей сведены в план: одинаковый запрос выполняется один
+    # раз, а его вакансии раздаются всем заказавшим профилям (query_plan).
+    return collect_plan(client, bundle, limit, prefilter, conn=conn)
 
 
 def score_all(

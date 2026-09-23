@@ -28,7 +28,7 @@ MAX_RESEARCH_WORKERS = 8  # выше — верный способ получи�
 
 def research_workers() -> int:
     """Сколько компаний изучается одновременно."""
-    raw = int(settings.as_float(settings.get("RESEARCH_WORKERS", "4"), 4.0))
+    raw = int(settings.as_float(settings.get("RESEARCH_WORKERS", "6"), 6.0))
     return max(1, min(MAX_RESEARCH_WORKERS, raw))
 
 
@@ -39,6 +39,7 @@ def _research_one(
     use_llm: bool,
     limit: int,
     force: bool = False,
+    budget: object | None = None,
 ) -> dossier.Dossier:
     """Работа одного потока: своё соединение, свой провайдер, свой шлюз.
 
@@ -55,7 +56,7 @@ def _research_one(
         provider = websearch.SearchProvider.from_env(conn, refresh=force)
         gateway: llm.Gateway | None = None
         if use_llm:
-            candidate = llm.Gateway.from_env(conn)
+            candidate = llm.Gateway.from_env(conn, budget=budget)
             gateway = candidate if candidate.enabled else None
         return dossier.build(
             company,
@@ -75,6 +76,7 @@ def research_companies(
     companies: dict[str, str | None],
     use_llm: bool,
     force: bool = False,
+    budget: object | None = None,
 ) -> dict[str, dossier.Dossier]:
     """Собирает досье на список компаний в несколько потоков.
 
@@ -112,7 +114,7 @@ def research_companies(
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="dossier") as pool:
         futures = {
             pool.submit(
-                _research_one, db_path, company, site_url, use_llm, 5, force
+                _research_one, db_path, company, site_url, use_llm, 5, force, budget
             ): company
             for company, site_url in todo.items()
         }

@@ -32,18 +32,21 @@ log = logging.getLogger("fuckhr")
 BATCH = 20  # вакансий в порции: меньше — чаще мелкие вызовы, больше — позже старт
 
 
-def _gateway(conn: Any, use_llm: bool) -> Any:
+def _gateway(conn: Any, use_llm: bool, budget: Any = None) -> Any:
     if not use_llm:
         return None
-    candidate = llm.Gateway.from_env(conn)
+    # Бюджет вызовов общий на прогон, шлюз — свой на поток (llm_budget).
+    candidate = llm.Gateway.from_env(conn, budget=budget)
     return candidate if candidate.enabled else None
 
 
-def _extract_batch(db_path: Path, use_llm: bool, vacancies: Sequence[Any]) -> dict[str, Any]:
+def _extract_batch(
+    db_path: Path, use_llm: bool, vacancies: Sequence[Any], budget: Any = None
+) -> dict[str, Any]:
     """Условия по порции вакансий: сначала спаны, модель — только остатку."""
     conn = db.connect(db_path)
     try:
-        gateway = _gateway(conn, use_llm)
+        gateway = _gateway(conn, use_llm, budget)
         out: dict[str, Any] = {}
         for vacancy in vacancies:
             items = extract_spans.conditions(vacancy.description)
@@ -52,14 +55,14 @@ def _extract_batch(db_path: Path, use_llm: bool, vacancies: Sequence[Any]) -> di
         rest = stage_gates.keep_for_stage(
             conn, gateway, "extract", [v for v in vacancies if v.key not in out]
         )
-        out.update(llm_batch.extract_all(db_path, rest))
+        out.update(llm_batch.extract_all(db_path, rest, budget=budget))
         return out
     finally:
         conn.close()
 
 
 def _claims_batch(
-    db_path: Path, use_llm: bool, pairs: Sequence[tuple[Any, Any]]
+    db_path: Path, use_llm: bool, pairs: Sequence[tuple[Any, Any]], budget: Any = None
 ) -> dict[str, Any]:
     """Утверждения по порции. Отчёт детектора возвращается и для отсеянных.
 
@@ -68,7 +71,7 @@ def _claims_batch(
     """
     conn = db.connect(db_path)
     try:
-        gateway = _gateway(conn, use_llm)
+        gateway = _gateway(conn, use_llm, budget)
         kept = {
             vacancy.key
             for vacancy in stage_gates.keep_for_stage(
@@ -76,7 +79,11 @@ def _claims_batch(
             )
         }
         out: dict[str, Any] = {vacancy.key: report for vacancy, report in pairs}
-        out.update(llm_batch.claims_all(db_path, [p for p in pairs if p[0].key in kept]))
+        out.update(
+            llm_batch.claims_all(
+                db_path, [p for p in pairs if p[0].key in kept], budget=budget
+            )
+        )
         return out
     finally:
         conn.close()
@@ -86,10 +93,16 @@ class Stages:
     """Этапы модели порциями в фоне. Пишет в базу главный поток при `collect`."""
 
     def __init__(
-        self, db_path: str | Path, use_llm: bool, size: int = BATCH, workers: int = 2
+        self,
+        db_path: str | Path,
+        use_llm: bool,
+        size: int = BATCH,
+        workers: int = 2,
+        budget: Any = None,
     ) -> None:
         self.db_path = Path(db_path)
         self.use_llm = use_llm
+        self.budget = budget
         self.size = max(1, size)
         self.pool = ThreadPoolExecutor(max_workers=max(1, workers), thread_name_prefix="stage")
         self._extract: list[Any] = []
@@ -113,7 +126,12 @@ class Stages:
             return
         self.batches += 1
         self._jobs.append(
-            ("extract", self.pool.submit(_extract_batch, self.db_path, self.use_llm, batch))
+            (
+                "extract",
+                self.pool.submit(
+                    _extract_batch, self.db_path, self.use_llm, batch, self.budget
+                ),
+            )
         )
 
     def _send_claims(self) -> None:
@@ -122,7 +140,12 @@ class Stages:
             return
         self.batches += 1
         self._jobs.append(
-            ("claims", self.pool.submit(_claims_batch, self.db_path, self.use_llm, batch))
+            (
+                "claims",
+                self.pool.submit(
+                    _claims_batch, self.db_path, self.use_llm, batch, self.budget
+                ),
+            )
         )
 
     def collect(self) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -147,13 +170,19 @@ class Research:
     """Досье на компании по мере их появления, а не одной пачкой в конце."""
 
     def __init__(
-        self, conn: Any, db_path: str | Path, use_llm: bool, force: bool = False
+        self,
+        conn: Any,
+        db_path: str | Path,
+        use_llm: bool,
+        force: bool = False,
+        budget: Any = None,
     ) -> None:
         dossier.ensure_schema(conn)
         self.conn = conn
         self.db_path = Path(db_path)
         self.use_llm = use_llm
         self.force = force
+        self.budget = budget
         self.pool = ThreadPoolExecutor(
             max_workers=research.research_workers(), thread_name_prefix="dossier"
         )
@@ -187,6 +216,7 @@ class Research:
             self.use_llm,
             5,
             self.force,
+            self.budget,
         )
         return True
 

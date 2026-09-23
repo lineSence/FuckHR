@@ -8,293 +8,54 @@ JSON состояния, потом обход в поисках объекто�
 затем резервный разбор разметки. При редизайне шанс выжить выше, а диагностика
 понятнее (probe_hh.py). Сломавшаяся страница падает в data/failures/: без неё
 починка парсера — гадание, hh.ru к следующему запуску отдаст другую вёрстку.
+
+Сам разбор живёт в `hh_parse.py`, здесь — клиент и его темп.
 """
 
 from __future__ import annotations
 
-import html as html_mod
-import json
 import logging
 import random
-import re
 import time
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterable, Iterator, Sequence
+from typing import Any, Callable, Iterator, Sequence
 
 import httpx
 
-from hh import Vacancy, normalize_published_at, strip_html
+import net_rate
+
+from hh import Vacancy
+from hh_parse import (  # noqa: F401 — публичные имена остаются у hh_html
+    BROWSER_HEADERS,
+    CAPTCHA_MARKERS,
+    CARD_LINK_RE,
+    FAILURE_DIR,
+    FAILURE_KEEP,
+    HOST,
+    MAX_RESULTS,
+    SEARCH_URL,
+    SECRET_RE,
+    SNIPPET_KEYS,
+    STATE_PATTERNS,
+    VACANCY_PREFIX,
+    BlockedError,
+    ExtractionError,
+    MissingPageError,
+    dump_failure,
+    extract_state,
+    find_vacancy_nodes,
+    node_to_vacancy,
+    first_of,
+    name_of,
+    parse_cards_fallback,
+    prune_failures,
+    scrub,
+)
 
 log = logging.getLogger(__name__)
 
-SEARCH_URL = "https://hh.ru/search/vacancy"
-VACANCY_PREFIX = "https://hh.ru/vacancy/"
-FAILURE_DIR = "data/failures"
-FAILURE_KEEP = 5
-
-# Обычные браузерные заголовки. Без Accept-Language hh.ru охотнее показывает капчу.
-BROWSER_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
-    ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
-    "Cache-Control": "no-cache",
-    "Upgrade-Insecure-Requests": "1",
-}
-
-STATE_PATTERNS = (
-    # Основной вариант hh.ru: состояние в <template id="HH-Lux-InitialState">.
-    re.compile(
-        r'<template[^>]+id="HH-Lux-InitialState"[^>]*>(?P<json>.*?)</template>',
-        re.DOTALL,
-    ),
-    re.compile(
-        r'<template[^>]+id="HH-Lux-(?:Redux-)?InitialState"[^>]*>(?P<json>.*?)</template>',
-        re.DOTALL,
-    ),
-    re.compile(r'window\.__INITIAL_STATE__\s*=\s*(?P<json>\{.*?\})\s*;?\s*</script>', re.DOTALL),
-    re.compile(r'id="__NEXT_DATA__"[^>]*>(?P<json>\{.*?\})</script>', re.DOTALL),
-)
-
-CAPTCHA_MARKERS = ("captcha", "подтвердите, что вы не робот", "вы не робот")
-
-# В сохраняемой странице могут оказаться сессионные токены. Файл лежит в data/
-# (она в .gitignore), но владелец может прислать его в issue — лучше вырезать сразу.
-SECRET_RE = re.compile(
-    r"(hhtoken|hhuid|_xsrf|xsrf|sessid|GMT|crypted_id)=([^;\"'\s<>]{6,})", re.IGNORECASE
-)
-
-
-# Ключи сниппета: длинные у hh.ru, короткие (req/resp/cond) у zarplata.ru на
-# том же движке. Без коротких описание внешней площадки терялось целиком, а
-# без описания вакансия не добирала до порога профиля.
-SNIPPET_KEYS = ("requirement", "responsibility", "text", "req", "resp", "cond")
-
-
-class BlockedError(RuntimeError):
-    """hh.ru показал капчу или забанил запросы."""
-
-
-class ExtractionError(RuntimeError):
-    """Страница пришла, но вакансии из неё достать не удалось."""
-
-
-class MissingPageError(RuntimeError):
-    """hh.ru ответил 404/410: страницы нет. За концом выдачи это норма."""
-
-
-def scrub(page: str, secrets: Iterable[str] = ()) -> str:
-    """Убирает из страницы наши cookie и похожие на токены значения."""
-    for secret in secrets:
-        if secret:
-            page = page.replace(secret, "***")
-    return SECRET_RE.sub(lambda m: f"{m.group(1)}=***", page)
-
-
-def prune_failures(directory: str | Path, keep: int = FAILURE_KEEP) -> list[Path]:
-    """Оставляет `keep` свежих дампов: страница hh.ru — это ~1 МБ."""
-    files = sorted(Path(directory).glob("*.html"))
-    removed: list[Path] = []
-    for path in files[: max(0, len(files) - keep)]:
-        try:
-            path.unlink()
-            removed.append(path)
-        except OSError:
-            log.debug("не смог удалить старый дамп %s", path)
-    return removed
-
-
-def dump_failure(
-    page: str,
-    reason: str,
-    directory: str | Path = FAILURE_DIR,
-    secrets: Iterable[str] = (),
-    keep: int = FAILURE_KEEP,
-) -> Path:
-    """Кладёт сырую страницу на диск и возвращает путь к файлу."""
-    directory = Path(directory)
-    directory.mkdir(parents=True, exist_ok=True)
-    slug = re.sub(r"[^a-z0-9]+", "-", reason.lower()).strip("-")[:40] or "failure"
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
-    path = directory / f"{stamp}-{slug}.html"
-    path.write_text(scrub(page, secrets), encoding="utf-8", errors="replace")
-    prune_failures(directory, keep)
-    return path
-
-
-def extract_state(page: str) -> dict[str, Any]:
-    """Вытаскивает JSON состояния страницы первым сработавшим способом."""
-    for index, pattern in enumerate(STATE_PATTERNS):
-        match = pattern.search(page)
-        if not match:
-            continue
-        raw = html_mod.unescape(match.group("json").strip())
-        try:
-            state = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            log.debug("стратегия %s нашла блок, но JSON не разобрался: %s", index, exc)
-            continue
-        if isinstance(state, dict):
-            log.debug(
-                "состояние извлечено стратегией %s, корневые ключи: %s", index, list(state)[:12]
-            )
-            return state
-    raise ExtractionError(
-        "не нашёл JSON состояния на странице; запусти probe_hh.py и пришли его вывод"
-    )
-
-
-def _looks_like_vacancy(node: dict[str, Any]) -> bool:
-    has_id = any(k in node for k in ("vacancyId", "id"))
-    has_name = isinstance(node.get("name"), str) and node["name"].strip() != ""
-    has_context = any(
-        k in node
-        for k in ("compensation", "salary", "company", "employer", "area", "links", "workSchedule")
-    )
-    return has_id and has_name and has_context
-
-
-def find_vacancy_nodes(state: Any, limit: int = 500) -> list[dict[str, Any]]:
-    """Обходит состояние в ширину и собирает всё, что похоже на вакансию.
-
-    К пути вида vacancySearchResult.vacancies не привязываемся: hh.ru
-    переименовывал эти ключи не раз.
-    """
-    found: dict[str, dict[str, Any]] = {}
-    queue: list[Any] = [state]
-    seen = 0
-    while queue and len(found) < limit:
-        node = queue.pop(0)
-        seen += 1
-        if seen > 200_000:
-            break
-        if isinstance(node, dict):
-            if _looks_like_vacancy(node):
-                key = str(node.get("vacancyId") or node.get("id"))
-                found.setdefault(key, node)
-            else:
-                queue.extend(node.values())
-        elif isinstance(node, list):
-            queue.extend(node)
-    return list(found.values())
-
-
-def _first(node: dict[str, Any], *keys: str) -> Any:
-    for key in keys:
-        value = node.get(key)
-        if value not in (None, "", [], {}):
-            return value
-    return None
-
-
-def _name_of(value: Any) -> str | None:
-    """Поле может быть строкой, либо словарём с name/title/$."""
-    if value is None:
-        return None
-    if isinstance(value, str):
-        return value
-    if isinstance(value, dict):
-        for key in ("name", "title", "text", "$", "trl"):
-            if isinstance(value.get(key), str):
-                return value[key]
-    return None
-
-
-def node_to_vacancy(node: dict[str, Any]) -> Vacancy:
-    """Приводит сырой узел страницы к той же модели Vacancy, что была у API."""
-    vacancy_id = str(_first(node, "vacancyId", "id") or "")
-    compensation = _first(node, "compensation", "salary", "salaryRange") or {}
-    if not isinstance(compensation, dict):
-        compensation = {}
-    company = _first(node, "company", "employer") or {}
-    if not isinstance(company, dict):
-        company = {"name": _name_of(company)}
-    links = node.get("links") if isinstance(node.get("links"), dict) else {}
-
-    url = (
-        _first(node, "alternateUrl", "alternate_url", "url")
-        or (links.get("desktop") if isinstance(links, dict) else None)
-        or VACANCY_PREFIX + str(vacancy_id)
-    )
-    if isinstance(url, str) and url.startswith("/"):
-        url = "https://hh.ru" + url
-
-    snippet_parts: list[str] = []
-    snippet = node.get("snippet")
-    if isinstance(snippet, dict):
-        snippet_parts += [strip_html(snippet.get(part)) for part in SNIPPET_KEYS]
-    for key in ("workExperienceText", "description", "descriptionText"):
-        if isinstance(node.get(key), str):
-            snippet_parts.append(strip_html(node[key]))
-    for key in ("keySkills", "key_skills", "skills"):
-        raw_skills = node.get(key)
-        if isinstance(raw_skills, dict):
-            raw_skills = raw_skills.get("keySkill") or raw_skills.get("items")
-        if isinstance(raw_skills, list):
-            skills = [s for s in (_name_of(item) for item in raw_skills) if s]
-            break
-    else:
-        skills = []
-
-    gross = compensation.get("gross")
-    currency = _first(compensation, "currencyCode", "currency", "code")
-
-    # Дата публикации приходит в десятке форматов — нормализация живёт в hh.py.
-    published_raw = _first(
-        node,
-        "publicationTime",
-        "publicationDate",
-        "creationTime",
-        "publishedAt",
-        "published_at",
-        "publicationTimeText",
-    )
-
-    return Vacancy(
-        source="hh.ru",
-        external_id=vacancy_id,
-        url=url,
-        title=_name_of(node.get("name")) or "",
-        company=_name_of(company.get("name")) or _name_of(company),
-        company_id=str(company["id"]) if company.get("id") else None,
-        area=_name_of(_first(node, "area", "region", "city")),
-        salary_from=_first(compensation, "from", "salaryFrom"),
-        salary_to=_first(compensation, "to", "salaryTo"),
-        currency=_name_of(currency),
-        gross=bool(gross) if gross is not None else None,
-        schedule=_name_of(_first(node, "workSchedule", "schedule", "workFormat")),
-        experience=_name_of(_first(node, "workExperience", "experience")),
-        employment=_name_of(_first(node, "employment", "employmentForm")),
-        skills=skills,
-        description=" ".join(p for p in snippet_parts if p).strip(),
-        published_at=normalize_published_at(published_raw),
-    )
-
-
-CARD_LINK_RE = re.compile(r'href="(https://[^"]*?/vacancy/(\d+)[^"]*)"[^>]*>(?P<title>[^<]{3,200})<')
-
-
-def parse_cards_fallback(page: str) -> list[Vacancy]:
-    """Грубый резерв: только ссылка и заголовок из разметки.
-
-    Скоринг без вилки будет бедным, но прогон не умрёт: детали доберутся
-    потом со страницы вакансии.
-    """
-    out: dict[str, Vacancy] = {}
-    for match in CARD_LINK_RE.finditer(page):
-        url, vacancy_id, title = match.group(1), match.group(2), match.group("title")
-        title = html_mod.unescape(title).strip()
-        if vacancy_id in out or not title:
-            continue
-        out[vacancy_id] = Vacancy(external_id=vacancy_id, url=url.split("?")[0], title=title)
-    return list(out.values())
-
-
 class HHHtmlClient:
-    """Один поток, паузы с дрожанием, свой backoff. Скромность дешевле бана.
+    """Клиент hh.ru: темп держит общий бакет, поэтому потоков может быть много.
 
     Клиент считает признаки нездоровья (pages_fetched, fallback_pages,
     empty_pages, blocked, failures) — по ним прогон решает, писать ли
@@ -310,13 +71,18 @@ class HHHtmlClient:
         proxy: str | None = None,
         failure_dir: str | Path | None = FAILURE_DIR,
         cache: Any | None = None,
+        bucket: "net_rate.Bucket | None" = None,
     ) -> None:
         # Пауза адаптивная: HH_PAUSE — верхняя граница и точка возврата. На
         # чистых ответах она снижается до HH_PAUSE_MIN, на 403/429/капче
-        # возвращается к максимуму.
+        # возвращается к максимуму. Хранит её общий на процесс бакет
+        # (net_rate): темп считается на хост, а не на клиента, поэтому
+        # карточки можно качать пулом, не ускоряя обращения к hh.ru.
         self.pause_max = max(0.0, float(pause))
         self.pause_min = max(0.0, min(float(pause_min), self.pause_max))
-        self.pause = self.pause_max
+        self.bucket = bucket if bucket is not None else net_rate.bucket(
+            HOST, self.pause_max, self.pause_min
+        )
         self.failure_dir = failure_dir
         self.pages_fetched = 0
         self.fallback_pages = 0
@@ -330,6 +96,9 @@ class HHHtmlClient:
         # «вакансии кончились» от «упёрлись в свой потолок».
         self.exhausted = False
         self.blocked = False
+        # Сколько секунд простояли в очереди к hh.ru: по этому числу видно,
+        # держит ли темп бакет или запросы и так редкие.
+        self.waited = 0.0
         self.failures: list[str] = []
         self._cookie = cookie
         headers = dict(BROWSER_HEADERS)
@@ -365,16 +134,23 @@ class HHHtmlClient:
     def close(self) -> None:
         self._client.close()
 
-    def _sleep(self) -> None:
-        time.sleep(self.pause + random.uniform(0, 1.0))
+    @property
+    def pause(self) -> float:
+        """Текущий интервал между запросами. Живёт в бакете хоста."""
+        return self.bucket.interval
+
+    def _wait_turn(self) -> None:
+        """Очередь к hh.ru. Ждём до запроса, а не после: иначе пауза одного
+        потока не перекрывается ожиданием ответа у другого."""
+        self.waited += self.bucket.take()
 
     def _ease(self) -> None:
         """Ответ чистый — идём чуть быстрее, но не быстрее нижней границы."""
-        self.pause = max(self.pause_min, self.pause * 0.85)
+        self.bucket.ease()
 
     def _back_off(self) -> None:
         """Ответ подозрительный — сразу к верхней границе, без полумер."""
-        self.pause = self.pause_max
+        self.bucket.back_off()
 
     def _dump(self, body: str, reason: str) -> None:
         """Сохраняет страницу для разбора. Ошибка записи не должна рвать прогон."""
@@ -396,6 +172,7 @@ class HHHtmlClient:
     def fetch(self, url: str, params: dict[str, Any] | None = None, attempts: int = 3) -> str:
         delay = 5.0
         for attempt in range(1, attempts + 1):
+            self._wait_turn()
             response = self._client.get(url, params=params)
             body = response.text
             lowered = body[:4000].lower()
@@ -424,7 +201,6 @@ class HHHtmlClient:
             response.raise_for_status()
             self.pages_fetched += 1
             self._ease()
-            self._sleep()
             return body
         raise RuntimeError("unreachable")
 
@@ -483,7 +259,7 @@ class HHHtmlClient:
                     break
                 try:
                     nodes = find_vacancy_nodes(extract_state(body))
-                    vacancies = [node_to_vacancy(n) for n in nodes if _first(n, "vacancyId", "id")]
+                    vacancies = [node_to_vacancy(n) for n in nodes if first_of(n, "vacancyId", "id")]
                 except ExtractionError as exc:
                     log.warning("JSON состояния не найден (%s), иду по разметке", exc)
                     self.fallback_pages += 1
@@ -509,6 +285,14 @@ class HHHtmlClient:
             if not fresh:
                 # hh.ru после последней страницы повторяет предыдущую.
                 log.info("выдача пошла по кругу на странице %s, дальше нечего брать", page)
+                self.exhausted = True
+                break
+            if (page + 1) * per_page >= MAX_RESULTS:
+                log.info(
+                    "страница %s — потолок выдачи hh.ru в %s результатов, дальше её нет",
+                    page,
+                    MAX_RESULTS,
+                )
                 self.exhausted = True
                 break
             if known_page is not None and known_page(vacancies):
@@ -543,7 +327,7 @@ class HHHtmlClient:
         nodes = find_vacancy_nodes(state)
         best: dict[str, Any] = {}
         for node in nodes:
-            if str(_first(node, "vacancyId", "id")) == str(vacancy_id):
+            if str(first_of(node, "vacancyId", "id")) == str(vacancy_id):
                 best = node
                 break
         if not best and nodes:
@@ -557,19 +341,19 @@ class HHHtmlClient:
                 break
 
         skills: list[str] = []
-        raw_skills = _first(best, "keySkills", "key_skills", "skills")
+        raw_skills = first_of(best, "keySkills", "key_skills", "skills")
         if isinstance(raw_skills, dict):
             raw_skills = raw_skills.get("keySkill") or raw_skills.get("items")
         if isinstance(raw_skills, list):
-            skills = [s for s in (_name_of(item) for item in raw_skills) if s]
+            skills = [s for s in (name_of(item) for item in raw_skills) if s]
 
         return {
             "description": description,
             "key_skills": [{"name": s} for s in skills],
             "address": geo.from_state(state, vacancy_id),
-            "schedule": {"name": _name_of(_first(best, "workSchedule", "schedule"))},
-            "employer": {"name": _name_of(_first(best, "company", "employer"))},
-            "published_at": _first(
+            "schedule": {"name": name_of(first_of(best, "workSchedule", "schedule"))},
+            "employer": {"name": name_of(first_of(best, "company", "employer"))},
+            "published_at": first_of(
                 best, "publicationTime", "publicationDate", "creationTime", "publishedAt"
             ),
         }

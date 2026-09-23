@@ -55,6 +55,7 @@ import detector
 import dossier_store
 import llm
 import llm_tasks
+import outreach_scan
 import resume
 import settings
 import websearch
@@ -208,53 +209,55 @@ def find_contacts(
     return discovery, list(hits)
 
 
+def _skip_reason(conn: sqlite3.Connection, row: sqlite3.Row) -> str | None:
+    """Повод не искать контакты по вакансии (или None, если искать стоит)."""
+    reason = precondition(conn, row)
+    if reason:
+        log.debug("%s: контакты не ищем — %s", row["key"], reason)
+    return reason
+
+
 def collect_contacts(
     conn: sqlite3.Connection,
     rows: Sequence[sqlite3.Row],
     provider: websearch.SearchProvider,
     check_mx: bool = False,
+    db_path: str | Path | None = None,
 ) -> int:
     """Этап discovery в общем прогоне: найти каналы и сложить их в базу.
 
     Письма здесь не готовятся: письмо — решение владельца ([OUT-006]), а
     наличие контакта — такой же факт о вакансии, как скор или HR-флаги, и
     собирать его отдельным запуском незачем.
+
+    Внешний поиск — один раз на компанию, а не на вакансию: страницы команды и
+    контактов у трёх вакансий одного работодателя одни и те же. Сами компании
+    расходятся по потокам (`outreach_scan`), в базу пишет главный поток.
     """
     if not rows:
         return 0
-    found = 0
-    # Внешний поиск — один раз на компанию, а не на вакансию: страницы команды и
-    # контактов у трёх вакансий одного работодателя одни и те же, а роль берётся
-    # по самой интересной из них. Раньше это были три набора запросов и три
-    # промаха кэша.
-    by_company: dict[str, list[websearch.Hit]] = {}
-    for row in rows:
-        name = (row["company"] or "").strip()
-        if name and name not in by_company:
-            best = max(
-                (r for r in rows if (r["company"] or "").strip() == name),
-                key=lambda r: r["score"] if "score" in r.keys() and r["score"] is not None else 0,
-            )
-            by_company[name] = company_hits(provider, name, best["title"])
+    todo = [row for row in rows if not _skip_reason(conn, row)]
+    if not todo:
+        return 0
+    by_company: dict[str, list[sqlite3.Row]] = {}
+    for row in todo:
+        by_company.setdefault((row["company"] or "").strip(), []).append(row)
 
-    for position, row in enumerate(rows, start=1):
-        reason = precondition(conn, row)
-        if reason:
-            log.debug("%s: контакты не ищем — %s", row["key"], reason)
+    if db_path is None:
+        # Без пути к базе потоки завести нечем: провайдер и его кэш привязаны
+        # к соединению вызывающего, а делить соединение между потоками нельзя.
+        found_by_key = outreach_scan.discover_here(conn, by_company, provider, check_mx)
+    else:
+        found_by_key = outreach_scan.discover_all(db_path, by_company, check_mx=check_mx)
+
+    found = 0
+    for row in todo:
+        discovery = found_by_key.get(row["key"])
+        if discovery is None:
             continue
-        shared = by_company.get((row["company"] or "").strip())
-        discovery, _ = find_contacts(conn, row, provider, check_mx=check_mx, hits=shared)
         contact_finds.save(conn, discovery)
         if discovery.candidates:
             found += 1
-        # Счётчик в квадратных скобках — по нему интерфейс рисует полоску.
-        log.info(
-            "[%s/%s] контакты: %s — %s",
-            position,
-            len(rows),
-            row["company"] or "компания не указана",
-            f"каналов {len(discovery.candidates)}" if discovery.candidates else "ничего",
-        )
     return found
 
 

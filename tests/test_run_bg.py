@@ -26,7 +26,7 @@ def vacancy(number: int) -> Vacancy:
 def test_порции_уходят_в_фон_по_мере_набора(monkeypatch) -> None:
     sent: list[int] = []
 
-    def fake_batch(db_path, use_llm, vacancies):
+    def fake_batch(db_path, use_llm, vacancies, budget=None):
         sent.append(len(vacancies))
         return {v.key: ["условие"] for v in vacancies}
 
@@ -42,7 +42,7 @@ def test_порции_уходят_в_фон_по_мере_набора(monkeypa
 
 
 def test_сбой_порции_не_роняет_прогон(monkeypatch) -> None:
-    def broken(db_path, use_llm, vacancies):
+    def broken(db_path, use_llm, vacancies, budget=None):
         raise RuntimeError("шлюз молчит")
 
     monkeypatch.setattr(run_bg, "_extract_batch", broken)
@@ -57,7 +57,7 @@ def test_досье_ставится_в_очередь_один_раз_и_сох
     db.init_schema(conn)
     asked: list[str] = []
 
-    def fake_one(db_path, company, site_url, use_llm, limit, force=False):
+    def fake_one(db_path, company, site_url, use_llm, limit, force=False, budget=None):
         asked.append(company)
         return dossier.Dossier(company=company, risk=dossier.RISK_UNKNOWN)
 

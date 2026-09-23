@@ -57,6 +57,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable, Sequence
 
 import injection
+import net_rate
 import reviewsites
 
 log = logging.getLogger(__name__)
@@ -381,6 +382,12 @@ class PageFetcher:
     def _http_get(self, url: str) -> str:
         import httpx
 
+        # Темп держит бакет хоста, а не сон после запроса: страницы отзывов
+        # качают несколько потоков (REVIEW_FETCH_WORKERS) и несколько досье
+        # сразу (RESEARCH_WORKERS), и раньше каждый ждал сам за себя
+        # (docs/performance.md).
+        if self.pause:
+            net_rate.bucket(net_rate.host_of(url), self.pause).take()
         response = httpx.get(
             url,
             headers=BROWSER_HEADERS,
@@ -434,8 +441,6 @@ class PageFetcher:
         self._follow(url)
         self._dump(url, text)
         self._cache_put(url, text)
-        if self.pause and self.transport is None:
-            time.sleep(self.pause)
         return text
 
     def _follow(self, url: str) -> None:
@@ -456,8 +461,6 @@ class PageFetcher:
             if self.usage.fetched >= self.max_pages:
                 log.info("потолок страниц не даёт листать дальше: %s", page)
                 return
-            if self.pause and self.transport is None:
-                time.sleep(self.pause)
             try:
                 raw = (self.transport or self._http_get)(page)
             except Exception as exc:  # noqa: BLE001 — [CORE-017]
