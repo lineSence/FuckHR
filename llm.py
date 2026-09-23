@@ -86,6 +86,7 @@ from llm_profiles import (  # noqa: F401 — публичные имена ос�
 )
 import llm_cache
 from llm_cache import CACHE_SCHEMA, ensure_cache  # noqa: F401 — публичные имена остаются в llm
+from llm_budget import Budget, Usage  # noqa: F401 — Usage остаётся публичным именем llm
 from llm_cascade import Dropped, Route, build_chain, parse_models
 from llm_http import (  # noqa: F401 — публичные имена остаются в llm
     MAX_ERROR_CHARS,
@@ -99,13 +100,6 @@ from llm_http import (  # noqa: F401 — публичные имена оста�
 log = logging.getLogger(__name__)
 
 
-@dataclass
-class Usage:
-    calls: int = 0
-    cached: int = 0
-    failures: int = 0
-    skipped: int = 0
-    degraded: int = 0
 
 
 def _env_map(names: dict[str, str]) -> dict[str, str]:
@@ -138,6 +132,7 @@ class Gateway:
         personal_via_proxy: bool = False,
         local_models: dict[str, str] | None = None,
         local_stage_models: dict[str, str] | None = None,
+        budget: Budget | None = None,
     ) -> None:
         self.base_url = (base_url or "").rstrip("/")
         self.api_key = api_key
@@ -150,19 +145,33 @@ class Gateway:
         self.stage_cascades = {k: list(v) for k, v in (stage_cascades or {}).items()}
         self.personal_via_proxy = bool(personal_via_proxy)
         self.timeout = timeout
-        self.max_calls = max_calls
         self.backoff = tuple(backoff)
-        self.usage = Usage()
         self._transport = transport
         self.conn = conn
-        # Кандидаты, выбывшие до конца прогона: отказ по сути запроса (400/404)
-        # и исчерпанная квота (429). Подробности — llm_cascade.Dropped.
-        self._dropped = Dropped()
+        # Счётчик вызовов, потолок и кандидаты, выбывшие до конца прогона
+        # (400/404 — отказ по сути запроса, 429 — кончилась квота), живут в
+        # общем бюджете: шлюз создаётся на каждую вакансию, а прогон один
+        # (ADR-022, docs/performance.md).
+        self.budget = budget if budget is not None else Budget(max_calls)
         if conn is not None:
             ensure_cache(conn)
 
+    @property
+    def usage(self) -> Usage:
+        return self.budget.usage
+
+    @property
+    def max_calls(self) -> int:
+        return self.budget.max_calls
+
+    @property
+    def _dropped(self) -> Dropped:
+        return self.budget.dropped
+
     @classmethod
-    def from_env(cls, conn: sqlite3.Connection | None = None) -> "Gateway":
+    def from_env(
+        cls, conn: sqlite3.Connection | None = None, budget: Budget | None = None
+    ) -> "Gateway":
         cascades = {}
         for stage, name in STAGE_MODELS_ENV.items():
             chain = parse_models(os.getenv(name))
@@ -183,6 +192,7 @@ class Gateway:
             stage_cascades=cascades,
             personal_via_proxy=(os.getenv("LLM_PERSONAL_VIA_PROXY", "") or "").strip()
             in {"1", "true", "yes", "on"},
+            budget=budget,
         )
 
     @property
@@ -359,7 +369,7 @@ class Gateway:
         profile = profile_for(stage)
         chain = self.cascade_for(stage)
         if not chain:
-            self.usage.skipped += 1
+            self.budget.note("skipped")
             log.debug("этап %s пропущен: %s", stage, self.disabled_reason)
             return None
 
@@ -372,12 +382,12 @@ class Gateway:
         for digest in digests:
             cached = self._cache_get(digest)
             if cached is not None:
-                self.usage.cached += 1
+                self.budget.note("cached")
                 return cached
 
-        if self.usage.calls >= self.max_calls:
+        if self.budget.spent:
             # Лимит «умного» профиля — 100–300 вызовов в сутки [LLM-004].
-            self.usage.skipped += 1
+            self.budget.note("skipped")
             log.warning("бюджет вызовов исчерпан (%s), этап %s пропущен", self.max_calls, stage)
             return None
 
@@ -389,7 +399,7 @@ class Gateway:
             if position:
                 # Ответ пришёл не от лучшей модели: это деградация качества,
                 # и она должна быть видна, а не выглядеть обычным прогоном.
-                self.usage.degraded += 1
+                self.budget.note("degraded")
                 log.warning(
                     "этап %s сделан кандидатом %s из %s (%s/%s)",
                     stage,
@@ -419,12 +429,12 @@ class Gateway:
         """
         tries = self.backoff if last else self.backoff[:1]
         for attempt, pause in enumerate(tries, start=1):
-            if self.usage.calls >= self.max_calls:
-                return None
             # Считаются попытки, а не успехи: каскад из трёх кандидатов на
             # упавшем провайдере — это три реальных похода в сеть, и бюджет
-            # обязан их видеть [LLM-004].
-            self.usage.calls += 1
+            # обязан их видеть [LLM-004]. Взятие атомарно: потоки llm_batch
+            # проверяют потолок одновременно.
+            if not self.budget.take():
+                return None
             try:
                 if self._transport is not None:
                     return self._transport(profile, messages, temperature)
@@ -445,7 +455,7 @@ class Gateway:
                 if out:
                     # 400/404 — отказ по сути запроса, 429 — кончилась квота.
                     # И то и другое внутри прогона не меняется [ADR-022].
-                    self.usage.failures += 1
+                    self.budget.note("failures")
                     self._dropped.add(route.name, route.model, str(exc))
                     if getattr(exc, "status", 0) != 429:
                         env_name = (
@@ -463,7 +473,7 @@ class Gateway:
                         )
                     return None
                 if attempt == len(tries):
-                    self.usage.failures += 1
+                    self.budget.note("failures")
                     return None
                 time.sleep(pause)
         return None
@@ -492,6 +502,7 @@ __all__ = (
     "Route",
     "SMART",
     "STAGE_PROFILES",
+    "Budget",
     "Usage",
     "build_chain",
     "ensure_cache",

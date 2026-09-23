@@ -56,6 +56,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable, Sequence
 
 import contacts_rules
+import net_rate
+import settings
 
 log = logging.getLogger(__name__)
 
@@ -474,6 +476,11 @@ class SearchProvider:
     def _http_call(self, query: str, limit: int) -> list[Hit]:
         import httpx
 
+        # Темп к поиску держит общий бакет: запросы идут из нескольких потоков
+        # (SEARCH_WORKERS) и из нескольких досье сразу (RESEARCH_WORKERS),
+        # поэтому рост числа потоков не должен превращаться в рост частоты
+        # обращений (docs/performance.md).
+        self._wait_turn()
         if self.provider == SEARXNG:
             return self._searxng_call(query, limit)
 
@@ -550,6 +557,14 @@ class SearchProvider:
 
     def _http_call_adapter(self, provider: str, query: str, limit: int) -> list[Hit]:
         return self._http_call(query, limit)
+
+    def _wait_turn(self) -> None:
+        """Очередь к поиску. Ключ — хост инстанса или имя провайдера."""
+        pause = settings.as_float(settings.get("SEARCH_PAUSE", "0.5"), 0.5)
+        if pause <= 0:
+            return
+        key = net_rate.host_of(self.base_url) if getattr(self, "base_url", "") else self.provider
+        net_rate.bucket("search:{}".format(key), pause).take()
 
     def search_many(self, queries: Sequence[str], limit: int = 5) -> list[Hit]:
         """Объединяет результаты по нескольким запросам, убирая дубли по URL.

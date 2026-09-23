@@ -34,10 +34,13 @@ def llm_workers() -> int:
     return max(1, min(MAX_LLM_WORKERS, raw))
 
 
-def _with_gateway(db_path: Path, work) -> Any:
+def _with_gateway(db_path: Path, work, budget: Any = None) -> Any:
     conn = db.connect(db_path)
     try:
-        gateway = llm.Gateway.from_env(conn)
+        # Шлюз на поток свой (соединение sqlite не делится), а бюджет вызовов
+        # общий на прогон: иначе LLM_MAX_CALLS считался бы на вакансию, а
+        # выбывшая по 429 модель воскресала бы на следующей (ADR-022).
+        gateway = llm.Gateway.from_env(conn, budget=budget)
         if not gateway.enabled:
             return None
         return work(gateway)
@@ -46,7 +49,10 @@ def _with_gateway(db_path: Path, work) -> Any:
 
 
 def extract_all(
-    db_path: Path, vacancies: Sequence[Any], workers: int | None = None
+    db_path: Path,
+    vacancies: Sequence[Any],
+    workers: int | None = None,
+    budget: Any = None,
 ) -> dict[str, Any]:
     """Этап extract по списку вакансий. Ключ вакансии → разобранные условия."""
     return _fan_out(
@@ -55,11 +61,15 @@ def extract_all(
         lambda gateway, vacancy: llm_tasks.extract_conditions(gateway, vacancy.description),
         workers,
         "условия",
+        budget,
     )
 
 
 def claims_all(
-    db_path: Path, reports: Sequence[tuple[Any, Any]], workers: int | None = None
+    db_path: Path,
+    reports: Sequence[tuple[Any, Any]],
+    workers: int | None = None,
+    budget: Any = None,
 ) -> dict[str, Any]:
     """Этап hr_filter: отчёт детектора дополняется утверждениями из текста."""
     pairs = {vacancy.key: (vacancy, report) for vacancy, report in reports}
@@ -69,11 +79,17 @@ def claims_all(
         lambda gateway, pair: detector_llm.with_llm_claims(pair[1], pair[0], gateway),
         workers,
         "утверждения",
+        budget,
     )
 
 
 def _fan_out(
-    db_path: Path, items: dict[str, Any], work, workers: int | None, what: str
+    db_path: Path,
+    items: dict[str, Any],
+    work,
+    workers: int | None,
+    what: str,
+    budget: Any = None,
 ) -> dict[str, Any]:
     if not items:
         return {}
@@ -83,7 +99,9 @@ def _fan_out(
     done = 0
     with ThreadPoolExecutor(max_workers=size, thread_name_prefix="llm") as pool:
         futures = {
-            pool.submit(_with_gateway, db_path, lambda gw, it=item: work(gw, it)): key
+            pool.submit(
+                _with_gateway, db_path, lambda gw, it=item: work(gw, it), budget
+            ): key
             for key, item in items.items()
         }
         for future in as_completed(futures):

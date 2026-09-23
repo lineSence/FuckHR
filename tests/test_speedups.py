@@ -144,14 +144,24 @@ def test_пауза_снижается_на_чистых_ответах() -> Non
 # --- 2. Контакты ищутся один раз на компанию ---
 
 
-def test_контакты_ищутся_один_раз_на_компанию(conn) -> None:
+def test_контакты_ищутся_один_раз_на_компанию(conn, monkeypatch) -> None:
     import contact_finds
     import contacts
     import outreach
     from tests.test_outreach import _row
 
+    import dossier
+    import dossier_store
+
     contacts.ensure_schema(conn)
     contact_finds.ensure_schema(conn)
+    # Досье — предусловие этапа: без него контакты не ищутся вовсе, и запросов
+    # к поиску не будет ни одного.
+    dossier_store.ensure_schema(conn)
+    # Детектор — второе предусловие; здесь он не предмет проверки.
+    monkeypatch.setenv("DETECTOR_ENABLED", "0")
+    for name in ("АКМЕ", "БЕТА"):
+        dossier_store.store(conn, dossier.Dossier(company=name, risk=dossier.RISK_GREEN))
     queries: list[str] = []
 
     def transport(provider: str, query: str, limit: int):
@@ -185,7 +195,11 @@ def test_этапы_модели_идут_пулом(tmp_path, monkeypatch) -> N
     class FakeGateway:
         enabled = True
 
-    monkeypatch.setattr(llm.Gateway, "from_env", classmethod(lambda cls, conn: FakeGateway()))
+    monkeypatch.setattr(
+        llm.Gateway,
+        "from_env",
+        classmethod(lambda cls, conn, budget=None: FakeGateway()),
+    )
 
     def fake_extract(gateway, description):
         import threading

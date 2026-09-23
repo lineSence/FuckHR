@@ -75,6 +75,7 @@ import run_bg
 import run_cards
 import run_loop
 import embeddings_tasks
+import run_details
 from run_setup import build_gateway, notify_if_broken, setup_logging
 from research import (  # noqa: F401 — реэкспорт для старых вызовов
     MAX_RESEARCH_WORKERS,
@@ -173,8 +174,11 @@ def run_once(args: argparse.Namespace) -> int:
     details_delta = hh_pages.details_delta()
     # Этапы модели и досье считаются в фоне, пока главный поток ждёт паузы
     # hh.ru на карточках вакансий (run_bg).
-    stages = run_bg.Stages(db_path, options.use_llm)
-    research_job = run_bg.Research(conn, db_path, options.use_llm)
+    # Бюджет вызовов модели один на прогон: фоновые потоки открывают свои
+    # шлюзы, но считают в общий счётчик (llm_budget, ADR-022).
+    budget = gateway.budget if gateway is not None else None
+    stages = run_bg.Stages(db_path, options.use_llm, budget=budget)
+    research_job = run_bg.Research(conn, db_path, options.use_llm, budget=budget)
     empty_descriptions = 0
     blocked = False
     with_details = options.details
@@ -201,6 +205,9 @@ def run_once(args: argparse.Namespace) -> int:
     # остаётся одной записью — площадка уходит в vacancy_sources, а этапы
     # модели платятся один раз [CORE-016].
     extra_job = sources.start_external(bundle, options.limit, prefilter)
+    # Пул карточек создаётся до try: его закрывает finally, и он не должен
+    # оказаться неопределённым, если сбор упадёт раньше.
+    details = run_details.Details(client)
     try:
         if hh_on:
             seen, drafts, owners = profiles.collect_all(
@@ -237,6 +244,19 @@ def run_once(args: argparse.Namespace) -> int:
         total = len(drafts)
         geo.ensure_schema(conn)  # колонки адреса: один раз, не в цикле
         source_store.ensure_schema(conn)
+        # План карточек: пока главный поток скорит первую вакансию, пул уже
+        # качает следующие. Темп к hh.ru держит бакет (net_rate), поэтому
+        # потоки его не ускоряют (docs/performance.md).
+        cached_details, skipped_details = run_details.plan(
+            conn,
+            drafts.values(),
+            details,
+            bundle,
+            owners,
+            prefilter.fuzzy,
+            details_delta,
+            with_details,
+        )
         for position, draft in enumerate(drafts.values(), start=1):
             # Счётчик в квадратных скобках — то, по чему интерфейс рисует полоску.
             log.info("[%s/%s] %s — %s", position, total, draft.title, draft.company)
@@ -245,16 +265,14 @@ def run_once(args: argparse.Namespace) -> int:
             # Описание из базы вместо второго похода на hh.ru: на повторном
             # прогоне именно эти запросы съедали почти всё время. Дата публикации
             # сменилась — объявление перепубликовали, описание качаем заново.
-            cached = db.cached_details(conn, draft.key) if with_details else None
-            if cached and (not draft.published_at or cached[2] == draft.published_at):
+            cached = cached_details.get(draft.key)
+            if cached is not None:
                 text, skills, _published = cached
                 vacancy = draft.model_copy(update={"description": text, "skills": skills})
                 reused_details += 1
-            elif with_details and hh_pages.worth_details(
-                draft, bundle, owners.get(draft.key), prefilter.fuzzy, details_delta
-            ):
-                try:
-                    detail = client.vacancy(draft.external_id)
+            else:
+                detail = details.get(draft.key)
+                if detail is not None:
                     vacancy = enrich(draft, detail)
                     enriched += 1
                     # Точка приехала с той же страницей: запишем, когда
@@ -262,15 +280,10 @@ def run_once(args: argparse.Namespace) -> int:
                     point = geo.point_of(detail)
                     if not vacancy.description.strip():
                         empty_descriptions += 1
-                except BlockedError:
+                elif details.blocked and not blocked:
                     # Дальше ходить бессмысленно: сохраняем то, что уже собрали.
-                    log.error("hh.ru закрылся капчей на деталях, добирать остальное не будем")
                     blocked = True
                     with_details = False
-                except Exception:  # noqa: BLE001 — вакансия могла быть уже закрыта
-                    log.warning("нет деталей по %s, берём черновик", draft.external_id)
-            elif with_details and draft.source == sources.SOURCE_HH:
-                skipped_details += 1
             # Спрятанная в тексте инструкция для ИИ — поступок работодателя,
             # а не техническая помеха (ADR-020). Запоминаем до скоринга: улика
             # нужна оценке компании и строке карточки.
@@ -367,6 +380,15 @@ def run_once(args: argparse.Namespace) -> int:
         blocked = True
         log.error("%s", exc)
     finally:
+        details.close()
+        # getattr: у поддельных клиентов в тестах очереди нет.
+        waited = getattr(client, "waited", 0.0)
+        if waited:
+            log.info(
+                "в очереди к hh.ru простояли %.0f с при темпе не чаще %.1f запросов в минуту",
+                waited,
+                client.bucket.rate_per_minute(),
+            )
         client.close()
 
     if reused_details:
@@ -440,6 +462,7 @@ def run_once(args: argparse.Namespace) -> int:
             contact_targets,
             provider,
             check_mx=settings.outreach_options().check_mx,
+            db_path=db_path,
         )
         direct, scanned = contact_finds.coverage(conn)
         log.info(
