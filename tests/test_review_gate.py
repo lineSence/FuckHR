@@ -187,3 +187,17 @@ def test_выключенный_этап_не_зовёт_даже_гейт(monke
     monkeypatch.setattr(review_scoring.review_gate, "decide", упало)
     assert review_scoring.gated_ads(None, None, [], {}) == set()
     assert review_scoring.gated_ai(None, None, {0: "текст"}, {}) == set()
+
+
+def test_экономия_считает_решённое_и_ошибки():
+    оценки = [0.95, 0.9, 0.5, 0.05, 0.1, 0.9]
+    метки = [1, 1, 1, 0, 0, 0]
+    итог = train.yield_of(оценки, метки, low=0.2, high=0.8)
+    # Решено: три «да» (одно зря) и два «нет», середина 0.5 ушла бы в шлюз.
+    assert итог["решено_да"] == 3 and итог["решено_нет"] == 2
+    assert итог["решено_без_модели"] == 5 and итог["неверно"] == 1
+    assert итог["доля"] == round(5 / 6, 3)
+
+
+def test_без_порогов_экономию_не_обещают():
+    assert train.yield_of([0.5], [1], None, 0.8) == {}
