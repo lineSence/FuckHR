@@ -196,3 +196,20 @@ def test_карточка_отдаёт_график_и_опыт() -> None:
 
     assert card["schedule"]["name"].startswith("Гибрид")
     assert card["experience"]["name"] == "От 1 года до 3 лет"
+
+
+def test_ключ_с_решёткой_читается_как_обычный() -> None:
+    """В состоянии hh.ru график лежит под именем `@workSchedule`.
+
+    Пометка `@` — внутренняя, поле то же самое. Пока разбор о ней не знал,
+    `vacancies.schedule` был пуст у всех вакансий hh.ru и zarplata.ru.
+    """
+    node = {k: v for k, v in NODE.items() if k != "workSchedule"}
+    node["@workSchedule"] = {"id": "remote"}
+    node["employmentForm"] = {"id": "FULL"}
+
+    vacancy = hh_html.node_to_vacancy(node)
+
+    # Идентификатор разворачивается в название: скоринг ищет удалёнку по-русски.
+    assert vacancy.schedule == "Удалённая работа"
+    assert vacancy.employment == "Полная занятость"

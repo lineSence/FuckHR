@@ -63,7 +63,16 @@ def main() -> int:
     nodes = hh_html.find_vacancy_nodes(state)
     print(f"найдено узлов, похожих на вакансию: {len(nodes)}")
     if nodes:
-        print("ключи первого узла:", sorted(nodes[0])[:40])
+        # Без среза: в прошлый раз обрезанный список ключей спрятал ответ —
+        # график лежал под именем «@workSchedule» в самом начале сортировки.
+        print("ключи первого узла:", sorted(nodes[0]))
+        print("поля условий в узле:")
+        for key in ("workFormat", "workSchedule", "schedule", "workScheduleByDays",
+                    "workingHours", "employment", "employmentForm", "workExperience",
+                    "experience", "keySkills"):
+            raw = hh_html.first_of(nodes[0], key)
+            if raw is not None:
+                print("  {:<20} {}".format(key, json.dumps(raw, ensure_ascii=False)[:120]))
         Path("data/probe_node.json").write_text(
             json.dumps(nodes[0], ensure_ascii=False, indent=2), encoding="utf-8"
         )
@@ -72,7 +81,9 @@ def main() -> int:
             vacancy = hh_html.node_to_vacancy(node)
             print(
                 f"  {vacancy.external_id} | {vacancy.title} | {vacancy.company} | "
-                f"{vacancy.salary_from}-{vacancy.salary_to} {vacancy.currency} | {vacancy.url}"
+                f"{vacancy.salary_from}-{vacancy.salary_to} {vacancy.currency} | "
+                f"график: {vacancy.schedule} | занятость: {vacancy.employment} | "
+                f"опыт: {vacancy.experience}"
             )
     return 0
 
