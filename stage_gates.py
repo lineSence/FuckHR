@@ -50,9 +50,19 @@ STAGE_OUTCOME = {
         "SELECT 1 FROM vacancy_signals WHERE key = ? AND payload LIKE '%llm_claim%' LIMIT 1"
     ),
 }
-# Ключи с отчётом этапа: по ним видно, что этап вообще отрабатывал.
+# Ключи, на которых этап мог отработать. Это не то же, что «дал результат»:
+# источник обязан быть другой таблицей, иначе отрицательных примеров не
+# существует физически и обучать гейт пустоты не на чем.
+#
+# Для `extract` это вакансии со скачанным описанием: без описания этап не
+# запускается вовсе, а с описанием — запускается и может вернуть пусто.
+# Оговорка: вакансия, скачанная при выключенном этапе, попадёт в отрицательные
+# зря. Лечится прогоном с включённым этапом, а не запросом.
 STAGE_SEEN = {
-    "extract": "SELECT DISTINCT key FROM vacancy_conditions",
+    "extract": (
+        "SELECT key FROM vacancies WHERE description IS NOT NULL"
+        " AND TRIM(description) <> ''"
+    ),
     "hr_filter": "SELECT key FROM vacancy_signals",
 }
 

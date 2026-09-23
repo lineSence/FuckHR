@@ -86,6 +86,7 @@ def evaluate(
         "этап": stage,
         "модель": model,
         "обучающих": len(train_rows),
+        "обучающих_продуктивных": sum(1 for _, goal in train_rows if goal >= 0.5),
         "отложенных": len(test_rows),
         "без_вектора": missing,
     }
@@ -117,10 +118,20 @@ def evaluate(
             },
         }
     )
-    if positives < FEW or positives == len(labels):
+    # Вырожденная разметка — главная ловушка этого гейта: если «этап
+    # отрабатывал» и «этап дал результат» читаются из одной таблицы, все
+    # примеры окажутся продуктивными, а AUROC будет пустым.
+    if positives == len(labels) or positives == 0:
         out["итог"] = (
-            "продуктивных {} из {}: замер ни о чём не говорит, нужен прогон "
-            "с включённым этапом".format(positives, len(labels))
+            "продуктивных {} из {}: одного класса нет вовсе, мерить нечего. "
+            "Проверь источник меток и прогони этап на большем числе "
+            "вакансий".format(positives, len(labels))
+        )
+    elif positives < FEW:
+        out["итог"] = (
+            "продуктивных {} из {}: мало для вывода, нужен ещё прогон".format(
+                positives, len(labels)
+            )
         )
     if save:
         review_gate_store.save(
@@ -144,18 +155,19 @@ def skipped(scores: Sequence[float], labels: Sequence[int], low: float | None) -
 
 
 def render(report: Sequence[dict]) -> str:
-    head = "{:<12}{:>7}{:>7}{:>7}{:>7}{:>8}".format(
-        "этап", "обуч", "отлож", "продукт", "AUROC", "порог"
+    head = "{:<12}{:>14}{:>14}{:>7}{:>8}".format(
+        "этап", "обуч (прод)", "отлож (прод)", "AUROC", "порог"
     )
     lines = [head, "-" * len(head)]
     for part in report:
         auc = part.get("auroc")
         lines.append(
-            "{:<12}{:>7}{:>7}{:>7}{:>7}{:>8}".format(
+            "{:<12}{:>14}{:>14}{:>7}{:>8}".format(
                 part["этап"],
-                part.get("обучающих", 0),
-                part.get("отложенных", 0),
-                part.get("продуктивных", 0),
+                "{} ({})".format(
+                    part.get("обучающих", 0), part.get("обучающих_продуктивных", 0)
+                ),
+                "{} ({})".format(part.get("отложенных", 0), part.get("продуктивных", 0)),
                 "—" if auc is None else "{:.3f}".format(auc),
                 part.get("low") if part.get("low") is not None else "—",
             )
