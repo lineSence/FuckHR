@@ -119,4 +119,5 @@ hh.ru (HTML поиска, ADR-015) + SuperJob, Работа России, Zarpla
 - [`docs/targets.md`](./docs/targets.md) — цели: изучить выбранную компанию целиком
 - [`docs/performance.md`](./docs/performance.md) — где прогон теряет время (аудит, B-15)
 - [`docs/crawling.md`](./docs/crawling.md) — сбор из сети: фетчер против кроулера, robots.txt, чего нет
+- [`docs/spinoffs.md`](./docs/spinoffs.md) — что можно собрать из кусков проекта
 - [`docs/contributing.md`](./docs/contributing.md) — как вести код и документацию
