@@ -180,11 +180,42 @@ def find_vacancy_nodes(state: Any, limit: int = 500) -> list[dict[str, Any]]:
 
 
 def first_of(node: dict[str, Any], *keys: str) -> Any:
+    """Первое непустое значение. Ключ проверяется и с решёткой перед ним.
+
+    В состоянии страницы часть полей лежит под именем с `@`: `@workSchedule`,
+    `@responseLetterRequired`. Это внутренняя пометка hh.ru, а не другое поле,
+    и знать о ней должен один этот хелпер, а не каждое место разбора.
+    """
     for key in keys:
-        value = node.get(key)
-        if value not in (None, "", [], {}):
-            return value
+        for name in (key, "@" + key) if not key.startswith("@") else (key,):
+            value = node.get(name)
+            if value not in (None, "", [], {}):
+                return value
     return None
+
+
+# Идентификаторы графика и занятости hh.ru. Если в состоянии лежит id, а не
+# название, показывать владельцу «fullDay» нельзя, а скоринг ищет в этой строке
+# признак удалёнки по-русски [CORE-015].
+HH_NAMES = {
+    "fullDay": "Полный день",
+    "shift": "Сменный график",
+    "flexible": "Гибкий график",
+    "remote": "Удалённая работа",
+    "flyInFlyOut": "Вахтовый метод",
+    "REMOTE": "Удалённая работа",
+    "HYBRID": "Гибрид",
+    "ON_SITE": "На месте работодателя",
+    "FIELD_WORK": "Разъездная работа",
+    "full": "Полная занятость",
+    "part": "Частичная занятость",
+    "project": "Проектная работа",
+    "volunteer": "Волонтёрство",
+    "probation": "Стажировка",
+    "FULL": "Полная занятость",
+    "PART": "Частичная занятость",
+    "PROJECT": "Проектная работа",
+}
 
 
 def name_of(value: Any) -> str | None:
@@ -199,11 +230,13 @@ def name_of(value: Any) -> str | None:
     if value is None:
         return None
     if isinstance(value, str):
-        return value
+        return HH_NAMES.get(value, value)
     if isinstance(value, dict):
         for key in ("name", "title", "text", "$", "trl"):
             if isinstance(value.get(key), str):
-                return value[key]
+                return HH_NAMES.get(value[key], value[key])
+        if isinstance(value.get("id"), str):
+            return HH_NAMES.get(value["id"], value["id"])
         return None
     if isinstance(value, (list, tuple)):
         parts: list[str] = []
@@ -231,7 +264,7 @@ SCHEDULE_KEYS = (
 def schedule_of(node: dict[str, Any]) -> str | None:
     parts: list[str] = []
     for key in SCHEDULE_KEYS:
-        part = name_of(node.get(key))
+        part = name_of(first_of(node, key))
         if part and part not in parts:
             parts.append(part)
     return ", ".join(parts) or None
