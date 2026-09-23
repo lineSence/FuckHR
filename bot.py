@@ -59,6 +59,23 @@ def proxy_url() -> str | None:
     return None
 
 
+def _salary_line(row: sqlite3.Row) -> str:
+    """«Деньги: от 200 000 ₽» — то, что источник прислал числом."""
+    try:
+        low, high = row["salary_from"], row["salary_to"]
+    except (IndexError, KeyError):
+        return ""
+    if not low and not high:
+        return ""
+    currency = str(row["currency"] or "RUR").upper()
+    sign = "₽" if currency in {"RUR", "RUB"} else html.escape(currency)
+    if low and high:
+        body = "{:,}–{:,}".format(int(low), int(high)).replace(",", " ")
+    else:
+        body = "{}{:,}".format("от " if low else "до ", int(low or high)).replace(",", " ")
+    return "Деньги: {} {}".format(body, sign)
+
+
 def format_card(
     row: sqlite3.Row,
     republished: int = 1,
@@ -80,6 +97,13 @@ def format_card(
     ]
     if row["experience"]:
         lines.append(f"Опыт: {EXPERIENCE_RU.get(row['experience'], row['experience'])}")
+    # График и вилка приходят полями источника и заполнены почти везде. Раньше
+    # их спрашивали у модели и в карточку всё равно не клали.
+    money = _salary_line(row)
+    if money:
+        lines.append(money)
+    if row["schedule"]:
+        lines.append(f"График: {html.escape(str(row['schedule']))}")
     if reasons:
         lines.append("За что: " + html.escape("; ".join(reasons)))
     if republished > 1:

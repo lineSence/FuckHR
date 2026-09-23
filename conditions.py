@@ -30,7 +30,15 @@ CREATE INDEX IF NOT EXISTS idx_conditions_key ON vacancy_conditions(key);
 """
 
 # Порядок полей в карточке: сначала то, из-за чего отказываются от вакансии.
+# Список полный: в базе лежат строки прошлых прогонов, и показывать их надо.
 FIELD_ORDER = ("format", "office", "schedule", "salary", "grade", "stack", "process", "other")
+
+# Что спрашиваем у модели. График, вилку и опыт источник присылает полями API
+# (`vacancies.schedule`, `salary_from/to`, `experience`) — они заполнены у 96%
+# вакансий, и вызов за ними лишний [CORE-016]. Замер: модель в поле «деньги»
+# пишет не вилку, а рекламу («стабильный доход» при 80–110 тысяч в источнике),
+# 7 совпадений против 42 расхождений (docs/performance.md).
+MODEL_FIELDS = ("format", "office", "stack", "process", "other")
 
 FIELD_LABELS = {
     "format": "формат",
@@ -105,6 +113,7 @@ def coverage(conn: sqlite3.Connection) -> tuple[int, int]:
 __all__ = (
     "FIELD_LABELS",
     "FIELD_ORDER",
+    "MODEL_FIELDS",
     "SCHEMA",
     "coverage",
     "ensure_schema",
