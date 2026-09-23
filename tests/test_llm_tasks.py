@@ -11,6 +11,7 @@ from __future__ import annotations
 import sqlite3
 from typing import Sequence
 
+import conditions
 import llm
 import llm_cache
 import llm_tasks
@@ -157,6 +158,26 @@ def test_условия_без_цитаты_в_тексте_отбрасываю
     # Второе условие модель выдумала целиком — его быть не должно.
     assert [c.field for c in got] == ["format"]
     assert got[0].value == "гибрид 2 дня"
+
+
+def test_поле_которого_не_просили_уходит_в_прочее() -> None:
+    """График и деньги теперь берутся из полей источника.
+
+    Модель про это не знает и иногда присылает их всё равно. Строку не
+    выбрасываем: «стабильный доход» вместо цифры — находка для детектора,
+    просто не условие работы.
+    """
+    answer = """
+    {"conditions": [
+      {"field": "salary", "value": "стабильный доход", "quote": "стабильный доход и премии"}
+    ]}
+    """
+    text = DESCRIPTION + " Обещаем стабильный доход и премии."
+
+    got = llm_tasks.extract_conditions(FakeGateway(answer), text)
+
+    assert [c.field for c in got] == ["other"]
+    assert "salary" not in conditions.MODEL_FIELDS
 
 
 def test_условия_без_модели_это_пустота() -> None:

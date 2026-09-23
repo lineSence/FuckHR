@@ -31,6 +31,7 @@ import re
 from dataclasses import dataclass, replace
 from typing import Any, Sequence
 
+import conditions
 import injection
 
 log = logging.getLogger(__name__)
@@ -121,7 +122,7 @@ def extract_conditions(
 
     prompt = (
         "Ты разбираешь описание вакансии. Выпиши условия работы.\n"
-        "Поля field: format, office, schedule, salary, grade, stack, process, other.\n"
+        "Поля field: " + ", ".join(conditions.MODEL_FIELDS) + ".\n"
         "Правила:\n"
         "- quote копируй из текста дословно;\n"
         "- не выдумывай то, чего в тексте нет;\n"
@@ -153,6 +154,12 @@ def extract_conditions(
         quote = str(item.get("quote") or "").strip()
         value = str(item.get("value") or "").strip()
         field = str(item.get("field") or "other").strip() or "other"
+        # Поле не из списка — молча в «прочее»: модель всё равно иногда
+        # присылает график и деньги, а они теперь берутся из полей источника.
+        # Выбрасывать строку жалко: «стабильный доход» вместо цифры — находка,
+        # просто не условие работы.
+        if strict and field not in conditions.MODEL_FIELDS:
+            field = "other"
         if not value or len(quote) < 6 or _normalize(quote) not in haystack:
             log.info("условие без цитаты в тексте, отброшено: %r", value[:60])
             continue
