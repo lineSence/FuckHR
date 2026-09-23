@@ -129,6 +129,7 @@ dossier.build(company)
 | `bench.py`, `bench_cases.py`, `bench_hard.py`, `bench_metrics.py`, `ui_bench.py` | сравнение моделей: базовые и сложные кейсы, веса уровней, отдельные колонки (`docs/model-bench.md`) |
 | `dataset_core.py`, `dataset_export.py`, `ui_dataset.py` | датасет для дообучения: перехватчик шлюза, примеры из своей базы, кнопка сборки (`docs/dataset.md`) |
 | `stage_gates.py`, `extract_spans.py` | гейты перед этапами модели и разметка условий спанами (`docs/gates.md`) |
+| `laya_judge.py`, `laya_bench.py` | необязательный решатель Laya на этапах review_fake и ai_text и его сравнение с текущей моделью (`docs/laya.md`) |
 | `bot.py` | карточки и тревоги в Telegram: выключатель отправки, темп, тихие часы |
 | `canary.py` | тревога, когда прогон сломался, с суточным cooldown |
 | `maintenance.py` | очистка кэшей и данных по целям, с отметкой необратимых |
