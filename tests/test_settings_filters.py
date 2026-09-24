@@ -113,3 +113,28 @@ def test_потолок_не_гадает_без_слов_запроса(make_va
     profile = score.Profile(min_score=60.0, weights={"skills": 0, "title": 50, "salary": 30})
     blank = make_vacancy(title="Что угодно", skills=[], description="")
     assert score.ceiling(blank, profile) >= 60.0
+
+
+def test_потолок_работает_и_на_внешних_площадках(make_vacancy, monkeypatch) -> None:
+    """Чужой поиск отдаёт мусор охотнее hh.ru — там потолок и нужнее."""
+    import sources
+
+    profile = score.Profile(
+        title="фотограф",
+        queries=[{"text": "Фотограф"}],
+        min_score=60.0,
+        weights={"skills": 0, "nice_to_have": 0, "remote": 0, "title": 50, "salary": 30,
+                 "experience": 20, "market": 0},
+    )
+    good = make_vacancy(external_id="1", title="Фотограф в океанариум", skills=[], description="")
+    hopeless = make_vacancy(
+        external_id="2", title="Агент по недвижимости", skills=[], description=""
+    )
+    monkeypatch.setattr(sources, "_search", lambda *a, **k: iter((good, hopeless)))
+    site = sources.BY_CODE["trudvsem"]
+
+    _, owners, _, found = sources._collect_site(
+        site, [profile], 0, settings.PrefilterOptions(enabled=True, min_score=0.0, fuzzy=88)
+    )
+    assert found == 2
+    assert [key.split(":")[-1] for key in owners] == [good.key.split(":")[-1]]
