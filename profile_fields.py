@@ -25,6 +25,7 @@ EXPERIENCE: tuple[tuple[str, str], ...] = (
 # Критерии скоринга: ключ в weights и подпись.
 WEIGHTS: tuple[tuple[str, str], ...] = (
     ("skills", "навыки"),
+    ("title", "название"),
     ("salary", "зарплата"),
     ("nice_to_have", "желательные"),
     ("remote", "удалёнка"),
@@ -34,6 +35,8 @@ WEIGHTS: tuple[tuple[str, str], ...] = (
 
 WEIGHT_HINTS: dict[str, str] = {
     "skills": "Совпадение с обязательными навыками.",
+    "title": "Слово из запроса в названии вакансии. Без этого «Юрист» из выдачи "
+    "по «Ревизору» стоит столько же, сколько настоящий ревизор.",
     "salary": "Насколько вилка выше твоего минимума.",
     "nice_to_have": "Совпадение с желательными навыками.",
     "remote": "Удалённый или гибридный формат.",
@@ -166,9 +169,15 @@ def importance_from_weights(weights: Mapping[str, Any]) -> dict[str, int]:
     него. Точность здесь неважна: первое же сохранение запишет явные значения.
     """
     values: dict[str, float] = {}
+    missing: set[str] = set()
     for key, _ in WEIGHTS:
+        if key not in weights:
+            # Критерий появился позже профиля. Ноль тут означал бы «владелец
+            # выключил», а он про него просто не знал: ставим «важно».
+            missing.add(key)
+            continue
         try:
-            values[key] = float(weights.get(key, 0) or 0)
+            values[key] = float(weights.get(key) or 0)
         except (TypeError, ValueError):
             values[key] = 0.0
     top = max(values.values()) if values else 0.0
@@ -180,6 +189,8 @@ def importance_from_weights(weights: Mapping[str, Any]) -> dict[str, int]:
             out[key] = 0
             continue
         out[key] = max(1, int(round(MAX_IMPORTANCE * value / top)))
+    for key in missing:
+        out[key] = 3
     return out
 
 
