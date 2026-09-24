@@ -54,6 +54,7 @@ import conditions
 import contact_finds
 import db
 import detector
+import detector_llm
 import dossier
 import geo
 import hh_pages
@@ -354,7 +355,8 @@ def run_once(args: argparse.Namespace) -> int:
             # Порог пройдён — компания идёт в очередь на изучение. Сам поиск идёт
             # после обхода hh.ru: мешать его с постраничным сбором — значит сбить
             # паузы и приблизить капчу.
-            if profiles.passed(bundle, matches) and vacancy.company:
+            passed = profiles.passed(bundle, matches)
+            if passed and vacancy.company:
                 site_url = getattr(vacancy, "site_url", None)
                 if vacancy.company not in to_research:
                     to_research[vacancy.company] = site_url
@@ -370,7 +372,7 @@ def run_once(args: argparse.Namespace) -> int:
             # текущий прогон, и вывод не отстаёт от карточки на один запуск.
             if detector_opts.enabled:
                 report = detector.assess(vacancy, detector.history(conn, vacancy.key))
-                if gateway is not None and detector_opts.use_llm_claims:
+                if detector_llm.wanted(gateway, detector_opts.use_llm_claims, passed):
                     # Этап hr_filter: модель только отмечает утверждения, вердикт у всех
                     # таких пунктов — «недостаточно данных» (detector_llm.with_llm_claims).
                     stages.claim(vacancy, report)
