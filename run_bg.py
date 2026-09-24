@@ -20,6 +20,7 @@ from typing import Any, Sequence
 
 import db
 import dossier
+import extract_gate
 import extract_spans
 import llm
 import llm_batch
@@ -53,7 +54,10 @@ def _extract_batch(
             if items:
                 out[vacancy.key] = items
         rest = stage_gates.keep_for_stage(
-            conn, gateway, "extract", [v for v in vacancies if v.key not in out]
+            conn,
+            gateway,
+            "extract",
+            extract_gate.keep([v for v in vacancies if v.key not in out]),
         )
         out.update(llm_batch.extract_all(db_path, rest, budget=budget))
         return out
