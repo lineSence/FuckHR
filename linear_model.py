@@ -124,16 +124,35 @@ def choose(scores: Sequence[float], labels: Sequence[int]) -> tuple[float | None
     return low, high
 
 
-def decision(scores: Sequence[float], labels: Sequence[int]) -> tuple[float | None, dict]:
-    """Порог для работы совсем без модели: лучшая F-мера на сетке.
+# Точность вдвое важнее полноты: пометить живой отзыв генерацией хуже, чем
+# не заметить один сгенерированный. Отсюда F-бета с бетой 0.5, а не F1.
+BETA = 0.5
+# Ниже этой точности решатель не включается вовсе: сигнал, который ошибается
+# чаще чем в трети случаев, засоряет счёт компании, а не помогает [CORE-019].
+MIN_PRECISION = 0.65
+
+
+def decision(
+    scores: Sequence[float],
+    labels: Sequence[int],
+    beta: float = BETA,
+    min_precision: float = MIN_PRECISION,
+) -> tuple[float | None, dict]:
+    """Порог для работы совсем без модели: лучшая F-бета на сетке.
 
     Гейт требует нуля ложных и потому в перекрытии классов не решает ничего.
-    Решателю ноль ложных не нужен: его ответ весит один балл в счёте компании,
-    и цена ошибки — та же, что у любого другого детерминированного сигнала
-    [CORE-019]. Поэтому порог выбирается по балансу точности и полноты, а
-    рядом возвращаются обе, чтобы решение принималось по числам.
+    Решателю ноль ложных не нужен: его ответ весит один балл в счёте компании
+    и не выносит вердикт [CORE-019]. Но и равнять точность с полнотой нельзя —
+    замер владельца показал, почему: по F1 выигрывал порог 0.2 с точностью
+    0.431, то есть каждый второй помеченный текст был живым. При бете 0.5
+    выигрывает порог, где ошибается один из четырёх, ценой меньшей полноты.
+
+    Ниже `min_precision` пороги не рассматриваются вовсе. Нет ни одного
+    подходящего — возвращается None, и решатель не включается: лучше оставить
+    этап модели, чем поставить в счёт компании шумный сигнал [CORE-017].
     """
     best: tuple[float, float, dict] = (-1.0, 0.5, {})
+    factor = beta * beta
     for limit in GRID:
         hit = sum(1 for value, label in zip(scores, labels) if value >= limit and label)
         said = sum(1 for value in scores if value >= limit)
@@ -141,16 +160,22 @@ def decision(scores: Sequence[float], labels: Sequence[int]) -> tuple[float | No
         if not hit:
             continue
         precision = hit / said
+        if precision < min_precision:
+            continue
         recall = hit / real if real else 0.0
-        f1 = 2 * precision * recall / (precision + recall)
-        if f1 > best[0]:
+        score_beta = (
+            (1 + factor) * precision * recall / (factor * precision + recall)
+            if precision + recall
+            else 0.0
+        )
+        if score_beta > best[0]:
             best = (
-                f1,
+                score_beta,
                 limit,
                 {
                     "точность": round(precision, 3),
                     "полнота": round(recall, 3),
-                    "f1": round(f1, 3),
+                    "f_бета": round(score_beta, 3),
                     "ложных": said - hit,
                     "пропущено": real - hit,
                 },
@@ -182,6 +207,8 @@ def yield_of(
 
 
 __all__ = (
+    "BETA",
+    "MIN_PRECISION",
     "GRID",
     "auroc",
     "choose",

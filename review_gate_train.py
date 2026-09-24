@@ -245,13 +245,14 @@ def render(report: Sequence[dict]) -> str:
             lines.append("")
             lines.append(
                 "{}: без модели на пороге {} — точность {}, полнота {}, "
-                "ложных {}, пропущено {}".format(
+                "ложных {}, пропущено {} (порог по F-бете {})".format(
                     part["этап"],
                     part.get("порог_решателя"),
                     quality["точность"],
                     quality["полнота"],
                     quality["ложных"],
                     quality["пропущено"],
+                    linear_model.BETA,
                 )
             )
         if part.get("итог"):

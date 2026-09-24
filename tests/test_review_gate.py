@@ -274,3 +274,24 @@ def test_редкий_класс_выравнивается_обучением()
     plain = linear_model.train(rows, epochs=200)
     balanced = linear_model.train(rows, epochs=200, balance=True)
     assert linear_model.predict(*balanced, (1.0, 0.0)) > linear_model.predict(*plain, (1.0, 0.0))
+
+
+def test_порог_решателя_не_берётся_ниже_минимальной_точности() -> None:
+    """По F1 выигрывал порог с точностью 0.431 — каждый второй помеченный был
+    живым отзывом. Такой порог решателю не годится [CORE-019]."""
+    import linear_model
+
+    # Низкий порог ловит всё и ошибается вдвое; высокий — точен и скромен.
+    scores = [0.7] * 10 + [0.3] * 40 + [0.7] * 2 + [0.3] * 60
+    labels = [1] * 50 + [0] * 62
+    limit, quality = linear_model.decision(scores, labels)
+    assert limit == 0.35
+    assert quality["точность"] >= linear_model.MIN_PRECISION
+
+
+def test_без_годного_порога_решатель_не_включается() -> None:
+    import linear_model
+
+    scores = [0.6] * 10 + [0.6] * 90
+    labels = [1] * 10 + [0] * 90
+    assert linear_model.decision(scores, labels) == (None, {})
