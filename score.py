@@ -143,6 +143,22 @@ def _matches(term: str, haystack: str, fuzzy: int = FUZZY_THRESHOLD) -> bool:
     return fuzz.partial_ratio(term, haystack) >= fuzzy
 
 
+def query_words(profile: Profile) -> list[str]:
+    """Слова из запросов профиля и его названия — то, что владелец искал.
+
+    Скоринг раньше не смотрел на название вакансии вовсе: «Юрист», приехавший
+    из выдачи по запросу «Ревизор», набирал те же баллы, что настоящий ревизор.
+    Веса за это не было, потому что предполагалось, что выдача и так по делу, —
+    предположение оказалось неверным (B-27).
+    """
+    words: list[str] = []
+    for query in profile.queries:
+        words.extend(str(query.get("text") or "").lower().split())
+    words.extend(profile.title.lower().split())
+    # Короткие слова и предлоги только зашумляют: «по», «и», «на».
+    return sorted({word.strip("«»\"'(),.") for word in words if len(word.strip()) >= 4})
+
+
 def evaluate(
     vacancy: Any,
     profile: Profile,
@@ -236,8 +252,20 @@ def evaluate(
         line = getattr(market_marker, "line", None)
         reasons.append(line() if callable(line) else str(market_marker))
 
+    # 7. Название. Совпадение со словами запроса — самый прямой признак того,
+    #    что это вообще та работа, которую искали [CORE-015].
+    title_weight = profile.weight("title", 15)
+    wanted = query_words(profile)
+    title_low = normalize(vacancy.title or "")
+    title_hits = [word for word in wanted if _matches(word, title_low, fuzzy)]
+    title_points = float(title_weight) if title_hits else 0.0
+    if title_hits:
+        reasons.append("в названии: " + ", ".join(title_hits[:3]))
+    elif wanted:
+        reasons.append("в названии ничего из запроса")
+
     total = (
         salary_points + skills_points + bonus_points + remote_points + exp_points
-        + market_points
+        + market_points + title_points
     )
     return Verdict(round(min(total, 100.0), 1), reasons)

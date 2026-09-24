@@ -19,6 +19,7 @@ import pytest
 
 import db
 import filters
+import score
 import ui_filters
 import ui_views
 from hh import Vacancy
@@ -181,3 +182,34 @@ def test_поиск_по_русски_не_смотрит_на_регистр() 
     assert found({"area": "санкт-петербург"}) == 1
     # Процент остаётся буквой, а не джокером: экранирование не потерялось.
     assert found({"q": "%"}) == 0
+
+
+def test_название_из_запроса_поднимает_балл() -> None:
+    """«Юрист» из выдачи по «Ревизору» не должен стоить столько же, сколько ревизор."""
+    profile = score.Profile(
+        title="Ревизор", queries=[{"text": "Ревизор"}], min_salary_net=70000
+    )
+
+    class V:
+        def __init__(self, title: str) -> None:
+            self.title = title
+            self.description = "Инвентаризация в магазине"
+            self.skills: list[str] = []
+            self.schedule = ""
+            self.experience = ""
+
+        def monthly_salary_net(self) -> int:
+            return 90000
+
+    ours = score.evaluate(V("Счетчик-ревизор на инвентаризацию"), profile)
+    alien = score.evaluate(V("Повар горячего цеха"), profile)
+    assert ours.score - alien.score == 15.0
+    assert "в названии: ревизор" in ours.reasons
+    assert "в названии ничего из запроса" in alien.reasons
+
+
+def test_слова_запроса_берутся_из_запросов_и_названия_профиля() -> None:
+    profile = score.Profile(title="Ревизор", queries=[{"text": "Счётчик-ревизор по СПб"}])
+    assert "счётчик-ревизор" in score.query_words(profile)
+    # Короткие слова не берём: «по» нашлось бы в любом названии.
+    assert "по" not in score.query_words(profile)
