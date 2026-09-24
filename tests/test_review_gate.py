@@ -216,3 +216,25 @@ def test_без_оценок_гейта_порядок_отзывов_прежн
     import review_scoring
 
     assert review_scoring.by_doubt([3, 1, 2], {}) == [3, 1, 2]
+
+
+def test_у_ai_text_к_вектору_добавляются_приметы() -> None:
+    """Связка учится на векторе плюс стилометрия, и рантайм считает то же самое."""
+    import ai_text_rules
+    import review_gate
+
+    text = "Компания обеспечивает комфортную атмосферу. " * 6
+    base = [0.1, 0.2, 0.3]
+    grown = review_gate.augment("ai_text", base, text)
+    assert len(grown) == len(base) + len(ai_text_rules.FEATURE_NAMES)
+    assert tuple(grown[3:]) == ai_text_rules.features(text)
+    # Второй этап не трогается: там вектор как был.
+    assert review_gate.augment("review_fake", base, text) == base
+
+
+def test_веса_связки_лежат_под_своим_именем() -> None:
+    """Размерность другая, и старые веса к ней неприменимы [LLM-011]."""
+    import review_gate
+
+    assert review_gate.model_key("ai_text", "bge-m3") == "bge-m3+rules1"
+    assert review_gate.model_key("review_fake", "bge-m3") == "bge-m3"
