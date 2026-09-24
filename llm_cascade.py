@@ -95,6 +95,11 @@ class Dropped:
         return sorted(self._reasons.items())
 
 
+# Этап -> о каком наборе моделей уже предупреждали. Меняется набор — говорим
+# заново: это другое решение.
+_personal_said: dict[str, str] = {}
+
+
 def build_chain(
     stage: str,
     local: Route | None,
@@ -138,12 +143,17 @@ def build_chain(
             )
         proxies = []
     elif personal and proxies:
-        # Громко и каждый раз: такое решение должно быть видно в логе.
-        log.warning(
-            "этап %s с персональными данными уходит на внешний прокси (%s)",
-            stage,
-            ", ".join(route.model for route in proxies),
-        )
+        # Решение должно быть видно в логе, но один раз на этап за процесс:
+        # на каждый вызов это 130 строк предупреждений за прогон, и за ними
+        # перестают быть видны настоящие ошибки.
+        names = ", ".join(route.model for route in proxies)
+        if _personal_said.get(stage) != names:
+            _personal_said[stage] = names
+            log.warning(
+                "этап %s с персональными данными уходит на внешний прокси (%s)",
+                stage,
+                names,
+            )
 
     chain = list(proxies)
     if local is not None:

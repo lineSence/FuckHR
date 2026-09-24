@@ -422,7 +422,9 @@ class PageFetcher:
 
         if self.usage.fetched >= self.max_pages:
             self.usage.skipped += 1
-            log.warning("потолок страниц отзывов исчерпан (%s)", self.max_pages)
+            # Потолок — настройка, а не беда: страница не читается по нашему
+            # же решению. В счётчике usage.skipped это видно числом.
+            log.info("потолок страниц отзывов исчерпан (%s)", self.max_pages)
             return ""
 
         log.info("читаю отзывы: %s", url)
@@ -508,7 +510,9 @@ class PageFetcher:
                 plan.append(url)
             else:
                 self.usage.skipped += 1
-                log.warning("потолок страниц отзывов исчерпан (%s)", self.max_pages)
+                # Потолок — настройка, а не беда: страница не читается по нашему
+            # же решению. В счётчике usage.skipped это видно числом.
+            log.info("потолок страниц отзывов исчерпан (%s)", self.max_pages)
 
         if not plan:
             return out
