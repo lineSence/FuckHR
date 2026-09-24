@@ -25,6 +25,9 @@ class Usage:
     failures: int = 0
     skipped: int = 0
     degraded: int = 0
+    # Промахи кэша по причине: тот же вопрос другой моделью — и новый вопрос.
+    miss_model: int = 0
+    miss_new: int = 0
 
 
 class Budget:
@@ -50,7 +53,8 @@ class Budget:
             return self.usage.calls >= self.max_calls
 
     def note(self, field: str) -> None:
-        """+1 к счётчику `cached`, `failures`, `skipped` или `degraded`."""
+        """+1 к счётчику: `cached`, `failures`, `skipped`, `degraded`,
+        `miss_model` или `miss_new`."""
         with self._lock:
             setattr(self.usage, field, getattr(self.usage, field) + 1)
 

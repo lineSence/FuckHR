@@ -542,10 +542,14 @@ def run_once(args: argparse.Namespace) -> int:
         usage = gateway.usage
         with_conditions, vacancies_total = conditions.coverage(conn)
         log.info(
-            "модель: вызовов %s, из кэша %s, ошибок %s, пропущено %s; "
+            "модель: вызовов %s, из кэша %s (мимо кэша %s: новых вопросов %s, "
+            "смена модели %s), ошибок %s, пропущено %s; "
             "условия извлечены в этом прогоне для %s вакансий, всего в базе %s из %s",
             usage.calls,
             usage.cached,
+            usage.miss_model + usage.miss_new,
+            usage.miss_new,
+            usage.miss_model,
             usage.failures,
             usage.skipped,
             extracted,

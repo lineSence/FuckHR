@@ -352,8 +352,10 @@ class Gateway:
     def _cache_get(self, digest: str) -> str | None:
         return llm_cache.get(self.conn, digest)
 
-    def _cache_put(self, digest: str, stage: str, profile: str, response: str) -> None:
-        llm_cache.put(self.conn, digest, stage, profile, response)
+    def _cache_put(
+        self, digest: str, stage: str, profile: str, response: str, prompt: str = ""
+    ) -> None:
+        llm_cache.put(self.conn, digest, stage, profile, response, prompt)
 
     def _http_call(
         self, route: Route, messages: Sequence[dict[str, str]], temperature: float
@@ -385,6 +387,16 @@ class Gateway:
                 self.budget.note("cached")
                 return cached
 
+        # Промах промаху рознь. «Из кэша 0» после прогона со ста попаданиями
+        # обычно значит не поломку кэша, а смену модели: маршрут и модель
+        # входят в ключ. Причина считается здесь и попадает в сводку прогона.
+        prompt = llm_cache.prompt_digest(profile, messages, temperature)
+        self.budget.note(
+            "miss_model"
+            if llm_cache.miss_reason(self.conn, prompt) == "model"
+            else "miss_new"
+        )
+
         if self.budget.spent:
             # Лимит «умного» профиля — 100–300 вызовов в сутки [LLM-004].
             self.budget.note("skipped")
@@ -408,7 +420,7 @@ class Gateway:
                     route.name,
                     route.model,
                 )
-            self._cache_put(digests[position], stage, profile, text)
+            self._cache_put(digests[position], stage, profile, text, prompt)
             return text
         return None
 
