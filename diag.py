@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -37,6 +38,23 @@ MAX_TEXT = 200
 
 # Что вырезаем из окружения: подстрока в имени переменной.
 SECRET_PARTS = ("key", "token", "secret", "password", "cookie", "proxy", "dsn", "webhook")
+
+
+# Секрет в тексте ошибки: ключ в адресе, заголовок с токеном, длинная
+# «случайная» строка. Маскируется перед записью — файл прогона отдают целиком.
+SECRET_RE = re.compile(
+    r"(?i)(api[-_]?key|access[-_]?token|authorization|bearer|token|key)"
+    r"([\s:=\"']+)([^\s\"'&]{6,})"
+)
+LONG_TOKEN_RE = re.compile(r"\b[A-Za-z0-9_-]{24,}\b")
+
+
+def mask(text: object) -> str:
+    """Текст ошибки без секретов и без простыни: короткая строка для файла."""
+    raw = str(text or "")
+    raw = SECRET_RE.sub(lambda m: m.group(1) + m.group(2) + "…", raw)
+    raw = LONG_TOKEN_RE.sub("…", raw)
+    return raw[:MAX_TEXT]
 
 
 def _stamp() -> str:
@@ -100,6 +118,28 @@ def event(kind: str, **fields: Any) -> None:
     _current.event(kind, **fields)
 
 
+def model_skipped(stage: str, profile: str, why: str, **rest: Any) -> None:
+    """Этап не спросили: выключен или кончился бюджет."""
+    event("модель", этап=stage, профиль=profile, исход="пропущен", почему=mask(why), **rest)
+
+
+def model_failed(stage: str, profile: str, exc: object, **rest: Any) -> None:
+    """Неудачная попытка кандидата: реальный поход в сеть и строка бюджета.
+
+    Пишется на каждую попытку, а не на каскад: раньше в файле был только итог,
+    и «вызовов модели 128» не сходилось с числом событий.
+    """
+    event(
+        "модель",
+        этап=stage,
+        профиль=profile,
+        исход="ошибка",
+        статус=getattr(exc, "status", None),
+        ошибка=mask(exc),
+        **rest,
+    )
+
+
 def enabled() -> bool:
     return _current.enabled
 
@@ -156,6 +196,7 @@ def summary(path: Path) -> dict[str, Any]:
     rejects: dict[str, int] = {}
     scores: list[float] = []
     stages: dict[str, dict[str, int]] = {}
+    troubles: dict[str, int] = {}
     totals: dict[str, Any] = {}
     with path.open(encoding="utf-8") as handle:
         for line in handle:
@@ -183,6 +224,13 @@ def summary(path: Path) -> dict[str, Any]:
                 cell = stages.setdefault(str(row.get("этап")), {})
                 outcome = str(row.get("исход") or "?")
                 cell[outcome] = cell.get(outcome, 0) + 1
+                if outcome in ("ошибка", "пропущен"):
+                    why = "{} {}: {}".format(
+                        row.get("маршрут") or "-",
+                        row.get("модель") or "-",
+                        row.get("ошибка") or row.get("почему") or "без причины",
+                    )
+                    troubles[why] = troubles.get(why, 0) + 1
             elif kind == "итог":
                 totals = {k: v for k, v in row.items() if k not in ("t", "kind")}
     scores.sort()
@@ -200,6 +248,7 @@ def summary(path: Path) -> dict[str, Any]:
             "уникальных": len(set(scores)),
         },
         "модель": stages,
+        "сбои модели": dict(sorted(troubles.items(), key=lambda p: -p[1])[:10]),
         "итог": totals,
     }
 
@@ -228,6 +277,9 @@ __all__ = (
     "finish",
     "latest",
     "main",
+    "mask",
+    "model_failed",
+    "model_skipped",
     "safe_env",
     "start",
     "summary",

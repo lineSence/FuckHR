@@ -63,3 +63,28 @@ def test_потолок_событий_не_даёт_файлу_расти(tmp_p
     assert recorder.count == 3
     path = diag.finish()
     assert path is not None and path.read_text(encoding="utf-8").count("\n") == 3
+
+
+def test_ошибки_кандидатов_видны_и_без_ключей(tmp_path: Path) -> None:
+    """Неудачная попытка — это потраченный вызов, и он обязан быть в файле."""
+    diag.start("тест", directory=tmp_path)
+    diag.event(
+        "модель",
+        этап="dossier",
+        исход="ошибка",
+        маршрут="proxy",
+        модель="groq/qwen",
+        кандидат=1,
+        попытка=2,
+        статус=429,
+        ошибка=diag.mask("429 from https://api.groq.com/v1?api_key=sk-abcdef123456"),
+    )
+    diag.event("модель", этап="dossier", исход="ответ", маршрут="proxy", модель="groq/qwen")
+    path = diag.finish()
+    assert path is not None
+
+    body = path.read_text(encoding="utf-8")
+    assert "sk-abcdef123456" not in body
+    data = diag.summary(path)
+    assert data["модель"]["dossier"] == {"ошибка": 1, "ответ": 1}
+    assert list(data["сбои модели"])[0].startswith("proxy groq/qwen: 429")

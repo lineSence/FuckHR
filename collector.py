@@ -18,9 +18,20 @@ import settings
 from hh import Vacancy
 from hh_html import HHHtmlClient
 import query_plan
-from score import Profile, evaluate
+from score import Profile, ceiling, evaluate
 
 log = logging.getLogger("fuckhr")
+
+
+def _report_capped(capped: int) -> None:
+    """Строка про отсев по потолку. Молчит, когда отсекать было нечего."""
+    if not capped:
+        return
+    log.info(
+        "потолок отсёк %s: с таким названием порог профиля недостижим "
+        "при любом описании",
+        capped,
+    )
 
 
 def collect(
@@ -59,6 +70,7 @@ def collect(
     observations: list[market.Observation] = []
     seen: dict[str, Vacancy] = {}
     passed: dict[str, Vacancy] = {}
+    capped = 0
     stopped_by_limit = False
     queries = [q for q in profile.queries if q.get("text")]
     for index, query in enumerate(queries, start=1):
@@ -98,6 +110,17 @@ def collect(
                         prefilter.min_score,
                     )
                     continue
+                if prefilter.enabled:
+                    top = ceiling(draft, profile, prefilter.fuzzy)
+                    if top < profile.min_score:
+                        capped += 1
+                        log.debug(
+                            "отброшено на предфильтре: %s (потолок %.1f < порога %.1f)",
+                            draft.title,
+                            top,
+                            profile.min_score,
+                        )
+                        continue
                 passed.setdefault(draft.key, draft)
                 if limit and len(passed) >= limit:
                     stopped_by_limit = True
@@ -122,6 +145,7 @@ def collect(
             limit,
             len(seen),
         )
+    _report_capped(capped)
     if conn is not None and observations:
         # Наблюдения пишутся одним куском после обхода: держать транзакцию
         # открытой на всё время пауз hh.ru незачем.
@@ -156,6 +180,7 @@ def collect_plan(
     seen: dict[str, Vacancy] = {}
     passed: dict[str, Vacancy] = {}
     owners: dict[str, list[str]] = {}
+    capped = 0
     taken: dict[str, int] = {loaded.id: 0 for loaded in bundle}
 
     tasks = query_plan.build(bundle)
@@ -202,6 +227,19 @@ def collect_plan(
                             prefilter.min_score,
                         )
                         continue
+                    if prefilter.enabled:
+                        top = ceiling(draft, loaded.profile, prefilter.fuzzy)
+                        if top < loaded.profile.min_score:
+                            capped += 1
+                            log.debug(
+                                "профиль %s отбросил на предфильтре: %s "
+                                "(потолок %.1f < порога %.1f)",
+                                loaded.id,
+                                draft.title,
+                                top,
+                                loaded.profile.min_score,
+                            )
+                            continue
                     passed.setdefault(draft.key, draft)
                     owners.setdefault(draft.key, []).append(loaded.id)
                     taken[loaded.id] += 1
@@ -218,6 +256,7 @@ def collect_plan(
 
     for loaded in bundle:
         log.info("профиль %s: забрал %s вакансий", loaded.id, taken[loaded.id])
+    _report_capped(capped)
     if conn is not None and observations:
         market_store.record(conn, observations)
         log.info("зарплатных наблюдений записано: %s", len(observations))

@@ -159,6 +159,57 @@ def query_words(profile: Profile) -> list[str]:
     return sorted({word.strip("«»\"'(),.") for word in words if len(word.strip()) >= 4})
 
 
+# Вес каждого критерия и его значение по умолчанию — ровно те, что начисляет
+# `evaluate`. Список нужен потолку: считать максимум по весам, которых нет в
+# профиле, иначе нельзя.
+CRITERIA = (
+    ("salary", 20),
+    ("skills", 55),
+    ("nice_to_have", 10),
+    ("remote", 10),
+    ("experience", 5),
+    ("market", 0),
+    ("title", 15),
+)
+
+
+def ceiling(
+    vacancy: Any,
+    profile: Profile,
+    fuzzy: int = FUZZY_THRESHOLD,
+) -> float:
+    """Максимум, который вакансия сможет набрать, даже если дальше всё совпадёт.
+
+    Название вакансии известно уже на выдаче и больше не изменится: описание
+    добавит навыки, удалёнку и рынок, но не переименует «Агента по
+    недвижимости» в «Фотографа». Значит вес `title` либо начислится, либо не
+    начислится никогда, и это единственный критерий, чей исход на выдаче
+    окончателен.
+
+    Отсюда правило: если сумма остальных весов плюс уже решённый `title` ниже
+    порога профиля, вакансия не пройдёт ни при каком описании. Скачивать его и
+    гонять через модель — чистая трата вызовов [CORE-016]. Потолок ничего не
+    теряет: реальный балл не может его превысить.
+
+    Название пустое или в профиле нет слов запроса — считаем вес `title`
+    достижимым: гадать в минус нельзя, лучше лишняя вакансия, чем потерянная
+    [CORE-017].
+    """
+    total = 0.0
+    for name, default in CRITERIA:
+        weight = float(profile.weight(name, default))
+        if name != "title":
+            total += weight
+            continue
+        wanted = query_words(profile)
+        title_low = normalize(vacancy.title or "")
+        if not wanted or not title_low:
+            total += weight
+        elif any(_matches(word, title_low, fuzzy) for word in wanted):
+            total += weight
+    return round(min(total, 100.0), 1)
+
+
 def evaluate(
     vacancy: Any,
     profile: Profile,

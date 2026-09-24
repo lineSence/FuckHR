@@ -373,6 +373,7 @@ class Gateway:
         chain = self.cascade_for(stage)
         if not chain:
             self.budget.note("skipped")
+            diag.model_skipped(stage, profile, self.disabled_reason)
             log.debug("этап %s пропущен: %s", stage, self.disabled_reason)
             return None
 
@@ -402,12 +403,15 @@ class Gateway:
         if self.budget.spent:
             # Лимит «умного» профиля — 100–300 вызовов в сутки [LLM-004].
             self.budget.note("skipped")
+            diag.model_skipped(stage, profile, "бюджет вызовов исчерпан")
             log.warning("бюджет вызовов исчерпан (%s), этап %s пропущен", self.max_calls, stage)
             return None
 
         for position, route in enumerate(chain):
             last = position == len(chain) - 1
-            text = self._attempt(route, stage, profile, messages, temperature, last)
+            text = self._attempt(
+                route, stage, profile, messages, temperature, last, position + 1
+            )
             if text is None:
                 continue
             if position:
@@ -445,6 +449,7 @@ class Gateway:
         messages: Sequence[dict[str, str]],
         temperature: float,
         last: bool,
+        number: int = 1,
     ) -> str | None:
         """Один кандидат. None — не вышло, пора к следующему.
 
@@ -459,6 +464,14 @@ class Gateway:
             # обязан их видеть [LLM-004]. Взятие атомарно: потоки llm_batch
             # проверяют потолок одновременно.
             if not self.budget.take():
+                diag.model_skipped(
+                    stage,
+                    profile,
+                    "бюджет вызовов исчерпан",
+                    маршрут=route.name,
+                    модель=route.model,
+                    кандидат=number,
+                )
                 return None
             try:
                 if self._transport is not None:
@@ -467,6 +480,17 @@ class Gateway:
             except Exception as exc:  # noqa: BLE001 — модель не должна ронять прогон
                 out = isinstance(exc, ApiError) and (
                     not exc.retryable or exc.status == 429
+                )
+                diag.model_failed(
+                    stage,
+                    profile,
+                    exc,
+                    маршрут=route.name,
+                    модель=route.model,
+                    кандидат=number,
+                    попытка=attempt,
+                    попыток=len(tries),
+                    повторяемая=not out,
                 )
                 log.warning(
                     "%s/%s ответил ошибкой (%s/%s, этап %s): %s",

@@ -76,3 +76,40 @@ def test_порог_истории_меняет_вердикт_детектор�
         assert "stable_team" in detector.assess(vacancy, hist).flags
     finally:
         detector.configure(detector.Limits())
+
+
+def test_потолок_снимает_заведомо_непроходные(make_vacancy) -> None:
+    """Название решено на выдаче: если потолок ниже порога, ждать нечего."""
+    profile = score.Profile(
+        title="фотограф",
+        queries=[{"text": "Фотограф"}],
+        min_score=60.0,
+        weights={"skills": 0, "nice_to_have": 0, "remote": 0, "title": 50, "salary": 30,
+                 "experience": 20, "market": 0},
+    )
+    good = make_vacancy(external_id="1", title="Фотограф в океанариум", skills=[], description="")
+    hopeless = make_vacancy(
+        external_id="2", title="Агент по недвижимости", skills=[], description=""
+    )
+    assert score.ceiling(good, profile) == 100.0
+    assert score.ceiling(hopeless, profile) == 50.0
+
+    class FakeClient:
+        def search(self, **kwargs):
+            yield from (good, hopeless)
+
+    options = settings.PrefilterOptions(enabled=True, min_score=0.0, fuzzy=88)
+    _, passed = run.collect(FakeClient(), profile, 0, options)
+    assert [v.external_id for v in passed.values()] == ["1"]
+
+    # Выключенный предфильтр по-прежнему берёт всё: потолок — часть предфильтра.
+    off = settings.PrefilterOptions(enabled=False, min_score=0.0, fuzzy=88)
+    _, everything = run.collect(FakeClient(), profile, 0, off)
+    assert len(everything) == 2
+
+
+def test_потолок_не_гадает_без_слов_запроса(make_vacancy) -> None:
+    """Нет запросов — вес названия считаем достижимым, иначе потеряем всё."""
+    profile = score.Profile(min_score=60.0, weights={"skills": 0, "title": 50, "salary": 30})
+    blank = make_vacancy(title="Что угодно", skills=[], description="")
+    assert score.ceiling(blank, profile) >= 60.0
