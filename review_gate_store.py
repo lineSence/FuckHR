@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS gate_models (
     accuracy   REAL,
     low        REAL,
     high       REAL,
+    decide     REAL,
     trained_at TEXT NOT NULL,
     PRIMARY KEY (stage, model)
 );
@@ -52,11 +53,17 @@ class GateModel:
     accuracy: float | None
     low: float | None
     high: float | None
+    decide: float | None
     trained_at: str
 
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
+    # Колонка появилась позже схемы; у старой базы CREATE TABLE IF NOT EXISTS
+    # её не добавит, поэтому добавляем на месте (урок llm_cache, PR #61).
+    names = {row[1] for row in conn.execute("PRAGMA table_info(gate_models)")}
+    if "decide" not in names:
+        conn.execute("ALTER TABLE gate_models ADD COLUMN decide REAL")
 
 
 def pack(values: Sequence[float]) -> bytes:
@@ -81,6 +88,7 @@ def save(
     accuracy: float | None = None,
     low: float | None = None,
     high: float | None = None,
+    decide: float | None = None,
 ) -> None:
     """Пишет веса этапа. Повторное обучение заменяет прежние."""
     ensure_schema(conn)
@@ -88,18 +96,18 @@ def save(
         """
         INSERT INTO gate_models
             (stage, model, dim, weights, bias, rows, positives,
-             auroc, accuracy, low, high, trained_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             auroc, accuracy, low, high, decide, trained_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(stage, model) DO UPDATE SET
             dim = excluded.dim, weights = excluded.weights, bias = excluded.bias,
             rows = excluded.rows, positives = excluded.positives,
             auroc = excluded.auroc, accuracy = excluded.accuracy,
-            low = excluded.low, high = excluded.high,
+            low = excluded.low, high = excluded.high, decide = excluded.decide,
             trained_at = excluded.trained_at
         """,
         (
             stage, model, len(weights), pack(weights), float(bias), int(rows),
-            int(positives), auroc, accuracy, low, high,
+            int(positives), auroc, accuracy, low, high, decide,
             datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
         ),
     )
@@ -118,6 +126,7 @@ def _to_model(row: sqlite3.Row) -> GateModel:
         accuracy=row["accuracy"],
         low=row["low"],
         high=row["high"],
+        decide=row["decide"] if "decide" in row.keys() else None,
         trained_at=row["trained_at"],
     )
 

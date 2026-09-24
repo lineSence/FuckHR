@@ -74,6 +74,17 @@ GATE_FIELDS: tuple[Field, ...] = (
         "\u00abГейт отзывов\u00bb (docs/review-gate.md).",
     ),
     Field(
+        "AI_TEXT_SOLVER",
+        "Решать ai_text без модели",
+        GROUP_GATES,
+        BOOL,
+        "0",
+        "Этап «писала нейросеть?» отвечает обученной связкой (вектор bge-m3 "
+        "плюс девять примет стилометрии) по порогу из замера, вызовов нет "
+        "вовсе. Нужны свежие веса: python review_gate_train.py. Разметка "
+        "дальше пополняется только поправками владельца (docs/review-gate.md).",
+    ),
+    Field(
         "REVIEW_GATE_HIGH",
         "Порог уверенного \u00abда\u00bb",
         GROUP_GATES,

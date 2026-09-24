@@ -238,3 +238,39 @@ def test_веса_связки_лежат_под_своим_именем() -> No
 
     assert review_gate.model_key("ai_text", "bge-m3") == "bge-m3+rules1"
     assert review_gate.model_key("review_fake", "bge-m3") == "bge-m3"
+
+
+def test_решатель_отвечает_без_модели(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Включённый и обученный решатель заменяет этап целиком: вызовов нет."""
+    import review_gate
+
+    monkeypatch.setenv("AI_TEXT_SOLVER", "1")
+    monkeypatch.setattr(review_gate.llm_embed, "model_name", lambda gateway: "bge-m3")
+    trained = type(
+        "M", (), {"decide": 0.4, "weights": (), "bias": 0.0}
+    )()
+    monkeypatch.setattr(
+        review_gate.review_gate_store, "load", lambda conn, stage, model: trained
+    )
+    monkeypatch.setattr(
+        review_gate, "scores", lambda conn, gateway, stage, texts: {1: 0.9, 2: 0.1}
+    )
+    assert review_gate.solve(object(), None, "ai_text", {1: "а", 2: "б"}) == {1}
+
+
+def test_выключенный_решатель_молчит(monkeypatch: pytest.MonkeyPatch) -> None:
+    import review_gate
+
+    monkeypatch.delenv("AI_TEXT_SOLVER", raising=False)
+    assert review_gate.solve(object(), None, "ai_text", {1: "а"}) is None
+
+
+def test_редкий_класс_выравнивается_обучением() -> None:
+    """Без веса редкого класса вероятности съезжают вниз целиком."""
+    import linear_model
+
+    rows = [((1.0, 0.0), 1.0)] + [((0.0, 1.0), 0.0)] * 9
+    assert linear_model.class_weight(rows) == 9.0
+    plain = linear_model.train(rows, epochs=200)
+    balanced = linear_model.train(rows, epochs=200, balance=True)
+    assert linear_model.predict(*balanced, (1.0, 0.0)) > linear_model.predict(*plain, (1.0, 0.0))
