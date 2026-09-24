@@ -32,6 +32,7 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Mapping, Sequence
 
+import ai_text_rules
 import embeddings_store as store
 import linear_model
 import llm_embed
@@ -40,6 +41,25 @@ import settings
 from fake_reviews import text_hash
 
 STAGES = ("review_fake", "ai_text")
+
+# Этап ai_text учится не на одном векторе, а на векторе плюс приметы
+# стилометрии (`ai_text_rules.features`): сами по себе приметы дают AUROC 0.712
+# и почти не срабатывают на пороге, но обученные веса их калибруют. Версия в
+# имени модели отделяет такие веса от старых: размерность другая, и старые
+# несравнимы [LLM-011].
+RULES_VERSION = "+rules1"
+
+
+def model_key(stage: str, model: str) -> str:
+    """Под каким именем лежат веса этапа: у ai_text это модель плюс версия примет."""
+    return "{}{}".format(model, RULES_VERSION) if stage == ai_text_rules.STAGE else model
+
+
+def augment(stage: str, vector: Sequence[float], text: str) -> Sequence[float]:
+    """Вектор текста плюс приметы — вход связки. Прочие этапы не трогаются."""
+    if stage != ai_text_rules.STAGE:
+        return vector
+    return tuple(vector) + ai_text_rules.features(text)
 # По замеру ложных нет уже при 0.5, но запас в обе стороны стоит одного вызова.
 DEFAULT_LOW = 0.2
 DEFAULT_HIGH = 0.6
@@ -94,7 +114,7 @@ def scores(
     model = llm_embed.model_name(gateway)
     if not model:
         return {}
-    trained = review_gate_store.load(conn, stage, model)
+    trained = review_gate_store.load(conn, stage, model_key(stage, model))
     if trained is None:
         log.info("гейт %s молчит: веса для %s не обучены", stage, model)
         return {}
@@ -108,7 +128,9 @@ def scores(
     for key, text in texts.items():
         vector = known.get(text_hash(text or ""))
         if vector:
-            out[key] = linear_model.predict(trained.weights, trained.bias, vector)
+            out[key] = linear_model.predict(
+                trained.weights, trained.bias, augment(stage, vector, text or "")
+            )
     return out
 
 

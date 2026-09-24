@@ -85,41 +85,70 @@ def _evenness(sentences: Sequence[str]) -> float:
     return max(0.0, 1.0 - deviation / mean / 0.5)
 
 
-def signals(text: str) -> Signals:
-    """Признаки генерации по одному тексту. Короткий текст — счёт 0 [CORE-017]."""
+# Имена признаков в фиксированном порядке: по ним же идут веса обученной
+# связки, поэтому порядок менять нельзя — только дописывать в конец, меняя
+# RULES_VERSION в review_gate.py [LLM-011].
+FEATURE_NAMES: tuple[str, ...] = (
+    "связки-вода",
+    "ни одного разговорного оборота",
+    "ни одной цифры",
+    "ни одного имени собственного",
+    "длины предложений выровнены",
+    "нет ни одного короткого предложения",
+    "композиция «плюсы и минусы»",
+    "типографика без опечаток",
+    "словарь без повторов",
+)
+
+
+def _raw(text: str) -> dict[str, float]:
+    """Значение каждой приметы от 0 до 1. Короткий текст — все нули [CORE-017]."""
     body = (text or "").strip()
     if len(body) < MIN_CHARS:
-        return Signals(0.0, ())
+        return {name: 0.0 for name in FEATURE_NAMES}
     low = body.lower()
     sentences = _sentences(body)
     words = WORD.findall(low)
-    hits: list[str] = []
+    unique = len(set(words)) / len(words) if words else 0.0
+    return {
+        "связки-вода": 1.0 if sum(1 for item in FILLERS if item in low) >= 2 else 0.0,
+        "ни одного разговорного оборота": (
+            0.0 if any(item in low for item in COLLOQUIAL) else 1.0
+        ),
+        "ни одной цифры": 0.0 if NUMBER.search(body) else 1.0,
+        "ни одного имени собственного": 0.0 if NAME.search(body) else 1.0,
+        "длины предложений выровнены": 1.0 if _evenness(sentences) >= 0.5 else 0.0,
+        "нет ни одного короткого предложения": (
+            1.0
+            if len(sentences) >= 4
+            and all(len(WORD.findall(item)) >= 6 for item in sentences)
+            else 0.0
+        ),
+        "композиция «плюсы и минусы»": (
+            1.0 if sum(1 for item in PROS_CONS if item in low) >= 2 else 0.0
+        ),
+        "типографика без опечаток": 1.0 if ("—" in body or "ё" in low) else 0.0,
+        "словарь без повторов": 1.0 if unique >= 0.75 and len(words) >= 60 else 0.0,
+    }
 
-    fillers = sum(1 for item in FILLERS if item in low)
-    if fillers >= 2:
-        hits.append("связки-вода: {}".format(fillers))
-    if not any(item in low for item in COLLOQUIAL):
-        hits.append("ни одного разговорного оборота")
-    if not NUMBER.search(body):
-        hits.append("ни одной цифры")
-    if not NAME.search(body):
-        hits.append("ни одного имени собственного")
-    even = _evenness(sentences)
-    if even >= 0.5:
-        hits.append("длины предложений выровнены")
-    if len(sentences) >= 4 and all(len(WORD.findall(item)) >= 6 for item in sentences):
-        hits.append("нет ни одного короткого предложения")
-    if sum(1 for item in PROS_CONS if item in low) >= 2:
-        hits.append("композиция «плюсы и минусы»")
-    if "—" in body or "ё" in low:
-        hits.append("типографика без опечаток")
-    if words:
-        unique = len(set(words)) / len(words)
-        if unique >= 0.75 and len(words) >= 60:
-            hits.append("словарь без повторов")
 
-    # Признаков девять; счёт — их доля. Порог вердикта здесь не решается.
-    return Signals(round(min(1.0, len(hits) / 9.0), 3), tuple(hits))
+def features(text: str) -> tuple[float, ...]:
+    """Приметы вектором — вход обученной связки (`review_gate`)."""
+    raw = _raw(text)
+    return tuple(raw[name] for name in FEATURE_NAMES)
+
+
+def signals(text: str) -> Signals:
+    """Сработавшие приметы и их доля.
+
+    Доля — грубая оценка «на глаз»: все приметы весят одинаково. Замер на
+    разметке владельца (1664 метки) дал AUROC 0.712 и 283 пропуска из 295 на
+    пороге 0.5 — то есть ранжирует, но не откалибровано. Калиброванный ответ
+    даёт обученная связка, а доля остаётся для объяснения в отчёте [CORE-019].
+    """
+    raw = _raw(text)
+    hits = tuple(name for name in FEATURE_NAMES if raw[name])
+    return Signals(round(min(1.0, len(hits) / len(FEATURE_NAMES)), 3), hits)
 
 
 def score(text: str) -> float:
@@ -175,7 +204,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     return 0
 
 
-__all__ = ("MIN_CHARS", "STAGE", "Signals", "main", "measure", "score", "signals")
+__all__ = (
+    "FEATURE_NAMES",
+    "MIN_CHARS",
+    "STAGE",
+    "Signals",
+    "features",
+    "main",
+    "measure",
+    "score",
+    "signals",
+)
 
 
 if __name__ == "__main__":

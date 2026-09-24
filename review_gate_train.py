@@ -120,15 +120,17 @@ def import_owner(conn: sqlite3.Connection, path: Path, stage: str) -> int:
 
 
 def prepare(
-    samples: Sequence[Sample], known: dict[str, Sequence[float]]
+    samples: Sequence[Sample], known: dict[str, Sequence[float]], stage: str = ""
 ) -> list[tuple[Sequence[float], float]]:
+    """Обучающие строки. У ai_text к вектору добавляются приметы стилометрии —
+    ровно те же, что считает рантайм (`review_gate.augment`)."""
     from fake_reviews import text_hash  # noqa: PLC0415 — только за хэшем
 
     rows = []
     for sample in samples:
         vector = known.get(text_hash(sample.text))
         if vector:
-            rows.append((vector, sample.yes))
+            rows.append((review_gate.augment(stage, vector, sample.text), sample.yes))
     return rows
 
 
@@ -149,8 +151,8 @@ def evaluate(
     _, known = review_gate.vectors_for(
         conn, gateway, {text_hash(text): text for text in texts}
     )
-    train_rows = prepare(train_set, known)
-    test_rows = prepare(test_set, known)
+    train_rows = prepare(train_set, known, stage)
+    test_rows = prepare(test_set, known, stage)
     out["обучающих"] = len(train_rows)
     out["отложенных"] = len(test_rows)
     if not train_rows:
@@ -191,7 +193,7 @@ def evaluate(
         out["итог"] = "положительных меньше {}: замер ни о чём не говорит".format(FEW)
     if save:
         review_gate_store.save(
-            conn, stage, model, weights, bias,
+            conn, stage, review_gate.model_key(stage, model), weights, bias,
             rows=len(train_rows), positives=positives,
             auroc=out["auroc"], accuracy=out["точность"], low=low, high=high,
         )
