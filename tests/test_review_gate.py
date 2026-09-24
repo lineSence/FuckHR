@@ -202,3 +202,17 @@ def test_экономия_считает_решённое_и_ошибки():
 
 def test_без_порогов_экономию_не_обещают():
     assert linear_model.yield_of([0.5], [1], None, 0.8) == {}
+
+
+def test_в_вызов_попадают_самые_спорные_отзывы() -> None:
+    """Вызов один и на дюжину текстов: важно, какие двенадцать в него попадут."""
+    import review_scoring
+
+    scores = {1: 0.05, 2: 0.49, 3: 0.55, 4: 0.3}
+    assert review_scoring.by_doubt([1, 2, 3, 4], scores) == [2, 3, 4, 1]
+
+
+def test_без_оценок_гейта_порядок_отзывов_прежний() -> None:
+    import review_scoring
+
+    assert review_scoring.by_doubt([3, 1, 2], {}) == [3, 1, 2]
