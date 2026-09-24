@@ -46,6 +46,30 @@ def test_кэш_не_даёт_повторного_вызова(conn: sqlite3.Co
     assert len(calls) == 1
     assert gateway.usage.calls == 1
     assert gateway.usage.cached == 1
+    # Первый вызов — новый вопрос, а не «сменилась модель».
+    assert (gateway.usage.miss_new, gateway.usage.miss_model) == (1, 0)
+
+
+def test_смена_модели_видна_в_причине_промаха(conn: sqlite3.Connection) -> None:
+    """Маршрут и модель входят в ключ кэша, и «из кэша 0» после смены модели —
+    не поломка кэша. Сводка прогона должна показывать разницу."""
+
+    def transport(profile: str, messages: Sequence[dict[str, str]], temperature: float) -> str:
+        return "ответ"
+
+    first = llm.Gateway(
+        base_url="http://localhost:3001/v1", conn=conn, transport=transport
+    )
+    first.complete("extract", MESSAGES)
+    second = llm.Gateway(
+        base_url="http://localhost:3001/v1",
+        conn=conn,
+        transport=transport,
+        local_stage_models={"extract": "другая-модель"},
+    )
+    second.complete("extract", MESSAGES)
+    assert second.usage.cached == 0
+    assert (second.usage.miss_model, second.usage.miss_new) == (1, 0)
 
 
 def test_потолок_вызовов_останавливает_шлюз() -> None:
