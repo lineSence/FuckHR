@@ -158,7 +158,9 @@ def evaluate(
     if not train_rows:
         out["итог"] = "нет обучающих примеров с векторами"
         return out
-    weights, bias = linear_model.train(train_rows, epochs=epochs)
+    # Классы перекошены вчетверо: без выравнивания вероятности съезжают вниз
+    # целиком и гейт не решает ничего (замер 24.09.2026).
+    weights, bias = linear_model.train(train_rows, epochs=epochs, balance=True)
     if not test_rows:
         out["итог"] = "отложенная часть пуста: мерить нечем, веса не записаны"
         return out
@@ -166,6 +168,7 @@ def evaluate(
     labels = [1 if goal >= 0.5 else 0 for _, goal in test_rows]
     positives = sum(labels)
     low, high = linear_model.choose(scores, labels)
+    decide, quality = linear_model.decision(scores, labels)
     out.update(
         {
             "положительных": positives,
@@ -180,6 +183,8 @@ def evaluate(
             ),
             "low": low,
             "high": high,
+            "порог_решателя": decide,
+            "решатель": quality,
             "экономия": linear_model.yield_of(scores, labels, low, high),
             "пороги": {
                 str(limit): dict(
@@ -196,6 +201,7 @@ def evaluate(
             conn, stage, review_gate.model_key(stage, model), weights, bias,
             rows=len(train_rows), positives=positives,
             auroc=out["auroc"], accuracy=out["точность"], low=low, high=high,
+            decide=decide,
         )
     return out
 
@@ -232,6 +238,20 @@ def render(report: Sequence[dict]) -> str:
                     экономия["решено_да"],
                     экономия["решено_нет"],
                     экономия["неверно"],
+                )
+            )
+        quality = part.get("решатель")
+        if quality:
+            lines.append("")
+            lines.append(
+                "{}: без модели на пороге {} — точность {}, полнота {}, "
+                "ложных {}, пропущено {}".format(
+                    part["этап"],
+                    part.get("порог_решателя"),
+                    quality["точность"],
+                    quality["полнота"],
+                    quality["ложных"],
+                    quality["пропущено"],
                 )
             )
         if part.get("итог"):

@@ -159,6 +159,44 @@ def decide(
     return yes, no, chances
 
 
+def solve(
+    conn: sqlite3.Connection | None,
+    gateway: object | None,
+    stage: str,
+    texts: Mapping[object, str],
+) -> set | None:
+    """Ответ этапа без модели вовсе. None — решать нечем, зовите модель.
+
+    Отличие от гейта: тот берёт на себя только уверенные края и требует нуля
+    ложных, поэтому в перекрытии классов не решает ничего. Решатель отвечает по
+    одному порогу, подобранному на разметке по балансу точности и полноты
+    (`linear_model.decision`, колонка `decide`). Так можно и нужно поступать
+    там, где ответ весит один балл в счёте компании, а не выносит вердикт
+    [CORE-019].
+    """
+    if conn is None or not texts or not settings.flag("AI_TEXT_SOLVER"):
+        return None
+    if stage != ai_text_rules.STAGE:
+        return None
+    model = llm_embed.model_name(gateway)
+    trained = (
+        review_gate_store.load(conn, stage, model_key(stage, model)) if model else None
+    )
+    if trained is None:
+        log.info("решатель %s молчит: веса не обучены", stage)
+        return None
+    limit = trained.decide if trained.decide is not None else 0.5
+    chances = scores(conn, gateway, stage, texts)
+    if not chances:
+        return None
+    out = {key for key, value in chances.items() if value >= limit}
+    log.info(
+        "решатель %s: %s из %s без единого вызова (порог %.2f)",
+        stage, len(out), len(texts), limit,
+    )
+    return out
+
+
 # Имена математики остаются видимыми отсюда: они были частью модуля до
 # выделения `linear_model.py`, и звать её через два имени незачем.
 auroc = linear_model.auroc

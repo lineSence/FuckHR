@@ -77,7 +77,14 @@ def gated_ai(
     texts: dict[int, str],
     seen: dict[str, bool],
 ) -> set[int]:
-    """То же для этапа «текст написан нейросетью»."""
+    """То же для этапа «текст написан нейросетью».
+
+    Первым спрашивается решатель: если он обучен и включён, этап отвечает
+    совсем без модели, и `AI_TEXT_LLM` больше ни при чём.
+    """
+    solved = review_gate.solve(conn, gateway, aitext_llm.STAGE, texts)
+    if solved is not None:
+        return solved
     if not aitext_llm.enabled():
         return set()
     yes, no, scores = review_gate.decide(conn, gateway, aitext_llm.STAGE, texts)

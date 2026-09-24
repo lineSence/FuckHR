@@ -42,24 +42,44 @@ def predict(weights: Sequence[float], bias: float, vector: Sequence[float]) -> f
     return score(weights, bias, vector)
 
 
+def class_weight(rows: Sequence[tuple[Sequence[float], float]]) -> float:
+    """Во сколько раз положительных меньше отрицательных.
+
+    Разметка отзывов перекошена: «нет» вчетверо-впятеро больше, чем «да».
+    Необученная логистическая регрессия на таком перекосе съезжает вниз целиком
+    — на замере владельца все 124 положительных получили меньше 0.5, и гейт
+    решал ноль процентов при формально приличном AUROC 0.815. Вес выравнивает
+    классы по вкладу в градиент; на порядок пар (то есть на AUROC) он влияет
+    слабо, а на калибровку — сильно.
+    """
+    positive = sum(1 for _, goal in rows if goal >= 0.5)
+    negative = len(rows) - positive
+    if not positive or not negative:
+        return 1.0
+    return negative / positive
+
+
 def train(
     rows: Sequence[tuple[Sequence[float], float]],
     epochs: int = 40,
     rate: float = 4.0,
     decay: float = 1e-4,
+    balance: bool = False,
 ) -> tuple[list[float], float]:
-    """Веса и смещение. Полный батч, L2."""
+    """Веса и смещение. Полный батч, L2. `balance` выравнивает редкий класс."""
     if not rows:
         return [], 0.0
     size = len(rows[0][0])
     weights = [0.0] * size
     bias = 0.0
-    scale = rate / len(rows)
+    heavy = class_weight(rows) if balance else 1.0
+    sample_weights = [heavy if goal >= 0.5 else 1.0 for _, goal in rows]
+    scale = rate / sum(sample_weights)
     for _ in range(epochs):
         grad = [0.0] * size
         grad_bias = 0.0
-        for vector, goal in rows:
-            error = score(weights, bias, vector) - goal
+        for (vector, goal), weight in zip(rows, sample_weights):
+            error = (score(weights, bias, vector) - goal) * weight
             if error:
                 for position, value in enumerate(vector):
                     grad[position] += error * value
@@ -104,6 +124,40 @@ def choose(scores: Sequence[float], labels: Sequence[int]) -> tuple[float | None
     return low, high
 
 
+def decision(scores: Sequence[float], labels: Sequence[int]) -> tuple[float | None, dict]:
+    """Порог для работы совсем без модели: лучшая F-мера на сетке.
+
+    Гейт требует нуля ложных и потому в перекрытии классов не решает ничего.
+    Решателю ноль ложных не нужен: его ответ весит один балл в счёте компании,
+    и цена ошибки — та же, что у любого другого детерминированного сигнала
+    [CORE-019]. Поэтому порог выбирается по балансу точности и полноты, а
+    рядом возвращаются обе, чтобы решение принималось по числам.
+    """
+    best: tuple[float, float, dict] = (-1.0, 0.5, {})
+    for limit in GRID:
+        hit = sum(1 for value, label in zip(scores, labels) if value >= limit and label)
+        said = sum(1 for value in scores if value >= limit)
+        real = sum(1 for label in labels if label)
+        if not hit:
+            continue
+        precision = hit / said
+        recall = hit / real if real else 0.0
+        f1 = 2 * precision * recall / (precision + recall)
+        if f1 > best[0]:
+            best = (
+                f1,
+                limit,
+                {
+                    "точность": round(precision, 3),
+                    "полнота": round(recall, 3),
+                    "f1": round(f1, 3),
+                    "ложных": said - hit,
+                    "пропущено": real - hit,
+                },
+            )
+    return (None, {}) if best[0] < 0 else (best[1], best[2])
+
+
 def yield_of(
     scores: Sequence[float], labels: Sequence[int], low: float | None, high: float | None
 ) -> dict:
@@ -131,6 +185,8 @@ __all__ = (
     "GRID",
     "auroc",
     "choose",
+    "class_weight",
+    "decision",
     "counts",
     "predict",
     "score",
