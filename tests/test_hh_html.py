@@ -238,3 +238,28 @@ def test_график_и_занятость_из_живого_узла() -> None
     assert vacancy.schedule == "Удалённая работа, Полный день, 5/2, 8 часов"
     assert vacancy.employment == "Полная занятость"
     assert vacancy.experience == "between3And6"
+
+
+def test_берём_только_выдачу_поиска() -> None:
+    """На странице рядом с выдачей живут «Похожие вакансии» и реклама. По
+    запросу «Ревизор» оттуда приезжали повара и упаковщики."""
+    state = {
+        "vacancySearchResult": {
+            "vacancies": [
+                {"vacancyId": "1", "name": "Ревизор", "compensation": {"from": 70000}}
+            ]
+        },
+        "similarVacancies": {
+            "items": [
+                {"vacancyId": "2", "name": "Повар", "compensation": {"from": 90000}}
+            ]
+        },
+    }
+    names = [node["name"] for node in hh_html.find_vacancy_nodes(state)]
+    assert names == ["Ревизор"]
+
+
+def test_без_выдачи_на_странице_смотрим_всё_состояние() -> None:
+    """Смена разметки не должна оставлять прогон без вакансий [CORE-017]."""
+    state = {"whatever": [{"vacancyId": "3", "name": "Ревизор", "salary": None, "area": {}}]}
+    assert [node["name"] for node in hh_html.find_vacancy_nodes(state)] == ["Ревизор"]
