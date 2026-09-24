@@ -28,6 +28,7 @@ import logging
 import sqlite3
 from typing import Any, Iterable, Sequence
 
+import conditions
 import db
 import settings
 
@@ -128,30 +129,51 @@ class _Row:
 
 
 def measure(conn: sqlite3.Connection) -> dict[str, Any]:
-    """Цена гейта по уже собранной базе: кого снял бы и что потерял бы."""
+    """Цена гейта по уже собранной базе: кого снял бы и что потерял бы.
+
+    Потери считаются дважды. По всем полям — как в базе, включая `salary` и
+    `schedule` прошлых прогонов. И по `conditions.MODEL_FIELDS` — только то,
+    что у модели спрашивают сегодня: график и вилку присылает источник, и их
+    потеря гейту не в укор.
+    """
     rows = conn.execute(
         "SELECT key, description, schedule, skills FROM vacancies"
         " WHERE description IS NOT NULL AND TRIM(description) <> ''"
     ).fetchall()
-    stored: dict[str, list[tuple[str, str]]] = {}
+    stored: dict[str, list[tuple[str, str, str]]] = {}
     for row in conn.execute(
-        "SELECT key, field, value FROM vacancy_conditions"
+        "SELECT key, field, value, quote FROM vacancy_conditions"
     ).fetchall():
-        stored.setdefault(row["key"], []).append((row["field"], row["value"]))
+        stored.setdefault(row["key"], []).append(
+            (row["field"], row["value"], row["quote"])
+        )
     dropped: list[str] = []
     lost: dict[str, int] = {}
+    lost_now: dict[str, int] = {}
+    hurt = 0
+    samples: list[tuple[str, str, str, str]] = []
     for raw in rows:
         item = _Row(raw)
         if found_fields(item.description, covered_by_source(item)):
             continue
         dropped.append(item.key)
-        for field_name, _ in stored.get(item.key, ()):
+        actual = False
+        for field_name, value, quote in stored.get(item.key, ()):
             lost[field_name] = lost.get(field_name, 0) + 1
+            if field_name in conditions.MODEL_FIELDS:
+                lost_now[field_name] = lost_now.get(field_name, 0) + 1
+                actual = True
+                if len(samples) < 40:
+                    samples.append((item.key, field_name, value, quote))
+        hurt += 1 if actual else 0
     return {
         "total": len(rows),
         "dropped": len(dropped),
         "with_conditions": sum(1 for key in dropped if stored.get(key)),
+        "hurt": hurt,
         "lost": lost,
+        "lost_now": lost_now,
+        "samples": samples,
         "examples": dropped[:5],
     }
 
@@ -159,6 +181,9 @@ def measure(conn: sqlite3.Connection) -> dict[str, Any]:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Цена гейта extract по базе")
     parser.add_argument("--db", default=settings.get("DB_PATH", "data/fuckhr.sqlite3"))
+    parser.add_argument(
+        "--show", type=int, default=0, help="показать N потерянных условий с цитатами"
+    )
     args = parser.parse_args(argv)
     conn = db.connect(args.db)
     try:
@@ -172,12 +197,30 @@ def main(argv: Sequence[str] | None = None) -> int:
             data["dropped"], 100.0 * data["dropped"] / total, data["with_conditions"]
         )
     )
-    if data["lost"]:
-        print("потерялось бы условий по полям:")
-        for field_name, count in sorted(data["lost"].items(), key=lambda p: -p[1]):
+    print(
+        "из них потеряли бы условие по полям, которые ещё спрашивают у модели: {}".format(
+            data["hurt"]
+        )
+    )
+    if data["lost_now"]:
+        print("потерялось бы условий (поля модели):")
+        for field_name, count in sorted(data["lost_now"].items(), key=lambda p: -p[1]):
             print("  {:<8} {}".format(field_name, count))
     else:
-        print("ни одного сохранённого условия гейт не потерял бы")
+        print("ни одного условия по полям модели гейт не потерял бы")
+    stale = {
+        name: count
+        for name, count in data["lost"].items()
+        if name not in conditions.MODEL_FIELDS
+    }
+    if stale:
+        print(
+            "за компанию ушли бы поля прошлых прогонов (их теперь даёт источник): {}".format(
+                ", ".join("{} {}".format(name, count) for name, count in sorted(stale.items()))
+            )
+        )
+    for key, field_name, value, quote in data["samples"][: max(0, args.show)]:
+        print("  {} {}: {} | {}".format(key, field_name, value[:50], quote[:90]))
     if data["examples"]:
         print("примеры снятых: {}".format(", ".join(data["examples"])))
     return 0

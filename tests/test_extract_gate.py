@@ -9,8 +9,11 @@
 
 from __future__ import annotations
 
+import sqlite3
+
 import pytest
 
+import conditions
 import extract_gate
 
 
@@ -42,3 +45,23 @@ def test_поле_закрытое_источником_приметой_не_с
     vacancy = V("Работа удалённо, python", schedule="Удалённая работа", skills='["Python"]')
     assert extract_gate.covered_by_source(vacancy) == {"format", "stack"}
     assert not extract_gate.found_fields(vacancy.description, {"format", "stack"})
+
+
+def test_замер_отделяет_поля_модели_от_полей_источника(conn: sqlite3.Connection) -> None:
+    """График и вилку теперь присылает источник: их потеря гейту не в укор."""
+    conditions.ensure_schema(conn)
+    conn.execute(
+        "INSERT INTO vacancies (key, source, external_id, title, company, url, description,"
+        " first_seen_at, last_seen_at) VALUES ('k1', 'hh.ru', '1', 'Инженер', 'ООО', 'u',"
+        " 'Требуется сотрудник. Звоните.', datetime('now'), datetime('now'))"
+    )
+    conn.executemany(
+        "INSERT INTO vacancy_conditions (key, field, value, quote) VALUES (?, ?, ?, ?)",
+        [("k1", "salary", "много", "ц"), ("k1", "other", "ДМС", "ц")],
+    )
+    conn.commit()
+    data = extract_gate.measure(conn)
+    assert data["dropped"] == 1
+    assert data["lost_now"] == {"other": 1}
+    assert data["lost"]["salary"] == 1
+    assert data["hurt"] == 1
