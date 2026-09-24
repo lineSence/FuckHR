@@ -172,3 +172,12 @@ def test_llm_вывод_не_попадает_в_телеграм(make_vacancy: 
     assert any(f.kind == "llm_claim" for f in report.findings)
     # Выводы модели имеют статус «недостаточно данных» и не уходят в карточку.
     assert all("llm" not in line for line in detector.telegram_lines(report))
+
+
+def test_утверждения_спрашивают_только_у_прошедших_порог() -> None:
+    """Этап hr_filter — самый дорогой; ниже порога профиля его никто не читает."""
+    gateway = object()
+    assert detector_llm.wanted(gateway, True, True)
+    assert not detector_llm.wanted(gateway, True, False)
+    assert not detector_llm.wanted(gateway, False, True)
+    assert not detector_llm.wanted(None, True, True)

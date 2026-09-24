@@ -86,6 +86,22 @@ def llm_claims(gateway: Any, text: str, limit: int = 5) -> tuple[Claim, ...]:
     return tuple(out)
 
 
+def wanted(gateway: Any, use_llm_claims: bool, passed: bool) -> bool:
+    """Звать ли модель за утверждениями по этой вакансии.
+
+    Этап hr_filter шёл на каждую собранную вакансию и был самым дорогим местом
+    прогона: сотня вызовов профиля smart на сотню карточек. При этом находки
+    `llm_claim` всегда получают вердикт «недостаточно данных» и видны только
+    там, где вакансию вообще показывают. Вакансия, не прошедшая порог профиля,
+    не попадает ни в очередь досье, ни в контакты — значит и утверждения по ней
+    никто не прочитает, а вызов уже потрачен [CORE-016].
+
+    Правило детерминированное и совпадает с тем, по которому собираются досье
+    [CORE-015]: прошла порог — спрашиваем, не прошла — остаётся отчёт детектора.
+    """
+    return bool(gateway is not None and use_llm_claims and passed)
+
+
 def with_llm_claims(report: Report, vacancy: Any, gateway: Any) -> Report:
     """Дополняет отчёт утверждениями, которые не ловят регулярки.
 
@@ -126,4 +142,10 @@ def stage_profile() -> str:
     return llm.profile_for(STAGE)
 
 
-__all__: Sequence[str] = ("llm_claims", "with_llm_claims", "stage_profile", "STAGE")
+__all__: Sequence[str] = (
+    "llm_claims",
+    "wanted",
+    "with_llm_claims",
+    "stage_profile",
+    "STAGE",
+)
