@@ -19,6 +19,8 @@ from __future__ import annotations
 import logging
 from typing import Sequence
 
+import diag
+
 STAGE = "embeddings"
 
 # Больше 32 текстов за раз локальный эмбеддер на 8 ГБ VRAM переваривает хуже,
@@ -92,6 +94,14 @@ def embed(gateway: object | None, texts: Sequence[str]) -> list[list[float]] | N
                     response.status_code,
                     response.text[:200],
                 )
+                diag.model_failed(
+                    STAGE,
+                    "embeddings",
+                    "HTTP {}".format(response.status_code),
+                    маршрут=route.name,
+                    модель=model,
+                    текстов=len(batch),
+                )
                 if response.status_code < 500:
                     # Отказ по сути запроса (обычно «нет такой модели») не
                     # исправится ни на втором батче, ни на второй вакансии.
@@ -101,6 +111,9 @@ def embed(gateway: object | None, texts: Sequence[str]) -> list[list[float]] | N
                 return None
             payload = response.json()
         except Exception as exc:  # noqa: BLE001 — модель не роняет прогон [CORE-017]
+            diag.model_failed(
+                STAGE, "embeddings", exc, маршрут=route.name, модель=model, текстов=len(batch)
+            )
             log.warning("эмбеддер недоступен: %s", exc)
             return None
 
@@ -121,6 +134,18 @@ def embed(gateway: object | None, texts: Sequence[str]) -> list[list[float]] | N
         usage = getattr(gateway, "usage", None)
         if usage is not None:
             usage.calls += 1
+        # Батч эмбеддингов — такой же вызов модели и такая же строка бюджета,
+        # как ответ на этапе. Без события «вызовов модели» в итоге прогона не
+        # сходилось с числом событий в файле диагностики.
+        diag.event(
+            "модель",
+            этап=STAGE,
+            профиль="embeddings",
+            исход="ответ",
+            маршрут=route.name,
+            модель=model,
+            текстов=len(batch),
+        )
     return out
 
 

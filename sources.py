@@ -36,7 +36,7 @@ import src_rabota
 import src_superjob
 import src_trudvsem
 from hh import Vacancy
-from score import evaluate
+from score import FUZZY_THRESHOLD, ceiling, evaluate
 
 log = logging.getLogger("fuckhr")
 
@@ -180,6 +180,7 @@ def _collect_site(
     [CORE-017].
     """
     found = 0
+    capped = 0
     site_seen: dict[str, Vacancy] = {}
     owners: dict[str, list[str]] = {}
     marks: list[tuple[str, str, str, str]] = []
@@ -203,10 +204,18 @@ def _collect_site(
                         found += 1
                         marks.append((draft.key, site.source, draft.external_id, draft.url))
                         site_seen.setdefault(draft.key, draft)
-                        rough = evaluate(draft, profile, getattr(prefilter, "fuzzy", None))
+                        fuzzy = getattr(prefilter, "fuzzy", None) or FUZZY_THRESHOLD
+                        rough = evaluate(draft, profile, fuzzy)
                         if prefilter.enabled and (
                             rough.rejected or rough.score < prefilter.min_score
                         ):
+                            continue
+                        # Потолок (score.ceiling) нужен здесь даже больше, чем
+                        # на hh.ru: чужой поиск по слову «Фотограф» охотно
+                        # отдаёт агентов по недвижимости, и их названию порог
+                        # профиля недостижим при любом описании [CORE-016].
+                        if prefilter.enabled and ceiling(draft, profile, fuzzy) < profile.min_score:
+                            capped += 1
                             continue
                         owners.setdefault(draft.key, []).append(getattr(loaded, "id", "профиль"))
                         if limit and found >= limit:
@@ -230,6 +239,12 @@ def _collect_site(
                     log.warning(
                         "%s: сбор по запросу «%s» сорвался: %s", site.label, query["text"], exc
                     )
+    if capped:
+        log.info(
+            "%s: потолок отсёк %s — таким названиям порог профиля недостижим",
+            site.label,
+            capped,
+        )
     log.info("%s: увидел %s, прошло предфильтр %s", site.label, found, len(owners))
     return site_seen, owners, marks, found
 
