@@ -154,14 +154,35 @@ def _looks_like_vacancy(node: dict[str, Any]) -> bool:
     return has_id and has_name and has_context
 
 
-def find_vacancy_nodes(state: Any, limit: int = 500) -> list[dict[str, Any]]:
-    """Обходит состояние в ширину и собирает всё, что похоже на вакансию.
+# Ключи поддеревьев, где лежит именно выдача поиска. Проверяется вхождением:
+# hh.ru и площадки на том же движке зовут их по-разному и переименовывают.
+SEARCH_KEYS = ("vacancysearchresult", "vacancysearch", "searchvacancy", "searchresult")
 
-    К пути вида vacancySearchResult.vacancies не привязываемся: hh.ru
-    переименовывал эти ключи не раз.
-    """
-    found: dict[str, dict[str, Any]] = {}
+
+def _subtrees(state: Any, limit: int = 200_000) -> list[Any]:
+    """Поддеревья с результатами поиска. Пусто — таких ключей на странице нет."""
+    out: list[Any] = []
     queue: list[Any] = [state]
+    seen = 0
+    while queue:
+        node = queue.pop(0)
+        seen += 1
+        if seen > limit:
+            break
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if any(part in str(key).lower() for part in SEARCH_KEYS):
+                    out.append(value)
+                else:
+                    queue.append(value)
+        elif isinstance(node, list):
+            queue.extend(node)
+    return out
+
+
+def _walk(root: Any, limit: int) -> dict[str, dict[str, Any]]:
+    found: dict[str, dict[str, Any]] = {}
+    queue: list[Any] = [root]
     seen = 0
     while queue and len(found) < limit:
         node = queue.pop(0)
@@ -176,7 +197,33 @@ def find_vacancy_nodes(state: Any, limit: int = 500) -> list[dict[str, Any]]:
                 queue.extend(node.values())
         elif isinstance(node, list):
             queue.extend(node)
-    return list(found.values())
+    return found
+
+
+def find_vacancy_nodes(state: Any, limit: int = 500) -> list[dict[str, Any]]:
+    """Вакансии из выдачи поиска.
+
+    Раньше собиралось всё, что похоже на вакансию, в любом месте состояния. На
+    той же странице живут «Похожие вакансии», «Вакансии дня» и рекламные
+    подборки — и они приезжали в базу наравне с выдачей. По запросу «Ревизор»
+    так набирались повара и упаковщики: искали одно, собиралось другое.
+
+    Поэтому сначала берутся поддеревья, чей ключ похож на результат поиска
+    (`SEARCH_KEYS`), и вакансии ищутся только внутри них. К точному пути
+    по-прежнему не привязываемся: hh.ru переименовывал эти ключи не раз. Если
+    подходящего ключа нет вовсе — обходится всё состояние, как раньше, чтобы
+    смена разметки не оставила прогон без вакансий [CORE-017].
+    """
+    found: dict[str, dict[str, Any]] = {}
+    for subtree in _subtrees(state):
+        for key, node in _walk(subtree, limit - len(found)).items():
+            found.setdefault(key, node)
+        if len(found) >= limit:
+            break
+    if found:
+        return list(found.values())
+    log.info("выдачи поиска в состоянии не нашлось, смотрю всю страницу")
+    return list(_walk(state, limit).values())
 
 
 def first_of(node: dict[str, Any], *keys: str) -> Any:
