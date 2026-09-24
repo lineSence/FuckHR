@@ -55,6 +55,7 @@ import contact_finds
 import db
 import detector
 import detector_llm
+import diag
 import dossier
 import geo
 import hh_pages
@@ -101,6 +102,11 @@ def main() -> int:
     )
     parser.add_argument("--dry-run", action="store_true", help="без отправки в Telegram")
     parser.add_argument("--verbose", action="store_true", help="подробный лог (DEBUG)")
+    parser.add_argument(
+        "--diag",
+        action="store_true",
+        help="диагностический прогон: подробный след в data/diag (diag.py)",
+    )
     args = parser.parse_args()
 
     load_dotenv()
@@ -153,6 +159,38 @@ def run_once(args: argparse.Namespace) -> int:
 
     # Профилей может быть несколько: каталог с YAML или один файл (ADR-023).
     bundle = profiles.load_all(options.profile)
+
+    # Диагностический прогон: подробный след одного запуска в отдельный файл.
+    # Обычный лог написан для чтения глазами, здесь — числа для разбора.
+    if diag.wanted(getattr(args, "diag", False)):
+        path = diag.start("прогон").path
+        log.info("диагностика включена, пишу в %s", path)
+        diag.event(
+            "настройки",
+            лимит=options.limit,
+            профиль=options.profile,
+            описания=options.details,
+            модель=options.use_llm,
+            предфильтр=prefilter.enabled,
+            черновой_порог=prefilter.min_score,
+            нечёткость=prefilter.fuzzy,
+            детектор=detector_opts.enabled,
+        )
+        for loaded in bundle:
+            item = getattr(loaded, "profile", loaded)
+            diag.event(
+                "профиль",
+                имя=getattr(loaded, "name", item.title),
+                включён=item.enabled,
+                запросы=[str(q.get("text", "")) for q in item.queries],
+                регионы=list(item.areas),
+                навыков=len(item.skills),
+                желательных=len(item.nice_to_have),
+                стоп_слов=len(item.stop_words),
+                веса=dict(item.weights),
+                порог=item.min_score,
+                мин_зарплата=item.min_salary_net,
+            )
 
     conn = db.connect(db_path)
     db.init_schema(conn)
@@ -310,6 +348,25 @@ def run_once(args: argparse.Namespace) -> int:
             # Слепок пишется для всего, даже для отклонённого: история публикаций
             # нужна детектору независимо от нашего интереса (ADR-009, ADR-010).
             db.add_snapshot(conn, vacancy)
+            if diag.enabled():
+                diag.event(
+                    "вакансия",
+                    ключ=vacancy.key,
+                    источник=vacancy.source,
+                    название=vacancy.title,
+                    компания=vacancy.company,
+                    вилка=vacancy.monthly_salary_net(),
+                    график=vacancy.schedule,
+                    опыт=vacancy.experience,
+                    навыков=len(vacancy.skills or ()),
+                    описание_символов=len(vacancy.description or ""),
+                    балл=verdict.score,
+                    причины=list(verdict.reasons),
+                    отклонена=verdict.rejected,
+                    почему=verdict.reject_reason,
+                    профиль=chosen[0] if chosen else "",
+                    все_профили={pid: round(v.score, 1) for pid, v in matches},
+                )
             if verdict.rejected:
                 log.info("    отклонена: %s", verdict.reject_reason)
                 continue
@@ -556,6 +613,23 @@ def run_once(args: argparse.Namespace) -> int:
             with_conditions,
             vacancies_total,
         )
+    if diag.enabled():
+        usage = gateway.usage if gateway is not None else None
+        path = diag.finish(
+            вакансий_увидели=len(seen),
+            прошли_скоринг=len(drafts),
+            новых=new_count,
+            описаний_скачано=enriched,
+            описаний_из_базы=reused_details,
+            пустых_описаний=empty_descriptions,
+            условий=extracted,
+            компаний_в_очереди=len(to_research),
+            заблокированы=blocked,
+            вызовов_модели=getattr(usage, "calls", 0),
+            из_кэша=getattr(usage, "cached", 0),
+            ошибок_модели=getattr(usage, "failures", 0),
+        )
+        log.info("диагностика записана: %s", path)
     log.info("прогон завершён")
     conn.close()
     return 2 if blocked else 0

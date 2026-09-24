@@ -221,9 +221,24 @@ def find_vacancy_nodes(state: Any, limit: int = 500) -> list[dict[str, Any]]:
         if len(found) >= limit:
             break
     if found:
+        _note("выдача", len(found), 0)
         return list(found.values())
     log.info("выдачи поиска в состоянии не нашлось, смотрю всю страницу")
-    return list(_walk(state, limit).values())
+    whole = _walk(state, limit)
+    _note("вся страница", 0, len(whole))
+    return list(whole.values())
+
+
+def _note(откуда: str, из_выдачи: int, со_страницы: int) -> None:
+    """След для диагностики. Импорт внутри: hh_parse не должен тянуть лишнее."""
+    try:
+        import diag
+
+        diag.event(
+            "разбор_страницы", откуда=откуда, из_выдачи=из_выдачи, со_страницы=со_страницы
+        )
+    except Exception:  # noqa: BLE001 — диагностика не ломает разбор [CORE-017]
+        pass
 
 
 def first_of(node: dict[str, Any], *keys: str) -> Any:
