@@ -84,6 +84,7 @@ from llm_profiles import (  # noqa: F401 — публичные имена ос�
     ProfileError,
     profile_for,
 )
+import diag
 import llm_cache
 from llm_cache import CACHE_SCHEMA, ensure_cache  # noqa: F401 — публичные имена остаются в llm
 from llm_budget import Budget, Usage  # noqa: F401 — Usage остаётся публичным именем llm
@@ -385,6 +386,7 @@ class Gateway:
             cached = self._cache_get(digest)
             if cached is not None:
                 self.budget.note("cached")
+                diag.event("модель", этап=stage, профиль=profile, исход="из кэша")
                 return cached
 
         # Промах промаху рознь. «Из кэша 0» после прогона со ста попаданиями
@@ -421,7 +423,18 @@ class Gateway:
                     route.model,
                 )
             self._cache_put(digests[position], stage, profile, text, prompt)
+            diag.event(
+                "модель",
+                этап=stage,
+                профиль=profile,
+                исход="ответ",
+                маршрут=route.name,
+                модель=route.model,
+                кандидат=position + 1,
+                символов=len(text or ""),
+            )
             return text
+        diag.event("модель", этап=stage, профиль=profile, исход="никто не ответил")
         return None
 
     def _attempt(

@@ -29,6 +29,7 @@ from typing import Any, Iterator, Sequence
 
 import settings
 import source_store
+import diag
 import src_common
 import src_hhlike
 import src_rabota
@@ -197,6 +198,7 @@ def _collect_site(
                         max(0, limit - found) if limit else 0,
                         fetcher,
                     )
+                    before = found
                     for draft in stream:
                         found += 1
                         marks.append((draft.key, site.source, draft.external_id, draft.url))
@@ -209,7 +211,22 @@ def _collect_site(
                         owners.setdefault(draft.key, []).append(getattr(loaded, "id", "профиль"))
                         if limit and found >= limit:
                             break
+                    diag.event(
+                        "запрос",
+                        площадка=site.source,
+                        текст=str(query["text"]),
+                        регион=query.get("area") or profile.areas or None,
+                        период=int(query.get("period", 7)),
+                        найдено=found - before,
+                        прошло_предфильтр=len(owners),
+                    )
                 except Exception as exc:  # noqa: BLE001 — чужой сайт [CORE-017]
+                    diag.event(
+                        "запрос_сорвался",
+                        площадка=site.source,
+                        текст=str(query["text"]),
+                        ошибка=str(exc)[:200],
+                    )
                     log.warning(
                         "%s: сбор по запросу «%s» сорвался: %s", site.label, query["text"], exc
                     )
