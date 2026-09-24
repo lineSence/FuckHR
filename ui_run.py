@@ -12,6 +12,7 @@ from typing import Mapping, Sequence
 
 import jobs
 import run_loop
+import run_view
 import settings
 from ui_core import esc, table
 
@@ -284,7 +285,9 @@ def render_run(
             lines=len(job.lines),
         )
     )
-    parts.append(progress_block(job))
+    # Сводка вместо ленты: полоски по фазам, цифры прогона и сгруппированные
+    # беды. Сама лента ниже под катом — она нужна, когда сводки не хватило.
+    parts.append(run_view.render(run_view.summary(job.lines), job.running))
 
     if job.running:
         parts.append(
@@ -305,14 +308,16 @@ def render_run(
             )
 
     parts.append(
-        '<pre class=console id=log>{}</pre>'.format(
-            esc("\n".join(job.tail(400)) or "ждём вывод…")
+        "<details><summary>Лог целиком ({} строк)</summary>"
+        '<pre class=console id=log>{}</pre></details>'.format(
+            len(job.lines), esc("\n".join(job.tail(400)) or "ждём вывод…")
         )
     )
     parts.append(CONSOLE_JS)
     parts.append(
-        "<p class=muted>Тот же вывод идёт в терминал, где запущен webui.py, и в файл "
-        "внутри data/jobs.</p>"
+        "<p class=muted>Лента целиком идёт в терминал, где запущен webui.py, и в файл "
+        "внутри data/jobs: здесь она под катом, потому что читать её глазами всё "
+        "равно нечем.</p>"
     )
 
     history = [item for item in jobs.runner.history() if item.id != job.id]
