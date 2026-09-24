@@ -26,8 +26,13 @@ CREATE TABLE IF NOT EXISTS llm_cache (
     created_at  TEXT NOT NULL,
     prompt      TEXT NOT NULL DEFAULT ''
 );
-CREATE INDEX IF NOT EXISTS idx_llm_cache_prompt ON llm_cache(prompt);
 """
+
+# Индекс создаётся отдельно и строго после миграции: в старой базе таблица уже
+# есть, `CREATE TABLE IF NOT EXISTS` её не трогает, и индекс по ещё не
+# добавленной колонке валит весь скрипт схемы с «no such column: prompt».
+PROMPT_INDEX = "CREATE INDEX IF NOT EXISTS idx_llm_cache_prompt ON llm_cache(prompt)"
+
 
 def ensure_cache(conn: sqlite3.Connection) -> None:
     conn.executescript(CACHE_SCHEMA)
@@ -35,7 +40,7 @@ def ensure_cache(conn: sqlite3.Connection) -> None:
     names = {row[1] for row in conn.execute("PRAGMA table_info(llm_cache)")}
     if "prompt" not in names:
         conn.execute("ALTER TABLE llm_cache ADD COLUMN prompt TEXT NOT NULL DEFAULT ''")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_cache_prompt ON llm_cache(prompt)")
+    conn.execute(PROMPT_INDEX)
     conn.commit()
 
 
@@ -122,6 +127,7 @@ def put(
 
 __all__ = (
     "CACHE_SCHEMA",
+    "PROMPT_INDEX",
     "digest",
     "ensure_cache",
     "get",

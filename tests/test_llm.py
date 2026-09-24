@@ -97,3 +97,20 @@ def test_ошибка_транспорта_деградирует_до_none() ->
     assert gateway.complete("extract", MESSAGES) is None
     assert len(attempts) == 2
     assert gateway.usage.failures == 1
+
+
+def test_старая_база_кэша_доживает_до_колонки_prompt() -> None:
+    """Колонка появилась позже схемы: у кого база с прошлых прогонов, миграция
+    обязана пройти молча. Индекс по новой колонке в самом скрипте схемы валил
+    её с «no such column: prompt» — и вместе с ней любую страницу интерфейса."""
+    import llm_cache
+
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(
+        "CREATE TABLE llm_cache (hash TEXT PRIMARY KEY, stage TEXT NOT NULL,"
+        " profile TEXT NOT NULL, response TEXT NOT NULL, created_at TEXT NOT NULL);"
+    )
+    conn.execute("INSERT INTO llm_cache VALUES ('h', 'extract', 'fast', 'ответ', 'now')")
+    llm_cache.ensure_cache(conn)
+    assert llm_cache.get(conn, "h") == "ответ"
+    assert llm_cache.miss_reason(conn, "чужой-вопрос") == "new"
