@@ -6,10 +6,9 @@
 
 from __future__ import annotations
 
+from fuckhr.company import fake_reviews, reviewitems
 from fuckhr.text import aitext
 from fuckhr.text import aitext_rules as R
-from fuckhr.company import fake_reviews
-from fuckhr.company import reviewitems
 
 GENERATED = (
     "В современном мире динамично развивающаяся компания открывает широкие "

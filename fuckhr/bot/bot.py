@@ -28,13 +28,19 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
 
-from fuckhr.company import contacts
-from fuckhr.core import db
-from fuckhr.core import settings
 from fuckhr.bot import bot_buttons
-from fuckhr.bot.bot_buttons import CONTACT_ACTIONS  # noqa: F401 — публичное имя остаётся в bot
+from fuckhr.bot.bot_buttons import (
+    CONTACT_ACTIONS,  # noqa: F401 — публичное имя остаётся в bot
+)
+from fuckhr.company import contacts
+from fuckhr.core import db, settings
 
 log = logging.getLogger("bot")
 
@@ -399,7 +405,9 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     # Чужие INFO-строки (httpx на каждый запрос, поиск весов у huggingface_hub)
     # прячут наши: приглушаем их здесь же, где настраиваем лог.
-    from fuckhr.core.logs import quiet_libraries  # noqa: PLC0415 — логи настраивает только запуск
+    from fuckhr.core.logs import (
+        quiet_libraries,  # noqa: PLC0415 — логи настраивает только запуск
+    )
 
     quiet_libraries()
     token_env = os.environ["TELEGRAM_BOT_TOKEN"]

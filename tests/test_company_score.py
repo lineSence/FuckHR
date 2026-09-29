@@ -12,12 +12,9 @@ import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
-from fuckhr.company import company_score
+from fuckhr.company import company_score, company_score_store, dossier_store, fake_store
 from fuckhr.company import company_score_rules as R
-from fuckhr.company import company_score_store
 from fuckhr.core import db
-from fuckhr.company import dossier_store
-from fuckhr.company import fake_store
 from fuckhr.pipeline import maintenance
 from fuckhr.web import ui_companies
 

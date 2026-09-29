@@ -24,12 +24,10 @@ from __future__ import annotations
 import logging
 import sqlite3
 
-from fuckhr.vacancy import intake
-from fuckhr.llm import llm
-from fuckhr.vacancy import profile_form
 from fuckhr.core import settings
-from fuckhr.web import ui_intake
-from fuckhr.web import ui_profiles
+from fuckhr.llm import llm
+from fuckhr.vacancy import intake, profile_form
+from fuckhr.web import ui_intake, ui_profiles
 from fuckhr.web.ui_core import esc, open_db
 from fuckhr.web.ui_profile import render_profile, save_profile
 from fuckhr.web.ui_resume import render_resume, save_resume

@@ -15,24 +15,14 @@ import sqlite3
 import urllib.parse
 from typing import Sequence
 
-from fuckhr.vacancy import conditions
-from fuckhr.outreach import contact_finds
-from fuckhr.company import embeddings_tasks
-from fuckhr.company import contacts
-from fuckhr.core import db
-from fuckhr.vacancy import detector
-from fuckhr.web import filters
+from fuckhr.company import contacts, embeddings_tasks, websearch
+from fuckhr.core import db, settings
 from fuckhr.llm import llm
-from fuckhr.web import ui_filters
-from fuckhr.text import aitext
-from fuckhr.vacancy import market
-from fuckhr.vacancy import market_rules
-from fuckhr.outreach import outreach
-from fuckhr.vacancy import profiles
-from fuckhr.core import settings
+from fuckhr.outreach import contact_finds, outreach
 from fuckhr.sources import source_store
-from fuckhr.vacancy import sources
-from fuckhr.company import websearch
+from fuckhr.text import aitext
+from fuckhr.vacancy import conditions, detector, market, market_rules, profiles, sources
+from fuckhr.web import filters, ui_filters
 from fuckhr.web.ui_core import esc, live_search, sort_head, sort_pick, table
 from fuckhr.web.ui_run import (  # noqa: F401 — реэкспорт: страница запуска живёт в ui_run.py
     loop_form,
@@ -43,7 +33,6 @@ from fuckhr.web.ui_settings import (  # noqa: F401 — реэкспорт: на�
     render_settings,
     settings_field,
 )
-
 
 # ———— выдача ————
 

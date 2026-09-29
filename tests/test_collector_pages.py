@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import logging
 
-from fuckhr.vacancy import collector
 from fuckhr.core import settings
 from fuckhr.sources.hh import Vacancy
+from fuckhr.vacancy import collector
 
 
 def vacancy(number: int) -> Vacancy:

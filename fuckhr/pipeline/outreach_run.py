@@ -15,14 +15,9 @@ import sqlite3
 import sys
 from typing import Sequence
 
-from fuckhr.vacancy import conditions
-from fuckhr.company import contacts
-from fuckhr.core import db
-from fuckhr.vacancy import detector
+from fuckhr.company import contacts, websearch
+from fuckhr.core import db, settings
 from fuckhr.llm import llm
-from fuckhr.vacancy import resume
-from fuckhr.core import settings
-from fuckhr.company import websearch
 from fuckhr.outreach.outreach import (
     APPLY_CHANNEL,
     collect_facts,
@@ -31,6 +26,7 @@ from fuckhr.outreach.outreach import (
     process_row,
     top_rows,
 )
+from fuckhr.vacancy import conditions, detector, resume
 
 log = logging.getLogger("outreach")
 
@@ -40,7 +36,9 @@ def setup_logging(verbose: bool = False) -> None:
         level=logging.DEBUG if verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
-    from fuckhr.core.logs import quiet_libraries  # noqa: PLC0415 — логи настраивает только запуск
+    from fuckhr.core.logs import (
+        quiet_libraries,  # noqa: PLC0415 — логи настраивает только запуск
+    )
 
     quiet_libraries(verbose)
 

@@ -20,10 +20,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Sequence
 
-from fuckhr.company import contacts
-from fuckhr.core import db
-from fuckhr.core import settings
-from fuckhr.company import websearch
+from fuckhr.company import contacts, websearch
+from fuckhr.core import db, settings
 
 log = logging.getLogger("fuckhr")
 

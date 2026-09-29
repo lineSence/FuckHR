@@ -23,7 +23,6 @@ import re
 from typing import Any, Sequence
 
 from fuckhr.company.fake_reviews import normalize
-
 from fuckhr.text import injection
 
 log = logging.getLogger("fake_llm")

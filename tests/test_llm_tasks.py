@@ -11,12 +11,10 @@ from __future__ import annotations
 import sqlite3
 from typing import Sequence
 
-from fuckhr.vacancy import conditions
-from fuckhr.llm import llm
-from fuckhr.llm import llm_cache
-from fuckhr.vacancy import llm_tasks
-from fuckhr.outreach import outreach
 from fuckhr.company import websearch
+from fuckhr.llm import llm, llm_cache
+from fuckhr.outreach import outreach
+from fuckhr.vacancy import conditions, llm_tasks
 
 LOCAL_URL = "http://localhost:3001/v1"
 PROXY_URL = "http://127.0.0.1:4000/v1"

@@ -11,11 +11,9 @@ import os
 import sqlite3
 from dataclasses import dataclass
 
-from fuckhr.vacancy import conditions
 from fuckhr.core import db
 from fuckhr.text import embeddings_store as store
-from fuckhr.vacancy import extract_spans
-from fuckhr.vacancy import stage_gates
+from fuckhr.vacancy import conditions, extract_spans, stage_gates
 from fuckhr.vacancy.llm_tasks import Condition
 
 MODEL = "bge-m3"

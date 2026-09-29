@@ -14,8 +14,8 @@ from pathlib import Path
 
 import pytest
 
-from fuckhr.pipeline import run_loop
 from fuckhr.core import settings
+from fuckhr.pipeline import run_loop
 from fuckhr.web import ui_run
 
 

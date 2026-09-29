@@ -18,8 +18,7 @@ from __future__ import annotations
 
 from typing import Iterable, Sequence
 
-from fuckhr.lab import bench_cases
-from fuckhr.lab import bench_hard
+from fuckhr.lab import bench_cases, bench_hard
 
 # Вес уровня: 1 «умеет вообще», 2 «не путается», 3 «не ведётся».
 LEVEL_WEIGHT = {1: 1.0, 2: 2.0, 3: 3.0}

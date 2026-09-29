@@ -21,18 +21,17 @@ from __future__ import annotations
 import json
 import sqlite3
 
-from fuckhr.company import company_score_rules
-from fuckhr.company import company_score_store
-from fuckhr.vacancy import company_signals
+from fuckhr.company import (
+    company_score_rules,
+    company_score_store,
+    dossier,
+    fake_company,
+    fake_rules,
+    fake_store,
+    review_area,
+)
 from fuckhr.outreach import contact_finds
-from fuckhr.company import dossier
-from fuckhr.company import fake_company
-from fuckhr.company import fake_rules
-from fuckhr.company import fake_store
-from fuckhr.vacancy import market_rules
-from fuckhr.vacancy import market_store
-from fuckhr.vacancy import profiles
-from fuckhr.company import review_area
+from fuckhr.vacancy import company_signals, market_rules, market_store, profiles
 from fuckhr.web.ui_company_lists import (
     CONTACT_COLUMNS,
     CONTACT_SORTS,

@@ -7,8 +7,8 @@
 
 from __future__ import annotations
 
-from fuckhr.core import db
 from fuckhr.company import dossier
+from fuckhr.core import db
 from fuckhr.pipeline import run_bg
 from fuckhr.sources.hh import Vacancy
 

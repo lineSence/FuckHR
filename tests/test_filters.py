@@ -18,11 +18,9 @@ import sqlite3
 import pytest
 
 from fuckhr.core import db
-from fuckhr.web import filters
-from fuckhr.vacancy import score
-from fuckhr.web import ui_filters
-from fuckhr.web import ui_views
 from fuckhr.sources.hh import Vacancy
+from fuckhr.vacancy import score
+from fuckhr.web import filters, ui_filters, ui_views
 
 
 def _add(conn: sqlite3.Connection, title: str, company: str, score: float, **kwargs):

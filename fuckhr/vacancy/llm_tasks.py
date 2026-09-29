@@ -31,8 +31,8 @@ import re
 from dataclasses import dataclass, replace
 from typing import Any, Sequence
 
-from fuckhr.vacancy import conditions
 from fuckhr.text import injection
+from fuckhr.vacancy import conditions
 
 log = logging.getLogger("llm_tasks")
 

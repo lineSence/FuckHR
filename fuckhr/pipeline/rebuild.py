@@ -32,20 +32,18 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from fuckhr.text import aitext
-from fuckhr.text import aitext_rules
-from fuckhr.company import company_score_rules
-from fuckhr.company import company_score_store
-from fuckhr.core import db
-from fuckhr.vacancy import detector
-from fuckhr.text import embeddings_store
-from fuckhr.company import embeddings_tasks
-from fuckhr.company import injection_store
-from fuckhr.vacancy import market_store
-from fuckhr.core import settings
-from fuckhr.sources.hh import Vacancy
+from fuckhr.company import (
+    company_score_rules,
+    company_score_store,
+    embeddings_tasks,
+    injection_store,
+)
+from fuckhr.core import db, settings
 from fuckhr.core.logs import setup_logging
 from fuckhr.pipeline.run_setup import build_gateway
+from fuckhr.sources.hh import Vacancy
+from fuckhr.text import aitext, aitext_rules, embeddings_store
+from fuckhr.vacancy import detector, market_store
 from fuckhr.vacancy.score import Profile, evaluate
 
 log = logging.getLogger("fuckhr")

@@ -22,8 +22,7 @@ import sqlite3
 from typing import Mapping, Sequence
 
 from fuckhr.llm import llm
-from fuckhr.vacancy import resume
-from fuckhr.vacancy import resume_llm
+from fuckhr.vacancy import resume, resume_llm
 from fuckhr.web.ui_core import area_field, esc, table, text_field
 
 log = logging.getLogger("ui_resume")

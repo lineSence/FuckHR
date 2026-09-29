@@ -255,7 +255,9 @@ def classify_item(item: Any) -> Any:
 def owner_code(value: str | None = None) -> str:
     """Сфера владельца из настройки. Пусто или мусор — разбивки не будет."""
     if value is None:
-        from fuckhr.core import settings  # noqa: PLC0415 — каталог настроек читает этот модуль
+        from fuckhr.core import (
+            settings,  # noqa: PLC0415 — каталог настроек читает этот модуль
+        )
 
         value = settings.get("REVIEW_AREA", "")
     code = str(value).strip().lower()

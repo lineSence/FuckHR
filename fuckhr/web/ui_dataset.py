@@ -14,9 +14,9 @@ import sqlite3
 import time
 from pathlib import Path
 
+from fuckhr.core import settings
 from fuckhr.lab import dataset_export
 from fuckhr.web import jobs
-from fuckhr.core import settings
 from fuckhr.web.ui_core import esc, table
 
 ROOT = Path(__file__).resolve().parents[2]

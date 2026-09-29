@@ -31,8 +31,7 @@ import re
 from dataclasses import dataclass
 from datetime import date, timedelta
 
-from fuckhr.company import review_area
-from fuckhr.company import reviewtext
+from fuckhr.company import review_area, reviewtext
 from fuckhr.company.dossier_rules import LONE_RATING_RE, RATING_RE, STARS_RE
 
 ITEM_MARK = "\x00ITEM\x00"

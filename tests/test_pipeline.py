@@ -14,9 +14,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from fuckhr.core import db
+from fuckhr.core import db, settings
 from fuckhr.pipeline import run
-from fuckhr.core import settings
 
 ROOT = Path(__file__).resolve().parents[1]
 DETAIL = {

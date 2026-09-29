@@ -30,7 +30,14 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from fuckhr.vacancy import profile_form
-from fuckhr.web.ui_core import area_field, checkbox_field, esc, hint_block, open_db, text_field
+from fuckhr.web.ui_core import (
+    area_field,
+    checkbox_field,
+    esc,
+    hint_block,
+    open_db,
+    text_field,
+)
 
 log = logging.getLogger("ui_profile")
 

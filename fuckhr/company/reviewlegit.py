@@ -29,8 +29,8 @@ from typing import Iterable, Sequence
 
 from rapidfuzz import fuzz
 
-from fuckhr.core import company_key
 from fuckhr.company import reviewlegit_rules as R
+from fuckhr.core import company_key
 
 
 @dataclass(frozen=True)

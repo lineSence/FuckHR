@@ -18,8 +18,8 @@ from __future__ import annotations
 import sqlite3
 import urllib.parse
 
-from fuckhr.text import injection_rules as R
 from fuckhr.company import injection_store
+from fuckhr.text import injection_rules as R
 from fuckhr.web.ui_core import esc, table
 
 LIMIT = 200

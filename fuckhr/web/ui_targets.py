@@ -29,11 +29,10 @@ from __future__ import annotations
 import sqlite3
 from typing import Mapping, Sequence
 
-from fuckhr.company import deepresearch
+from fuckhr.company import deepresearch, targets
+from fuckhr.core import settings
 from fuckhr.sources import hh_employer
 from fuckhr.web import jobs
-from fuckhr.core import settings
-from fuckhr.company import targets
 from fuckhr.web.ui_core import esc, sort_pick, table
 
 # Кандидаты ищутся сетью, поэтому их держим в памяти процесса между двумя

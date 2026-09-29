@@ -5,10 +5,7 @@ from __future__ import annotations
 import json
 
 from fuckhr.sources import src_common as C
-from fuckhr.sources import src_hhlike
-from fuckhr.sources import src_rabota
-from fuckhr.sources import src_superjob
-from fuckhr.sources import src_trudvsem
+from fuckhr.sources import src_hhlike, src_rabota, src_superjob, src_trudvsem
 
 
 class Fake:

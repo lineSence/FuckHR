@@ -14,9 +14,8 @@ import json
 import sqlite3
 from typing import Sequence
 
-from fuckhr.vacancy import intake
-from fuckhr.vacancy import profile_form
 from fuckhr.core import settings
+from fuckhr.vacancy import intake, profile_form
 from fuckhr.web.ui_core import esc, table
 
 PLACEHOLDER = (

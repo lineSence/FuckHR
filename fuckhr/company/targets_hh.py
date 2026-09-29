@@ -20,11 +20,10 @@ import logging
 import sqlite3
 from typing import Any, Sequence
 
-from fuckhr.core import db
+from fuckhr.company import targets
+from fuckhr.core import db, settings
 from fuckhr.sources import hh_employer
 from fuckhr.vacancy import profiles
-from fuckhr.core import settings
-from fuckhr.company import targets
 
 log = logging.getLogger("targets_hh")
 

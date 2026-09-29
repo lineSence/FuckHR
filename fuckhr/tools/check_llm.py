@@ -47,7 +47,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(levelname)s %(name)s: %(message)s",
     )
-    from fuckhr.core.logs import quiet_libraries  # noqa: PLC0415 — логи настраивает только запуск
+    from fuckhr.core.logs import (
+        quiet_libraries,  # noqa: PLC0415 — логи настраивает только запуск
+    )
 
     quiet_libraries(args.verbose)
 

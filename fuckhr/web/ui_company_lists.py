@@ -11,9 +11,9 @@ from __future__ import annotations
 import sqlite3
 import urllib.parse
 
-from fuckhr.vacancy import company_signals
-from fuckhr.outreach import contact_finds
 from fuckhr.company import contacts
+from fuckhr.outreach import contact_finds
+from fuckhr.vacancy import company_signals
 from fuckhr.web.ui_core import esc, sort_head, sort_pick, table
 from fuckhr.web.ui_views import draft_button
 

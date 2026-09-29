@@ -19,10 +19,9 @@ import logging
 import sqlite3
 from typing import Sequence
 
-from fuckhr.core import embeddings
-from fuckhr.text import embeddings_store as store
 from fuckhr.company import fake_reviews
-from fuckhr.core import settings
+from fuckhr.core import embeddings, settings
+from fuckhr.text import embeddings_store as store
 
 log = logging.getLogger("fuckhr")
 

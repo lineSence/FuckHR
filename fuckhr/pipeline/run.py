@@ -47,47 +47,47 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from fuckhr.pipeline import canary
-from fuckhr.company import company_score_rules
-from fuckhr.company import company_score_store
-from fuckhr.vacancy import conditions
-from fuckhr.outreach import contact_finds
-from fuckhr.core import db
-from fuckhr.vacancy import detector
-from fuckhr.vacancy import detector_llm
-from fuckhr.core import diag
-from fuckhr.company import dossier
-from fuckhr.sources import geo
-from fuckhr.sources import hh_pages
-from fuckhr.company import injection_store
-from fuckhr.text import aitext
-from fuckhr.text import aitext_rules
-from fuckhr.vacancy import market_company
-from fuckhr.vacancy import market_store
-from fuckhr.outreach import outreach
-from fuckhr.core import settings
-from fuckhr.sources import source_store
-from fuckhr.vacancy import sources
-from fuckhr.company import targets_hh
-from fuckhr.company import websearch
-from fuckhr.vacancy.collector import collect  # noqa: F401 — реэкспорт: сбор живёт в collector.py
-from fuckhr.sources.hh import Vacancy, enrich
-from fuckhr.sources.hh_html import BlockedError, HHHtmlClient
-from fuckhr.pipeline import run_bg
-from fuckhr.pipeline import run_cards
-from fuckhr.pipeline import run_loop
-from fuckhr.company import embeddings_tasks
-from fuckhr.pipeline import run_details
-from fuckhr.core.logs import setup_logging
-from fuckhr.pipeline.run_setup import build_gateway, notify_if_broken
+from fuckhr.company import (
+    company_score_rules,
+    company_score_store,
+    dossier,
+    embeddings_tasks,
+    injection_store,
+    targets_hh,
+    websearch,
+)
 from fuckhr.company.research import (  # noqa: F401 — реэкспорт для старых вызовов
     MAX_RESEARCH_WORKERS,
     _research_one,
     research_companies,
     research_workers,
 )
-from fuckhr.vacancy import profiles
-from fuckhr.vacancy.score import Profile, Verdict, evaluate  # noqa: F401 — реэкспорт для старых вызовов
+from fuckhr.core import db, diag, settings
+from fuckhr.core.logs import setup_logging
+from fuckhr.outreach import contact_finds, outreach
+from fuckhr.pipeline import canary, run_bg, run_cards, run_details, run_loop
+from fuckhr.pipeline.run_setup import build_gateway, notify_if_broken
+from fuckhr.sources import geo, hh_pages, source_store
+from fuckhr.sources.hh import Vacancy, enrich
+from fuckhr.sources.hh_html import BlockedError, HHHtmlClient
+from fuckhr.text import aitext, aitext_rules
+from fuckhr.vacancy import (
+    conditions,
+    detector,
+    detector_llm,
+    market_company,
+    market_store,
+    profiles,
+    sources,
+)
+from fuckhr.vacancy.collector import (
+    collect,  # noqa: F401 — реэкспорт: сбор живёт в collector.py
+)
+from fuckhr.vacancy.score import (  # noqa: F401 — реэкспорт для старых вызовов
+    Profile,
+    Verdict,
+    evaluate,
+)
 
 log = logging.getLogger("fuckhr")
 

@@ -12,18 +12,11 @@ import os
 import sqlite3
 from typing import Sequence
 
-from fuckhr.text import aitext
-from fuckhr.company import company_score_store
-from fuckhr.vacancy import conditions
+from fuckhr.company import company_score_store, contacts, dossier, injection_store
 from fuckhr.core import db
 from fuckhr.outreach import contact_finds
-from fuckhr.company import contacts
-from fuckhr.vacancy import detector
-from fuckhr.company import injection_store
-from fuckhr.company import dossier
-from fuckhr.vacancy import market
-from fuckhr.vacancy import market_company
-from fuckhr.vacancy import market_store
+from fuckhr.text import aitext
+from fuckhr.vacancy import conditions, detector, market, market_company, market_store
 
 log = logging.getLogger("run_cards")
 

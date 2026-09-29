@@ -92,8 +92,7 @@ def test_broken_page_is_not_an_exception() -> None:
 
 def test_vacancy_detail_carries_address(monkeypatch):
     """Адрес приезжает вместе с описанием: отдельного похода за точкой нет."""
-    from fuckhr.sources import geo
-    from fuckhr.sources import hh_html
+    from fuckhr.sources import geo, hh_html
 
     state = {
         "vacancyView": {

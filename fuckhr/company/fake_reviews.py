@@ -25,11 +25,11 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Iterable, Mapping, Sequence
 
-from fuckhr.text import aitext
-from fuckhr.text import aitext_rules as AI
 from fuckhr.company import fake_rules as R
 from fuckhr.company.dossier_rules import PATTERN_RULES, POSITIVE_MARKERS, SITE_TRUST
 from fuckhr.company.reviewitems import ReviewItem
+from fuckhr.text import aitext
+from fuckhr.text import aitext_rules as AI
 
 log = logging.getLogger("fuckhr")
 

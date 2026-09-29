@@ -9,10 +9,9 @@
 from __future__ import annotations
 
 from fuckhr.core import db
-from fuckhr.sources import hh_html
-from fuckhr.sources import hh_pages
-from fuckhr.vacancy import profiles
+from fuckhr.sources import hh_html, hh_pages
 from fuckhr.sources.hh import Vacancy
+from fuckhr.vacancy import profiles
 
 STATE = (
     '<template id="HH-Lux-InitialState">'

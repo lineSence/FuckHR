@@ -14,8 +14,7 @@ from typing import Mapping, Sequence
 
 from fuckhr.company import deepresearch
 from fuckhr.company import deepresearch_store as store
-from fuckhr.web import jobs
-from fuckhr.web import ui_companies
+from fuckhr.web import jobs, ui_companies
 from fuckhr.web.ui_core import esc, table
 
 

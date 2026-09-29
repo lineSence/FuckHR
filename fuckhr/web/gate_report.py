@@ -20,13 +20,9 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Sequence
 
-from fuckhr.vacancy import conditions
-from fuckhr.core import db
-from fuckhr.vacancy import detector
-from fuckhr.vacancy import profiles
+from fuckhr.core import db, settings
 from fuckhr.pipeline import rebuild
-from fuckhr.core import settings
-from fuckhr.vacancy import sources
+from fuckhr.vacancy import conditions, detector, profiles, sources
 
 log = logging.getLogger("fuckhr")
 

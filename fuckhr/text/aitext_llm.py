@@ -24,7 +24,6 @@ import re
 from typing import Any, Mapping
 
 from fuckhr.text import aitext_rules as R
-
 from fuckhr.text import injection
 
 log = logging.getLogger("aitext_llm")

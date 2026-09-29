@@ -43,16 +43,11 @@ from typing import Any, Sequence
 
 import yaml
 
-from fuckhr.outreach import contact_finds
-from fuckhr.company import contacts
-from fuckhr.vacancy import detector
-from fuckhr.company import dossier_store
-from fuckhr.vacancy import llm_tasks
-from fuckhr.outreach import outreach_scan
-from fuckhr.vacancy import resume
-from fuckhr.core import settings
-from fuckhr.company import websearch
+from fuckhr.company import contacts, dossier_store, websearch
 from fuckhr.company.dossier_rules import RISK_RED
+from fuckhr.core import settings
+from fuckhr.outreach import contact_finds, outreach_scan
+
 # Текст письма и карточки живут в outreach_draft.py [CORE-024]; имена
 # реэкспортируются, чтобы вызовы и тесты не переписывались.
 from fuckhr.outreach.outreach_draft import (  # noqa: F401
@@ -66,6 +61,7 @@ from fuckhr.outreach.outreach_draft import (  # noqa: F401
     build_follow_up,
     format_card,
 )
+from fuckhr.vacancy import detector, llm_tasks, resume
 
 log = logging.getLogger("outreach")
 

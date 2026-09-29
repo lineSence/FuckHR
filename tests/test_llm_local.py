@@ -7,8 +7,7 @@
 
 from __future__ import annotations
 
-from fuckhr.llm import llm
-from fuckhr.llm import llm_embed
+from fuckhr.llm import llm, llm_embed
 
 LOCAL_URL = "http://127.0.0.1:8080/v1"
 PROXY_URL = "http://127.0.0.1:4000/v1"

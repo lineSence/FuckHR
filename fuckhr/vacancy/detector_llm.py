@@ -16,10 +16,9 @@ import logging
 import re
 from typing import Any, Sequence
 
+from fuckhr.text import injection
 from fuckhr.vacancy import detector
 from fuckhr.vacancy.detector import Claim, Finding, Report
-
-from fuckhr.text import injection
 
 log = logging.getLogger("detector_llm")
 

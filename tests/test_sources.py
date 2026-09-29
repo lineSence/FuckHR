@@ -5,11 +5,10 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass
 
-from fuckhr.core import db
-from fuckhr.core import settings
+from fuckhr.core import db, settings
 from fuckhr.sources import source_store
-from fuckhr.vacancy import sources
 from fuckhr.sources.hh import Vacancy
+from fuckhr.vacancy import sources
 from fuckhr.vacancy.score import Profile
 
 

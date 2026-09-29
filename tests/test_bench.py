@@ -9,8 +9,7 @@ from __future__ import annotations
 
 import json
 
-from fuckhr.lab import bench
-from fuckhr.lab import bench_cases
+from fuckhr.lab import bench, bench_cases
 from fuckhr.llm import llm
 
 
@@ -314,8 +313,7 @@ def test_форма_сравнения_переключает_маршрут() -
 
 
 def test_запуск_передаёт_маршрут(monkeypatch) -> None:
-    from fuckhr.web import jobs
-    from fuckhr.web import ui_forms
+    from fuckhr.web import jobs, ui_forms
 
     seen: dict = {}
     monkeypatch.setattr(

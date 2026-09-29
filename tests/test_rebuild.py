@@ -18,8 +18,8 @@ import pytest
 
 from fuckhr.core import db
 from fuckhr.pipeline import rebuild
-from fuckhr.vacancy import score
 from fuckhr.sources.hh import Vacancy
+from fuckhr.vacancy import score
 
 
 @pytest.fixture

@@ -23,9 +23,8 @@ import sqlite3
 from dataclasses import dataclass, field
 from typing import Sequence
 
+from fuckhr.core import db, settings
 from fuckhr.vacancy import conditions
-from fuckhr.core import db
-from fuckhr.core import settings
 
 # Поле условий -> чем источник отвечает на тот же вопрос. Пусто означает, что
 # структурного ответа нет и поле остаётся за моделью.

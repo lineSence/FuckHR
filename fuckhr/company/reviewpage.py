@@ -47,15 +47,15 @@ import json
 import logging
 import os
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable, Sequence
 
-from fuckhr.core import net_rate
 from fuckhr.company import reviewsites
 from fuckhr.company.reviewtext import looks_like_review, strip_tags
+from fuckhr.core import net_rate
 
 log = logging.getLogger("reviewpage")
 
@@ -149,8 +149,7 @@ def split_items(raw_html: str, url: str, text: str) -> tuple[object, ...]:
     ничего не нашёл — разбираем общим путём, как незнакомую страницу
     [CORE-017].
     """
-    from fuckhr.company import reviewitems
-    from fuckhr.company import reviewsites
+    from fuckhr.company import reviewitems, reviewsites
 
     items = reviewsites.parse(raw_html, url)
     if items:

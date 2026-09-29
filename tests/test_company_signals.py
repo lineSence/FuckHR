@@ -9,8 +9,8 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
-from fuckhr.vacancy import company_signals
 from fuckhr.core import db
+from fuckhr.vacancy import company_signals
 
 
 def _conn() -> sqlite3.Connection:

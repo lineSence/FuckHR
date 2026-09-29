@@ -15,9 +15,8 @@ import json
 import logging
 import sqlite3
 
-from fuckhr.company import company_score
+from fuckhr.company import company_score, dossier_store
 from fuckhr.company import company_score_rules as R
-from fuckhr.company import dossier_store
 from fuckhr.core.db import utcnow
 
 log = logging.getLogger("company_score_store")

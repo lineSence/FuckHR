@@ -12,25 +12,25 @@ from dataclasses import replace
 
 from fuckhr.core import llm_profiles
 from fuckhr.core.settings_base import (  # noqa: F401 — публичные имена каталога
-    TEXT,
-    SECRET,
-    INT,
-    FLOAT,
     BOOL,
-    TRUE_VALUES,
-    Field,
-    GROUP_RUN,
-    GROUP_PREFILTER,
-    GROUP_DETECTOR,
-    GROUP_SCORE,
+    FLOAT,
     GROUP_DEEP,
-    GROUP_SOURCE,
-    GROUP_TELEGRAM,
+    GROUP_DETECTOR,
+    GROUP_EMBED,
     GROUP_LLM,
     GROUP_LLM_STAGES,
-    GROUP_EMBED,
-    GROUP_SEARCH,
     GROUP_PATHS,
+    GROUP_PREFILTER,
+    GROUP_RUN,
+    GROUP_SCORE,
+    GROUP_SEARCH,
+    GROUP_SOURCE,
+    GROUP_TELEGRAM,
+    INT,
+    SECRET,
+    TEXT,
+    TRUE_VALUES,
+    Field,
 )
 from fuckhr.core.settings_fields_gates import GATE_FIELDS, GROUP_GATES, GROUP_GATES_HINT
 from fuckhr.core.settings_fields_install import GROUP_INSTALL, INSTALL_HINT, is_install
@@ -43,7 +43,11 @@ from fuckhr.core.settings_fields_reviews import (
     GROUP_SITES_HINT,
     SITE_FIELDS,
 )
-from fuckhr.core.settings_fields_sources import GROUP_SOURCES, GROUP_SOURCES_HINT, SOURCE_FIELDS
+from fuckhr.core.settings_fields_sources import (
+    GROUP_SOURCES,
+    GROUP_SOURCES_HINT,
+    SOURCE_FIELDS,
+)
 
 # Подпись группы в свёрнутом виде: по названию не всегда понятно, что внутри.
 GROUP_HINTS: dict[str, str] = {

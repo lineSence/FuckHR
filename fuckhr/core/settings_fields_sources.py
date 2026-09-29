@@ -8,7 +8,15 @@
 
 from __future__ import annotations
 
-from fuckhr.core.settings_base import FLOAT, GROUP_SEARCH, GROUP_SOURCE, INT, SECRET, TEXT, Field
+from fuckhr.core.settings_base import (
+    FLOAT,
+    GROUP_SEARCH,
+    GROUP_SOURCE,
+    INT,
+    SECRET,
+    TEXT,
+    Field,
+)
 
 GROUP_SOURCES = "Другие площадки"
 GROUP_SOURCES_HINT = "какие агрегаторы входят в сбор и чем они платят"

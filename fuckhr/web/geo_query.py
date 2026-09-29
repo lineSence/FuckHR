@@ -26,8 +26,8 @@ import sqlite3
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
-from fuckhr.web import filters
 from fuckhr.sources import geo
+from fuckhr.web import filters
 from fuckhr.web.filters import Filter
 
 EARTH_KM = 6371.0

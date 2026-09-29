@@ -11,8 +11,7 @@
 
 from __future__ import annotations
 
-from fuckhr.company import dossier_rules
-from fuckhr.company import fake_rules
+from fuckhr.company import dossier_rules, fake_rules
 from fuckhr.vacancy import market_rules
 
 # --- оси ---

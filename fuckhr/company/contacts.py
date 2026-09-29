@@ -76,13 +76,13 @@ from fuckhr.company.contacts_rules import (  # noqa: F401
     HR_MAILBOXES,
     LEAD_RANKS,
     NAME_RE,
-    lead_roles,
-    role_subject,
     PHONE_RE,
     ROLE_RANKS,
     TELEGRAM_NICK_RE,
     TELEGRAM_RE,
     TRANSLIT,
+    lead_roles,
+    role_subject,
 )
 
 

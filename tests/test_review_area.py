@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from fuckhr.company import fake_company
-from fuckhr.company import fake_reviews
-from fuckhr.company import review_area
+from fuckhr.company import fake_company, fake_reviews, review_area
 from fuckhr.company.reviewitems import ReviewItem
 
 

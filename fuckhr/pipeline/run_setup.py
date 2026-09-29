@@ -12,8 +12,8 @@ import os
 from pathlib import Path
 
 from fuckhr.bot import bot as tg
-from fuckhr.pipeline import canary
 from fuckhr.llm import llm
+from fuckhr.pipeline import canary
 
 log = logging.getLogger("fuckhr")
 

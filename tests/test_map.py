@@ -11,10 +11,7 @@ from __future__ import annotations
 import sqlite3
 
 from fuckhr.sources import geo
-from fuckhr.web import geo_query
-from fuckhr.web import jobs
-from fuckhr.web import ui_core
-from fuckhr.web import ui_map
+from fuckhr.web import geo_query, jobs, ui_core, ui_map
 
 SCHEMA = """
 CREATE TABLE vacancies (

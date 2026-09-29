@@ -24,7 +24,6 @@ from fuckhr.company import review_area
 from fuckhr.company.fake_reviews import Verdict, shingles, similarity
 from fuckhr.company.reviewitems import ReviewItem
 
-
 # Разбивка по сферам имеет смысл только на некоторой выборке: «по вашей сфере
 # 1.0 из 5 по одному отзыву» выглядит как факт, а является шумом.
 AREA_MIN_TOTAL = 5

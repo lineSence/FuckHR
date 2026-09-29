@@ -25,8 +25,8 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from fuckhr.vacancy import profile_form
 from fuckhr.core import settings
+from fuckhr.vacancy import profile_form
 from fuckhr.web.ui_core import esc
 
 log = logging.getLogger("ui_profiles")

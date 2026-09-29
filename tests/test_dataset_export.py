@@ -9,12 +9,9 @@ from __future__ import annotations
 import json
 import sqlite3
 
-from fuckhr.vacancy import conditions
-from fuckhr.lab import dataset_core
-from fuckhr.lab import dataset_export
 from fuckhr.core import db
-from fuckhr.vacancy import detector
-
+from fuckhr.lab import dataset_core, dataset_export
+from fuckhr.vacancy import conditions, detector
 
 DESCRIPTION = (
     "Ищем backend-разработчика в дружную команду. Формат работы гибридный: "

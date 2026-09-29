@@ -9,9 +9,8 @@ from __future__ import annotations
 
 import sqlite3
 
+from fuckhr.company import contacts, dossier_store
 from fuckhr.outreach import contact_finds
-from fuckhr.company import contacts
-from fuckhr.company import dossier_store
 from fuckhr.web import ui_companies
 
 
@@ -126,8 +125,7 @@ def _item(
     rating: float,
 ) -> None:
     """Разобранный отзыв прямо в таблицу: сфера ставится теми же словарями."""
-    from fuckhr.company import fake_store
-    from fuckhr.company import review_area
+    from fuckhr.company import fake_store, review_area
 
     fake_store.ensure_schema(conn)
     area = review_area.classify(text)

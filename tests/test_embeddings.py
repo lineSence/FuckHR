@@ -12,12 +12,10 @@ import sqlite3
 
 import pytest
 
+from fuckhr.company import embeddings_tasks, fake_reviews, reviewitems
 from fuckhr.core import embeddings
-from fuckhr.text import embeddings_store as store
-from fuckhr.company import embeddings_tasks
-from fuckhr.company import fake_reviews
 from fuckhr.llm import llm_embed
-from fuckhr.company import reviewitems
+from fuckhr.text import embeddings_store as store
 
 
 class FakeGateway:

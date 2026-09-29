@@ -23,7 +23,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from fuckhr.lab.bench_cases import Case, Hit, Person, numbers as _numbers
+from fuckhr.lab.bench_cases import Case, Hit, Person
+from fuckhr.lab.bench_cases import numbers as _numbers
 
 # —— тексты ——
 

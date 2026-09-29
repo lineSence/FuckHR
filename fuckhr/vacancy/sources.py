@@ -27,14 +27,15 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Any, Iterator, Sequence
 
-from fuckhr.core import settings
-from fuckhr.sources import source_store
-from fuckhr.core import diag
-from fuckhr.sources import src_common
-from fuckhr.sources import src_hhlike
-from fuckhr.sources import src_rabota
-from fuckhr.sources import src_superjob
-from fuckhr.sources import src_trudvsem
+from fuckhr.core import diag, settings
+from fuckhr.sources import (
+    source_store,
+    src_common,
+    src_hhlike,
+    src_rabota,
+    src_superjob,
+    src_trudvsem,
+)
 from fuckhr.sources.hh import Vacancy
 from fuckhr.vacancy.score import FUZZY_THRESHOLD, ceiling, evaluate
 

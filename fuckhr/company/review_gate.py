@@ -32,13 +32,12 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Mapping, Sequence
 
+from fuckhr.company import review_gate_store
+from fuckhr.company.fake_reviews import text_hash
+from fuckhr.core import linear_model, settings
+from fuckhr.llm import llm_embed
 from fuckhr.text import ai_text_rules
 from fuckhr.text import embeddings_store as store
-from fuckhr.core import linear_model
-from fuckhr.llm import llm_embed
-from fuckhr.company import review_gate_store
-from fuckhr.core import settings
-from fuckhr.company.fake_reviews import text_hash
 
 STAGES = ("review_fake", "ai_text")
 

@@ -14,10 +14,9 @@ from __future__ import annotations
 import sqlite3
 from typing import Any
 
-from fuckhr.text import embeddings_store
-from fuckhr.vacancy import extract_spans
 from fuckhr.core import settings
-from fuckhr.vacancy import stage_gates
+from fuckhr.text import embeddings_store
+from fuckhr.vacancy import extract_spans, stage_gates
 from fuckhr.web.ui_core import esc, table
 
 

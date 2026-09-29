@@ -6,10 +6,9 @@ import sqlite3
 
 import pytest
 
-from fuckhr.company import judge_labels
-from fuckhr.core import linear_model
-from fuckhr.company import review_gate
+from fuckhr.company import judge_labels, review_gate
 from fuckhr.company import review_gate_store as store
+from fuckhr.core import linear_model
 from fuckhr.lab import review_gate_train as train
 
 
@@ -222,8 +221,8 @@ def test_без_оценок_гейта_порядок_отзывов_прежн
 
 def test_у_ai_text_к_вектору_добавляются_приметы() -> None:
     """Связка учится на векторе плюс стилометрия, и рантайм считает то же самое."""
-    from fuckhr.text import ai_text_rules
     from fuckhr.company import review_gate
+    from fuckhr.text import ai_text_rules
 
     text = "Компания обеспечивает комфортную атмосферу. " * 6
     base = [0.1, 0.2, 0.3]

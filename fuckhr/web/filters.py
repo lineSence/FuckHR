@@ -25,16 +25,13 @@
 from __future__ import annotations
 
 import sqlite3
-
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Callable, Mapping, Sequence
 
-from fuckhr.text import aitext_rules
 from fuckhr.company import company_score_rules as CSR
-from fuckhr.text import injection_rules
-from fuckhr.vacancy import market_rules
-from fuckhr.vacancy import sources
+from fuckhr.text import aitext_rules, injection_rules
+from fuckhr.vacancy import market_rules, sources
 
 ANY = ""  # значение «неважно» у выбора
 
@@ -585,12 +582,9 @@ def query_string(params: Mapping[str, str], drop: str = "") -> str:
 def ensure_tables(conn: sqlite3.Connection) -> None:
     """Фильтры заглядывают в соседние таблицы; на старой базе их может не быть."""
     # Импорт внутри: хранилища сами тянут правила, а те — этот модуль.
-    from fuckhr.company import company_score_store
-    from fuckhr.company import contacts
-    from fuckhr.vacancy import detector
-    from fuckhr.company import injection_store
-
+    from fuckhr.company import company_score_store, contacts, injection_store
     from fuckhr.sources import source_store
+    from fuckhr.vacancy import detector
 
     for store in (
         contacts,

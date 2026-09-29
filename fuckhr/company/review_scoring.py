@@ -13,15 +13,17 @@ from __future__ import annotations
 import logging
 from typing import Sequence
 
-from fuckhr.text import aitext_llm
-from fuckhr.company import embeddings_tasks
-from fuckhr.company import fake_llm
-from fuckhr.company import fake_reviews
-from fuckhr.company import fake_store
-from fuckhr.company import judge_labels
-from fuckhr.company import review_gate
+from fuckhr.company import (
+    embeddings_tasks,
+    fake_llm,
+    fake_reviews,
+    fake_store,
+    judge_labels,
+    review_gate,
+)
 from fuckhr.company.fake_reviews import Verdict
 from fuckhr.company.reviewitems import ReviewItem
+from fuckhr.text import aitext_llm
 
 log = logging.getLogger("review_scoring")
 

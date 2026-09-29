@@ -6,14 +6,13 @@
 
 from __future__ import annotations
 
-import time
 import sqlite3
+import time
 from typing import Mapping, Sequence
 
-from fuckhr.web import jobs
-from fuckhr.pipeline import run_loop
-from fuckhr.web import run_view
 from fuckhr.core import settings
+from fuckhr.pipeline import run_loop
+from fuckhr.web import jobs, run_view
 from fuckhr.web.ui_core import esc, table
 
 

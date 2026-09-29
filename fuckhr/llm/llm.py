@@ -64,6 +64,7 @@ import time
 from dataclasses import dataclass
 from typing import Callable, Sequence
 
+from fuckhr.core import diag
 from fuckhr.core.llm_profiles import (  # noqa: F401 — публичные имена остаются в llm
     EMBEDDINGS,
     FAST,
@@ -84,10 +85,15 @@ from fuckhr.core.llm_profiles import (  # noqa: F401 — публичные им
     ProfileError,
     profile_for,
 )
-from fuckhr.core import diag
 from fuckhr.llm import llm_cache
-from fuckhr.llm.llm_cache import CACHE_SCHEMA, ensure_cache  # noqa: F401 — публичные имена остаются в llm
-from fuckhr.llm.llm_budget import Budget, Usage  # noqa: F401 — Usage остаётся публичным именем llm
+from fuckhr.llm.llm_budget import (  # noqa: F401 — Usage остаётся публичным именем llm
+    Budget,
+    Usage,
+)
+from fuckhr.llm.llm_cache import (  # noqa: F401 — публичные имена остаются в llm
+    CACHE_SCHEMA,
+    ensure_cache,
+)
 from fuckhr.llm.llm_cascade import Dropped, Route, build_chain, parse_models
 from fuckhr.llm.llm_http import (  # noqa: F401 — публичные имена остаются в llm
     MAX_ERROR_CHARS,

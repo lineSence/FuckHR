@@ -31,18 +31,19 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from fuckhr.company import company_score_store
-from fuckhr.core import db
-from fuckhr.company import deepresearch
-from fuckhr.company import deepresearch_store
-from fuckhr.sources import geo
-from fuckhr.company import research
-from fuckhr.company import research_deep
-from fuckhr.core import settings
-from fuckhr.company import targets
-from fuckhr.company import targets_hh
-from fuckhr.sources.hh_html import HHHtmlClient
+from fuckhr.company import (
+    company_score_store,
+    deepresearch,
+    deepresearch_store,
+    research,
+    research_deep,
+    targets,
+    targets_hh,
+)
+from fuckhr.core import db, settings
 from fuckhr.core.logs import setup_logging
+from fuckhr.sources import geo
+from fuckhr.sources.hh_html import HHHtmlClient
 
 log = logging.getLogger("fuckhr")
 

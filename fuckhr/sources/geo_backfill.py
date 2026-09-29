@@ -31,11 +31,10 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from fuckhr.core import db
-from fuckhr.sources import geo
-from fuckhr.core import settings
-from fuckhr.sources.hh_html import VACANCY_PREFIX, HHHtmlClient
+from fuckhr.core import db, settings
 from fuckhr.core.logs import setup_logging
+from fuckhr.sources import geo
+from fuckhr.sources.hh_html import VACANCY_PREFIX, HHHtmlClient
 
 log = logging.getLogger("fuckhr")
 

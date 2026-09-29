@@ -59,10 +59,25 @@ import os
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-from fuckhr.web import jobs
-from fuckhr.core import llm_profiles
+from fuckhr.core import llm_profiles, settings
 from fuckhr.llm import llm
-from fuckhr.core import settings
+from fuckhr.web import (
+    jobs,
+    ui_bench,
+    ui_dataset,
+    ui_gate,
+    ui_guard,
+    ui_injections,
+    ui_map,
+    ui_research,
+    ui_run,
+    ui_settings,
+    ui_sources,
+    ui_stages,
+    ui_stats,
+    ui_targets,
+    webui_profile,
+)
 from fuckhr.web.ui_companies import (
     apply_cleanup,
     company_rows,
@@ -86,12 +101,6 @@ from fuckhr.web.ui_core import (
     table,
     text_field,
 )
-from fuckhr.web import ui_bench
-from fuckhr.web import ui_dataset
-from fuckhr.web import ui_gate
-from fuckhr.web import ui_stats
-from fuckhr.web import ui_sources
-from fuckhr.web import ui_stages
 from fuckhr.web.ui_forms import (
     bench_models,
     profile_summary,
@@ -104,17 +113,8 @@ from fuckhr.web.ui_forms import (
     search_updates,
     start_bench,
 )
-from fuckhr.web import ui_guard
-from fuckhr.web import ui_injections
-from fuckhr.web import ui_map
-from fuckhr.web import ui_research
-from fuckhr.web import ui_settings
-from fuckhr.web import ui_targets
-from fuckhr.web import ui_run
-from fuckhr.web import webui_profile
 from fuckhr.web.ui_resume import render_resume, save_resume
 from fuckhr.web.ui_views import (
-    vacancy_rows,
     contact_rows,
     progress_block,
     render_contacts,
@@ -123,6 +123,7 @@ from fuckhr.web.ui_views import (
     render_vacancies,
     render_vacancy,
     vacancy_one,
+    vacancy_rows,
 )
 
 log = logging.getLogger("webui")
@@ -596,7 +597,9 @@ def main(argv: list[str] | None = None) -> int:
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
-    from fuckhr.core.logs import quiet_libraries  # noqa: PLC0415 — логи настраивает только запуск
+    from fuckhr.core.logs import (
+        quiet_libraries,  # noqa: PLC0415 — логи настраивает только запуск
+    )
 
     quiet_libraries(args.verbose)
     try:

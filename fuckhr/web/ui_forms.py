@@ -22,20 +22,16 @@ from typing import Sequence
 
 import yaml
 
+from fuckhr.company import contacts, websearch
+from fuckhr.core import llm_profiles, settings
 from fuckhr.lab import bench  # noqa: F401 — STAGES нужен вызывающим
-from fuckhr.web.ui_bench import render_bench_form  # реэкспорт: имя осталось прежним
-from fuckhr.company import contacts
+from fuckhr.llm import llm, llm_embed
 from fuckhr.text import embeddings_store
-from fuckhr.web import jobs
-from fuckhr.llm import llm
-from fuckhr.core import llm_profiles
-from fuckhr.llm import llm_embed
 from fuckhr.vacancy import profile_form
-from fuckhr.core import settings
-from fuckhr.company import websearch
+from fuckhr.web import jobs
+from fuckhr.web.ui_bench import render_bench_form  # реэкспорт: имя осталось прежним
 from fuckhr.web.ui_core import esc, number_field, table, text_field
 from fuckhr.web.ui_profile import LIST_HINTS, render_profile, save_profile
-
 
 # ———— поиск ————
 

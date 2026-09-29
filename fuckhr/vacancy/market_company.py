@@ -22,9 +22,8 @@ import sqlite3
 from dataclasses import dataclass
 from statistics import median
 
-from fuckhr.vacancy import market
+from fuckhr.vacancy import market, market_store
 from fuckhr.vacancy import market_rules as R
-from fuckhr.vacancy import market_store
 
 log = logging.getLogger("market_company")
 

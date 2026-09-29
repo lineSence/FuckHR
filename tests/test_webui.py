@@ -27,14 +27,10 @@ from pathlib import Path
 import pytest
 import yaml
 
-from fuckhr.vacancy import conditions
-from fuckhr.company import contacts
-from fuckhr.core import db
-from fuckhr.vacancy import detector
-from fuckhr.core import settings
-from fuckhr.web import ui_views
-from fuckhr.web import webui
-from fuckhr.company import websearch
+from fuckhr.company import contacts, websearch
+from fuckhr.core import db, settings
+from fuckhr.vacancy import conditions, detector
+from fuckhr.web import ui_views, webui
 
 
 def test_сохранение_фактов_не_трогает_остальной_профиль(tmp_path: Path) -> None:
@@ -467,8 +463,7 @@ def test_установочные_настройки_собраны_в_одну_
 
 
 def test_консоль_лога_держит_прокрутку(monkeypatch) -> None:
-    from fuckhr.web import jobs
-    from fuckhr.web import ui_run
+    from fuckhr.web import jobs, ui_run
 
     class Job:
         id = 1

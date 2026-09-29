@@ -36,12 +36,10 @@ from datetime import datetime, timezone
 from typing import Callable
 from urllib.parse import urlsplit
 
-from fuckhr.core import company_key
 from fuckhr.company import deepresearch_rules as R
 from fuckhr.company import deepresearch_store as store
-from fuckhr.company import reviewpage
-from fuckhr.core import settings
-from fuckhr.company import websearch
+from fuckhr.company import reviewpage, websearch
+from fuckhr.core import company_key, settings
 
 log = logging.getLogger("fuckhr")
 

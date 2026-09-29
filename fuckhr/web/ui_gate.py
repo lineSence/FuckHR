@@ -20,12 +20,10 @@ import json
 import sqlite3
 from pathlib import Path
 
-from fuckhr.web import jobs
-from fuckhr.company import judge_labels
-from fuckhr.company import review_gate
-from fuckhr.company import review_gate_store
-from fuckhr.lab import review_gate_train
+from fuckhr.company import judge_labels, review_gate, review_gate_store
 from fuckhr.core import settings
+from fuckhr.lab import review_gate_train
+from fuckhr.web import jobs
 from fuckhr.web.ui_core import details, esc, table
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -320,7 +318,9 @@ def post(path: str, form: dict) -> tuple[int | None, str]:
         job_id, note = start_train()
         if job_id is not None:
             return job_id, ""
-    from fuckhr.web.ui_core import open_db  # noqa: PLC0415 — соединение на запрос, как у остальных форм
+    from fuckhr.web.ui_core import (
+        open_db,  # noqa: PLC0415 — соединение на запрос, как у остальных форм
+    )
 
     conn = open_db()
     try:

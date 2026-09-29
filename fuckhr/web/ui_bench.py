@@ -15,11 +15,10 @@ import time
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from fuckhr.lab import bench
-from fuckhr.lab import bench_metrics
-from fuckhr.web import jobs
-from fuckhr.llm import llm
 from fuckhr.core import settings
+from fuckhr.lab import bench, bench_metrics
+from fuckhr.llm import llm
+from fuckhr.web import jobs
 from fuckhr.web.ui_core import details, esc, table
 
 ROOT = Path(__file__).resolve().parents[2]

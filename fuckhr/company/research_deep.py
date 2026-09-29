@@ -13,10 +13,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from fuckhr.core import db
-from fuckhr.company import deepresearch
-from fuckhr.company import deepresearch_store
-from fuckhr.core import settings
+from fuckhr.company import deepresearch, deepresearch_store
+from fuckhr.core import db, settings
 from fuckhr.core.logs import setup_logging
 
 log = logging.getLogger("fuckhr")

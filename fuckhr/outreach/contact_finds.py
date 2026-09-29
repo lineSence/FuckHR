@@ -15,8 +15,8 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timezone
 
-from fuckhr.core import company_key
 from fuckhr.company import contacts
+from fuckhr.core import company_key
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS contact_finds (

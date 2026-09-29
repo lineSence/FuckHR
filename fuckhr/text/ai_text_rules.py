@@ -34,9 +34,7 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Sequence
 
-from fuckhr.core import db
-from fuckhr.core import linear_model
-from fuckhr.core import settings
+from fuckhr.core import db, linear_model, settings
 
 STAGE = "ai_text"
 MIN_CHARS = 120  # короче — считать нечего, признаки шумят

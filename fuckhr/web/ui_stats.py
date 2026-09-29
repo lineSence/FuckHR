@@ -17,9 +17,9 @@ from __future__ import annotations
 import sqlite3
 
 from fuckhr.company import company_score_rules
+from fuckhr.core import settings
 from fuckhr.text import injection_rules
 from fuckhr.vacancy import profiles
-from fuckhr.core import settings
 from fuckhr.web import stats
 from fuckhr.web.ui_chart import BRAND, SECOND, bars, columns, legend, spark
 from fuckhr.web.ui_core import details, esc, table

@@ -9,8 +9,7 @@ from __future__ import annotations
 import sqlite3
 from typing import Any, Sequence
 
-from fuckhr.vacancy import detector
-from fuckhr.vacancy import detector_llm
+from fuckhr.vacancy import detector, detector_llm
 
 
 def _snap(

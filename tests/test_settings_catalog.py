@@ -16,9 +16,9 @@ import ast
 import pathlib
 import re
 
-from fuckhr.llm import llm
-from fuckhr.core import settings
 from fuckhr.company import websearch
+from fuckhr.core import settings
+from fuckhr.llm import llm
 
 ENV_RE = re.compile(r"^[A-Z][A-Z0-9]*(_[A-Z0-9]+)+$")
 READERS = {"getenv", "get", "flag", "number"}
@@ -136,8 +136,7 @@ def test_список_исключений_не_протух() -> None:
 
 
 def test_списки_в_подсказках_отзывов_совпадают_с_кодом() -> None:
-    from fuckhr.company import review_area
-    from fuckhr.company import reviewsites
+    from fuckhr.company import review_area, reviewsites
     from fuckhr.core import settings_fields_reviews as reviews
 
     assert reviews.SITE_HOSTS == reviewsites.hosts()

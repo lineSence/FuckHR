@@ -50,14 +50,13 @@ import json
 import logging
 import os
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable, Sequence
 
 from fuckhr.company import contacts_rules
-from fuckhr.core import net_rate
-from fuckhr.core import settings
+from fuckhr.core import net_rate, settings
 
 log = logging.getLogger("websearch")
 

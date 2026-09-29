@@ -10,13 +10,11 @@ import sqlite3
 
 import pytest
 
-from fuckhr.core import db
-from fuckhr.sources import hh_employer
-from fuckhr.sources import hh_html
 from fuckhr.company import targets
-from fuckhr.web import ui_targets
+from fuckhr.core import db
+from fuckhr.sources import hh_employer, hh_html
 from fuckhr.sources.hh import Vacancy
-
+from fuckhr.web import ui_targets
 
 EMPLOYER_PAGE = """
 <a href="/employer/1455?hhtmFrom=main">Яндекс</a>

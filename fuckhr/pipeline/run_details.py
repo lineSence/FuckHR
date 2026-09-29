@@ -103,9 +103,10 @@ def plan(
     карточку не качаем из-за ворот (`PREFILTER_DETAILS_DELTA`). Заказы уходят
     в пул сразу: к началу цикла первые карточки уже в пути.
     """
-    from fuckhr.core import db  # noqa: PLC0415 — модуль сети не должен тянуть базу при импорте
-    from fuckhr.vacancy import profiles
-    from fuckhr.vacancy import sources
+    from fuckhr.core import (
+        db,  # noqa: PLC0415 — модуль сети не должен тянуть базу при импорте
+    )
+    from fuckhr.vacancy import profiles, sources
 
     cached_details: dict[str, Any] = {}
     skipped = 0

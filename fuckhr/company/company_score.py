@@ -23,16 +23,16 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 
 from fuckhr.company import company_score_rules as R
-from fuckhr.vacancy import company_signals
-from fuckhr.company import deepresearch_store
-from fuckhr.vacancy import detector
-from fuckhr.company import dossier_rules
-from fuckhr.company import dossier_store
-from fuckhr.company import fake_rules
-from fuckhr.company import fake_store
-from fuckhr.company import injection_store
-from fuckhr.vacancy import market_store
+from fuckhr.company import (
+    deepresearch_store,
+    dossier_rules,
+    dossier_store,
+    fake_rules,
+    fake_store,
+    injection_store,
+)
 from fuckhr.core import settings
+from fuckhr.vacancy import company_signals, detector, market_store
 
 log = logging.getLogger("company_score")
 

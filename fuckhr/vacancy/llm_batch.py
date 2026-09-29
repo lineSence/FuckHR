@@ -17,11 +17,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Sequence
 
-from fuckhr.core import db
-from fuckhr.vacancy import detector_llm
+from fuckhr.core import db, settings
 from fuckhr.llm import llm
-from fuckhr.vacancy import llm_tasks
-from fuckhr.core import settings
+from fuckhr.vacancy import detector_llm, llm_tasks
 
 log = logging.getLogger("fuckhr")
 

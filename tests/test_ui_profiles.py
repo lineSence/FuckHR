@@ -13,8 +13,7 @@ import pytest
 import yaml
 
 from fuckhr.vacancy import profiles
-from fuckhr.web import ui_profile
-from fuckhr.web import ui_profiles
+from fuckhr.web import ui_profile, ui_profiles
 
 
 def write(path: Path, **extra: object) -> Path:

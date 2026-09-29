@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from fuckhr.vacancy import detector
 import pytest
-from fuckhr.pipeline import run
-from fuckhr.vacancy import score
+
 from fuckhr.core import settings
+from fuckhr.pipeline import run
+from fuckhr.vacancy import detector, score
 
 
 def test_значения_по_умолчанию(monkeypatch: pytest.MonkeyPatch) -> None:

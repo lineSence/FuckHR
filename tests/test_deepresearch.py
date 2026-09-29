@@ -14,10 +14,8 @@ from __future__ import annotations
 
 import pytest
 
-from fuckhr.company import company_score
-from fuckhr.company import deepresearch
+from fuckhr.company import company_score, deepresearch, websearch
 from fuckhr.company import deepresearch_store as store
-from fuckhr.company import websearch
 
 
 def provider(pages: dict[str, list[str]]) -> websearch.SearchProvider:

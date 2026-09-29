@@ -8,13 +8,15 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
-from fuckhr.company import dossier
-from fuckhr.company import fake_company
-from fuckhr.company import fake_llm
-from fuckhr.company import fake_reviews
-from fuckhr.company import fake_rules
-from fuckhr.company import fake_store
-from fuckhr.company import reviewitems
+from fuckhr.company import (
+    dossier,
+    fake_company,
+    fake_llm,
+    fake_reviews,
+    fake_rules,
+    fake_store,
+    reviewitems,
+)
 
 КЛИШЕ = (
     "Динамично развивающаяся компания, дружный коллектив, современный офис, "

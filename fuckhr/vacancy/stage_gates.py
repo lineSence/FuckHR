@@ -26,10 +26,9 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Any, Sequence
 
-from fuckhr.core import embeddings
-from fuckhr.text import embeddings_store as store
+from fuckhr.core import embeddings, settings
 from fuckhr.llm import llm_embed
-from fuckhr.core import settings
+from fuckhr.text import embeddings_store as store
 
 log = logging.getLogger("fuckhr")
 

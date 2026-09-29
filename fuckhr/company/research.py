@@ -15,11 +15,9 @@ import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from fuckhr.core import db
-from fuckhr.company import dossier
+from fuckhr.company import dossier, websearch
+from fuckhr.core import db, settings
 from fuckhr.llm import llm
-from fuckhr.core import settings
-from fuckhr.company import websearch
 
 log = logging.getLogger("fuckhr")
 

@@ -28,9 +28,8 @@ import logging
 import sqlite3
 from typing import Any, Iterable, Sequence
 
+from fuckhr.core import db, settings
 from fuckhr.vacancy import conditions
-from fuckhr.core import db
-from fuckhr.core import settings
 
 log = logging.getLogger("fuckhr")
 

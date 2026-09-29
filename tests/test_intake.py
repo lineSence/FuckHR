@@ -10,8 +10,7 @@ from __future__ import annotations
 import json
 import sqlite3
 
-from fuckhr.vacancy import intake
-from fuckhr.vacancy import resume
+from fuckhr.vacancy import intake, resume
 
 SAID = (
     "Ищу backend на Python, 8 лет опыта, последние 3 года highload в финтехе. "

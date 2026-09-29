@@ -16,8 +16,8 @@ import sqlite3
 from typing import Iterable, Sequence
 
 from fuckhr.core import embeddings
-from fuckhr.llm import llm_embed
 from fuckhr.core.db import utcnow
+from fuckhr.llm import llm_embed
 
 log = logging.getLogger("fuckhr")
 

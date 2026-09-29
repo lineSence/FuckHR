@@ -39,10 +39,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
-from fuckhr.company import judge_labels
+from fuckhr.company import judge_labels, review_gate, review_gate_store
 from fuckhr.core import linear_model
-from fuckhr.company import review_gate
-from fuckhr.company import review_gate_store
 
 STAGES = review_gate.STAGES
 TEACHER = 0.85            # вероятность «да» для метки учителя «да»
@@ -276,11 +274,16 @@ def render(report: Sequence[dict]) -> str:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    from fuckhr.core import db  # noqa: PLC0415 — тестам не нужен
-    from fuckhr.llm import llm  # noqa: PLC0415
-    from fuckhr.llm import llm_embed  # noqa: PLC0415
-    from fuckhr.core import settings  # noqa: PLC0415
     from dotenv import find_dotenv, load_dotenv  # noqa: PLC0415
+
+    from fuckhr.core import (
+        db,  # noqa: PLC0415 — тестам не нужен
+        settings,  # noqa: PLC0415
+    )
+    from fuckhr.llm import (
+        llm,  # noqa: PLC0415
+        llm_embed,  # noqa: PLC0415
+    )
 
     parser = argparse.ArgumentParser(description="Обучение гейта отзывов")
     parser.add_argument("--stages", default=",".join(STAGES), help="через запятую")

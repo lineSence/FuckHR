@@ -9,9 +9,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace as NS
 
-from fuckhr.lab import bench
-from fuckhr.lab import bench_hard
-from fuckhr.lab import bench_metrics
+from fuckhr.lab import bench, bench_hard, bench_metrics
 
 
 def item(field: str, value: str, quote: str = "") -> NS:

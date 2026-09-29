@@ -52,31 +52,15 @@ import logging
 from dataclasses import dataclass, field
 from typing import Sequence
 
-from fuckhr.company import contacts
-from fuckhr.company import fake_company
-from fuckhr.company import review_area
-from fuckhr.company import reviewlegit
-from fuckhr.company import reviewlegit_store
-from fuckhr.company import fake_rules
-from fuckhr.company import reviewpage
-from fuckhr.company.dossier_summary import (  # noqa: F401 — реэкспорт для старых вызовов
-    format_lines,
-    format_summary,
-    summarize,
+from fuckhr.company import (
+    contacts,
+    fake_company,
+    fake_rules,
+    review_area,
+    reviewlegit,
+    reviewlegit_store,
+    reviewpage,
 )
-from fuckhr.company.dossier_text import (  # noqa: F401 — реэкспорт для старых вызовов
-    Pattern,
-    average_rating,
-    count_markers,
-    find_patterns,
-    is_negated,
-    matched_needle,
-    polarity_of,
-)
-from fuckhr.company.fake_company import CompanyMark
-from fuckhr.company.fake_reviews import Verdict
-from fuckhr.company.reviewitems import ReviewItem, extract_rating  # noqa: F401 — реэкспорт
-from fuckhr.company.review_scoring import score_reviews  # noqa: F401 — реэкспорт, [CORE-024]
 from fuckhr.company.dossier_rules import (  # noqa: F401 — реэкспорт для старых вызовов
     MAX_LLM_CHARS,
     MAX_LLM_REVIEWS,
@@ -86,8 +70,8 @@ from fuckhr.company.dossier_rules import (  # noqa: F401 — реэкспорт 
     NEGATIVE_MARKERS,
     PATTERN_RULES,
     POSITIVE_MARKERS,
-    RATING_RE,
     QUERY_SITES,
+    RATING_RE,
     REVIEW_SITES,  # noqa: F401 — реэкспорт для старых вызовов
     RISK_GREEN,
     RISK_RED,
@@ -111,6 +95,29 @@ from fuckhr.company.dossier_store import (  # noqa: F401 — реэкспорт 
     load_reviews,
     row_to_lines,
     store,
+)
+from fuckhr.company.dossier_summary import (  # noqa: F401 — реэкспорт для старых вызовов
+    format_lines,
+    format_summary,
+    summarize,
+)
+from fuckhr.company.dossier_text import (  # noqa: F401 — реэкспорт для старых вызовов
+    Pattern,
+    average_rating,
+    count_markers,
+    find_patterns,
+    is_negated,
+    matched_needle,
+    polarity_of,
+)
+from fuckhr.company.fake_company import CompanyMark
+from fuckhr.company.fake_reviews import Verdict
+from fuckhr.company.review_scoring import (
+    score_reviews,  # noqa: F401 — реэкспорт, [CORE-024]
+)
+from fuckhr.company.reviewitems import (  # noqa: F401 — реэкспорт
+    ReviewItem,
+    extract_rating,
 )
 
 log = logging.getLogger("dossier")

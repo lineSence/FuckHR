@@ -24,8 +24,8 @@ import os
 import re
 from typing import Any, Sequence
 
-from fuckhr.text import injection
 from fuckhr.core import settings
+from fuckhr.text import injection
 from fuckhr.vacancy.llm_tasks import Condition
 
 log = logging.getLogger("fuckhr")
@@ -216,7 +216,9 @@ def main(argv=None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     # Чужие INFO-строки (httpx на каждый запрос, поиск весов у huggingface_hub)
     # прячут наши: приглушаем их здесь же, где настраиваем лог.
-    from fuckhr.core.logs import quiet_libraries  # noqa: PLC0415 — логи настраивает только запуск
+    from fuckhr.core.logs import (
+        quiet_libraries,  # noqa: PLC0415 — логи настраивает только запуск
+    )
 
     quiet_libraries()
     if args.force:

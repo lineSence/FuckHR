@@ -39,11 +39,10 @@ from typing import Iterable, Sequence
 
 from dotenv import load_dotenv
 
-from fuckhr.lab import dataset_core
-from fuckhr.core import db
-from fuckhr.vacancy import detector
-from fuckhr.core import settings
 from fuckhr.company.contacts_rules import EMAIL_RE, PHONE_RE
+from fuckhr.core import db, settings
+from fuckhr.lab import dataset_core
+from fuckhr.vacancy import detector
 
 log = logging.getLogger("dataset")
 

@@ -24,8 +24,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
-from fuckhr.vacancy import profile_schema
-from fuckhr.vacancy import resume
+from fuckhr.vacancy import profile_schema, resume
 
 log = logging.getLogger("intake")
 

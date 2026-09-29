@@ -405,8 +405,7 @@ def known(url: str) -> bool:
 
 def parse(html: str, url: str = "", today: date | None = None) -> tuple[Any, ...]:
     """Отзывы страницы по её разметке. Пусто — пусть разбирает общий путь."""
-    from fuckhr.company import review_area
-    from fuckhr.company import reviewitems
+    from fuckhr.company import review_area, reviewitems
 
     parser = PARSERS.get(host_of(url))
     if parser is None or not html:

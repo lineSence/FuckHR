@@ -12,9 +12,8 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Any, Sequence
 
-from fuckhr.vacancy import conditions
-from fuckhr.vacancy import llm_tasks
 from fuckhr.outreach import outreach
+from fuckhr.vacancy import conditions, llm_tasks
 
 DESCRIPTION = (
     "Ищем Python-разработчика. Гибрид два дня в офисе в Москве, "

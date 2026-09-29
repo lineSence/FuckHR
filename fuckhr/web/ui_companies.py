@@ -16,15 +16,17 @@ import json
 import sqlite3
 import urllib.parse
 
-from fuckhr.company import company_score_rules
-from fuckhr.web import filters
-from fuckhr.web import ui_filters
-from fuckhr.company import company_score_store
-from fuckhr.company import contacts
-from fuckhr.company import dossier
+from fuckhr.company import (
+    company_score_rules,
+    company_score_store,
+    contacts,
+    dossier,
+    reviewlegit_store,
+)
 from fuckhr.vacancy import profiles
-from fuckhr.company import reviewlegit_store
+from fuckhr.web import filters, ui_filters
 from fuckhr.web.ui_cleanup import CONFIRM_WORD, apply_cleanup, render_cleanup
+
 # Реэкспорт карточки: имена нужны интерфейсу и тестам по старым путям.
 from fuckhr.web.ui_company import (  # noqa: F401
     RISK_CLASS,

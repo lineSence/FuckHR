@@ -11,8 +11,7 @@ docs/review-sites.md). Полные страницы не хранятся: в �
 
 from __future__ import annotations
 
-from fuckhr.company import reviewpage
-from fuckhr.company import reviewsites
+from fuckhr.company import reviewpage, reviewsites
 
 DREAMJOB = """
 <div class="review review-fl" id="review1">

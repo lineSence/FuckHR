@@ -34,11 +34,8 @@ import sqlite3
 from typing import Any, Mapping
 
 from fuckhr.company import company_score_rules as CSR
-from fuckhr.web import filters
 from fuckhr.sources import geo
-from fuckhr.web import geo_query
-from fuckhr.web import jobs
-from fuckhr.web import ui_filters
+from fuckhr.web import filters, geo_query, jobs, ui_filters
 from fuckhr.web.ui_core import esc, table
 
 # Строка уходит в Leaflet как есть: подстановки s/z/x/y делает он сам. Через

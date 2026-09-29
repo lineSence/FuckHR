@@ -5,9 +5,8 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-from fuckhr.company import contacts
+from fuckhr.company import contacts, websearch
 from fuckhr.outreach import outreach
-from fuckhr.company import websearch
 
 CANDIDATE = contacts.Candidate(
     channel_kind="email",

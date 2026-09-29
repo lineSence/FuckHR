@@ -5,13 +5,10 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
-from fuckhr.vacancy import conditions
-from fuckhr.core import db
-from fuckhr.vacancy import detector
 from fuckhr.company import dossier_store
-from fuckhr.web import stats
-from fuckhr.web import ui_chart
-from fuckhr.web import ui_stats
+from fuckhr.core import db
+from fuckhr.vacancy import conditions, detector
+from fuckhr.web import stats, ui_chart, ui_stats
 
 СЕЙЧАС = datetime.now(timezone.utc)
 

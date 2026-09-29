@@ -7,10 +7,8 @@
 
 from __future__ import annotations
 
-from fuckhr.company import reviewitems
-from fuckhr.company import reviewlegit
+from fuckhr.company import reviewitems, reviewlegit, reviewlegit_store
 from fuckhr.company import reviewlegit_rules as R
-from fuckhr.company import reviewlegit_store
 
 ЖИВОЙ = (
     "Работал в отделе поддержки почти два года. Зарплата приходила 10 и 25 "
@@ -101,8 +99,7 @@ def test_фильтр_делит_поток(conn):
 
 def test_страница_не_про_нас_не_попадает_в_досье(conn):
     """Сквозной прогон: поиск привёл на подборку про другие компании."""
-    from fuckhr.company import dossier
-    from fuckhr.company import reviewpage
+    from fuckhr.company import dossier, reviewpage
 
     страница = (
         '<div class="review-card"><p>{}</p></div>'.format(ЖИВОЙ)

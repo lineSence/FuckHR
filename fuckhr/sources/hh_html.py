@@ -24,7 +24,6 @@ from typing import Any, Callable, Iterator, Sequence
 import httpx
 
 from fuckhr.core import net_rate
-
 from fuckhr.sources.hh import Vacancy, strip_html
 from fuckhr.sources.hh_parse import (  # noqa: F401 — публичные имена остаются у hh_html
     BROWSER_HEADERS,
@@ -45,12 +44,12 @@ from fuckhr.sources.hh_parse import (  # noqa: F401 — публичные им�
     dump_failure,
     extract_state,
     find_vacancy_nodes,
-    node_to_vacancy,
     first_of,
     name_of,
+    node_to_vacancy,
     parse_cards_fallback,
-    schedule_of,
     prune_failures,
+    schedule_of,
     scrub,
 )
 
@@ -226,7 +225,9 @@ class HHHtmlClient:
         Вакансии со страницы всё равно отдаются: «видна в выдаче» — факт для
         истории (ADR-009).
         """
-        from fuckhr.sources.hh_pages import cache_key  # локально: hh_pages тянет настройки
+        from fuckhr.sources.hh_pages import (
+            cache_key,  # локально: hh_pages тянет настройки
+        )
 
         seen_ids: set[str] = set()
         self.exhausted = False
@@ -311,7 +312,9 @@ class HHHtmlClient:
 
     def vacancy(self, vacancy_id: str) -> dict[str, Any]:
         """Карточка вакансии: описание, навыки и адрес из одного состояния."""
-        from fuckhr.sources import geo  # noqa: PLC0415 — точка из того же состояния [CORE-016]
+        from fuckhr.sources import (
+            geo,  # noqa: PLC0415 — точка из того же состояния [CORE-016]
+        )
 
         body = self.fetch(VACANCY_PREFIX + str(vacancy_id))
         try:

@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-from fuckhr.bot import bot
-from fuckhr.bot import bot_buttons
+from fuckhr.bot import bot, bot_buttons
 from fuckhr.company import contacts
 
 

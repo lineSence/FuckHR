@@ -23,15 +23,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
 
-from fuckhr.text import aitext_llm
-from fuckhr.vacancy import detector_llm
 from fuckhr.company import dossier as dossier_mod
-from fuckhr.company import fake_llm
-from fuckhr.vacancy import intake
-from fuckhr.vacancy import llm_tasks
-from fuckhr.vacancy import resume
-from fuckhr.vacancy import resume_llm
-from fuckhr.company import reviewitems
+from fuckhr.company import fake_llm, reviewitems
+from fuckhr.text import aitext_llm
+from fuckhr.vacancy import detector_llm, intake, llm_tasks, resume, resume_llm
 
 VAL_SHARE = 0.1
 SEED = 20260921

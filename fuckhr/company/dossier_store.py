@@ -18,10 +18,9 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
-from fuckhr.core import company_key
-from fuckhr.company import fake_rules
-from fuckhr.company import fake_store
+from fuckhr.company import fake_rules, fake_store
 from fuckhr.company.dossier_rules import RISK_RU, STALE_AFTER_DAYS
+from fuckhr.core import company_key
 
 if TYPE_CHECKING:
     from fuckhr.company.dossier import Dossier

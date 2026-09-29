@@ -15,13 +15,9 @@ import os
 import sqlite3
 from typing import Mapping, Sequence
 
-from fuckhr.vacancy import conditions
-from fuckhr.company import contacts
+from fuckhr.company import contacts, dossier, targets
 from fuckhr.core import db
-from fuckhr.vacancy import detector
-from fuckhr.company import dossier
-from fuckhr.vacancy import resume
-from fuckhr.company import targets
+from fuckhr.vacancy import conditions, detector, resume
 
 # Адрес зашит намеренно: интерфейс без авторизации не должен слушать сеть.
 HOST = "127.0.0.1"

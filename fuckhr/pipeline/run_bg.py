@@ -18,15 +18,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Sequence
 
+from fuckhr.company import dossier, research, websearch
 from fuckhr.core import db
-from fuckhr.company import dossier
-from fuckhr.vacancy import extract_gate
-from fuckhr.vacancy import extract_spans
 from fuckhr.llm import llm
-from fuckhr.vacancy import llm_batch
-from fuckhr.company import research
-from fuckhr.vacancy import stage_gates
-from fuckhr.company import websearch
+from fuckhr.vacancy import extract_gate, extract_spans, llm_batch, stage_gates
 
 log = logging.getLogger("fuckhr")
 

@@ -28,17 +28,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
 
-from fuckhr.lab import bench_cases
-from fuckhr.lab import bench_hard
-from fuckhr.lab import bench_metrics
-from fuckhr.vacancy import detector_llm
 from fuckhr.company import dossier as dossier_mod
-from fuckhr.vacancy import intake
-from fuckhr.llm import llm
-from fuckhr.vacancy import llm_tasks
-from fuckhr.vacancy import resume
-from fuckhr.vacancy import resume_llm
+from fuckhr.lab import bench_cases, bench_hard, bench_metrics
 from fuckhr.lab.bench_cases import Case
+from fuckhr.llm import llm
+from fuckhr.vacancy import detector_llm, intake, llm_tasks, resume, resume_llm
 
 # Полный набор: базовые задачи плюс сложные (уровни 2–3). Разделены по
 # [CORE-024] и по смыслу: базовые отвечают «умеет ли вообще», сложные —
@@ -158,8 +152,7 @@ def run_case(gateway: Any, case: Case) -> Any:
         card = dossier_mod.Dossier(company=case.payload["company"], reviews=reviews)
         return dossier_mod.summarize(gateway, card)[0]
     if case.stage == "review_fake":
-        from fuckhr.company import fake_llm
-        from fuckhr.company import reviewitems
+        from fuckhr.company import fake_llm, reviewitems
 
         items = tuple(
             reviewitems.ReviewItem(url="https://example/{}".format(i), index=i, body=body)
@@ -406,7 +399,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     # Чужие INFO-строки (httpx на каждый запрос, поиск весов у huggingface_hub)
     # прячут наши: приглушаем их здесь же, где настраиваем лог.
-    from fuckhr.core.logs import quiet_libraries  # noqa: PLC0415 — логи настраивает только запуск
+    from fuckhr.core.logs import (
+        quiet_libraries,  # noqa: PLC0415 — логи настраивает только запуск
+    )
 
     quiet_libraries()
     try:

@@ -11,13 +11,11 @@ import logging
 import sqlite3
 from typing import Any, Sequence
 
-from fuckhr.sources import hh_pages
-from fuckhr.vacancy import market
-from fuckhr.vacancy import market_store
 from fuckhr.core import settings
+from fuckhr.sources import hh_pages, query_plan
 from fuckhr.sources.hh import Vacancy
 from fuckhr.sources.hh_html import HHHtmlClient
-from fuckhr.sources import query_plan
+from fuckhr.vacancy import market, market_store
 from fuckhr.vacancy.score import Profile, ceiling, evaluate
 
 log = logging.getLogger("fuckhr")
