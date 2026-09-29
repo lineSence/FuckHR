@@ -90,7 +90,7 @@
 удалён: в нём же живёт замер, который эту цифру и посчитал, а на другой базе —
 скажем, если большинство вакансий приходит с площадок без структурных полей, —
 соотношение может оказаться другим. Проверяется одной командой:
-`python extract_gate.py --show 10`.
+`python -m fuckhr.vacancy.extract_gate --show 10`.
 
 ## Условия спанами вместо генерации
 
@@ -133,8 +133,8 @@
 Проверить до включения, ничего не трогая в настройках:
 
 ```powershell
-.venv\Scripts\python extract_spans.py --text "Формат работы гибридный: два дня в офисе" --force
-.venv\Scripts\python extract_spans.py --key hh:123 --force
+.venv\Scripts\python -m fuckhr.vacancy.extract_spans --text "Формат работы гибридный: два дня в офисе" --force
+.venv\Scripts\python -m fuckhr.vacancy.extract_spans --key hh:123 --force
 ```
 
 `--force` обходит `GLINER_ENABLED`: сначала смотрим, что модель находит на

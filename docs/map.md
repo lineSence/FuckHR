@@ -66,8 +66,8 @@
 То же самое из командной строки:
 
 ```powershell
-python geo_backfill.py --all          # все недостающие адреса
-python geo_backfill.py --limit 200    # только первые 200
+python -m fuckhr.sources.geo_backfill --all          # все недостающие адреса
+python -m fuckhr.sources.geo_backfill --limit 200    # только первые 200
 ```
 
 Без флагов берётся `GEO_BACKFILL_LIMIT` из `.env`.
@@ -76,7 +76,7 @@ python geo_backfill.py --limit 200    # только первые 200
 
 Прогон закончился, а найдено ноль адресов — по порядку:
 
-1. `python geo_backfill.py --probe 12345678 --verbose` — разбор одной вакансии
+1. `python -m fuckhr.sources.geo_backfill --probe 12345678 --verbose` — разбор одной вакансии
    (можно передать и ссылку). Покажет, что пришло со страницы и что из этого
    распозналось. База не трогается.
 2. Сохранённые страницы лежат в `data/failures` — там видно, пришла ли капча

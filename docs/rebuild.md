@@ -8,9 +8,9 @@ ai-метки, без проверки на инъекции и без вект�
 ## Запуск
 
 ```
-python rebuild.py                      # все шаги
-python rebuild.py --steps score        # только скоринг
-python rebuild.py --steps injections,vectors
+python -m fuckhr.pipeline.rebuild                      # все шаги
+python -m fuckhr.pipeline.rebuild --steps score        # только скоринг
+python -m fuckhr.pipeline.rebuild --steps injections,vectors
 ```
 
 В интерфейсе — кнопка «Пересчёт базы» на странице запуска. Прогресс идёт строками

@@ -5,8 +5,8 @@
 оттуда же, откуда и всё остальное, — из своей базы.
 
 ```powershell
-.venv\Scripts\python dataset_export.py
-.venv\Scripts\python dataset_export.py --cap 800 --stages extract,hr_filter
+.venv\Scripts\python -m fuckhr.lab.dataset_export
+.venv\Scripts\python -m fuckhr.lab.dataset_export --cap 800 --stages extract,hr_filter
 ```
 
 То же самое кнопкой: страница «Модель» → «Датасет для дообучения» → «Собрать
