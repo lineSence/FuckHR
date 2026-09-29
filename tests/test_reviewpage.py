@@ -8,8 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import dossier
-import reviewpage
+from fuckhr.company import dossier, reviewpage
 
 СТРАНИЦА = """
 <html>

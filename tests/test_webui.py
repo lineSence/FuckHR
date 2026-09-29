@@ -27,14 +27,10 @@ from pathlib import Path
 import pytest
 import yaml
 
-import conditions
-import contacts
-import db
-import detector
-import settings
-import ui_views
-import webui
-import websearch
+from fuckhr.company import contacts, websearch
+from fuckhr.core import db, settings
+from fuckhr.vacancy import conditions, detector
+from fuckhr.web import ui_views, webui
 
 
 def test_сохранение_фактов_не_трогает_остальной_профиль(tmp_path: Path) -> None:
@@ -237,7 +233,7 @@ def test_самообновление_возвращает_на_свой_адр�
     рисуется по адресу /run, где GET-обработчика нет, а мета-обновление без
     адреса перезагружало именно его.
     """
-    import ui_core
+    from fuckhr.web import ui_core
 
     html = ui_core.page("Запуск", "тело", 2, "/")
     assert 'content="2;url=/"' in html
@@ -248,7 +244,7 @@ def test_самообновление_возвращает_на_свой_адр�
 
 def test_адреса_форм_не_отвечают_404_на_get() -> None:
     """F5 и «назад» после POST не должны показывать «такой страницы нет»."""
-    import webui
+    from fuckhr.web import webui
 
     assert "/run" in webui.POST_ONLY
     assert "/bench" in webui.POST_ONLY
@@ -258,8 +254,8 @@ def test_адреса_форм_не_отвечают_404_на_get() -> None:
 
 def test_блок_эмбеддера_виден_на_странице_модели(conn, monkeypatch) -> None:
     """У эмбеддера своя модель, и проверять её надо отдельно от чата."""
-    import llm
-    import ui_forms
+    from fuckhr.llm import llm
+    from fuckhr.web import ui_forms
 
     monkeypatch.setenv("LLM_BASE_URL", "http://127.0.0.1:11434/v1")
     monkeypatch.setenv("LLM_STAGE_MODEL_EMBEDDINGS", "bge-m3:latest")
@@ -274,8 +270,8 @@ def test_блок_эмбеддера_виден_на_странице_модел
 
 
 def test_блок_эмбеддера_объясняет_пустое_имя_модели(conn, monkeypatch) -> None:
-    import llm
-    import ui_forms
+    from fuckhr.llm import llm
+    from fuckhr.web import ui_forms
 
     monkeypatch.setenv("LLM_BASE_URL", "http://127.0.0.1:11434/v1")
     monkeypatch.delenv("LLM_STAGE_MODEL_EMBEDDINGS", raising=False)
@@ -290,7 +286,7 @@ def test_блок_эмбеддера_объясняет_пустое_имя_мо
 
 def test_колонка_площадки_в_списке(conn, make_vacancy) -> None:
     """Видно, откуда вакансия, и что она есть не на одной площадке."""
-    import source_store
+    from fuckhr.sources import source_store
 
     conditions.ensure_schema(conn)
     contacts.ensure_schema(conn)
@@ -309,7 +305,7 @@ def test_колонка_площадки_в_списке(conn, make_vacancy) -> 
 
 def test_карточка_называет_свою_площадку(conn, make_vacancy) -> None:
     """Вакансия с Работы.ру не должна предлагать «открыть на hh.ru»."""
-    import source_store
+    from fuckhr.sources import source_store
 
     conditions.ensure_schema(conn)
     contacts.ensure_schema(conn)
@@ -342,7 +338,7 @@ def test_карточка_называет_свою_площадку(conn, make_
 
 def test_список_называет_порог_досье(conn, make_vacancy, monkeypatch) -> None:
     """«19 вакансий, а досье 5» — это два разных порога, и об этом надо сказать."""
-    import profiles
+    from fuckhr.vacancy import profiles
 
     monkeypatch.setattr(profiles, "dossier_threshold", lambda: 45.0)
     conditions.ensure_schema(conn)
@@ -358,7 +354,7 @@ def test_список_по_умолчанию_показывает_подход�
     """Вакансия ниже порога профиля лежит в базе, но в первом виде её нет:
     досье на её компанию никто не собирал, и «вакансия есть, компании нет»
     выглядело поломкой."""
-    import profiles
+    from fuckhr.vacancy import profiles
 
     monkeypatch.setattr(profiles, "dossier_threshold", lambda: 45.0)
     conditions.ensure_schema(conn)
@@ -385,7 +381,7 @@ def test_мгновенный_отбор_есть_в_списках(conn, make_v
     assert 'id="vq"' in html and "id=vlist" in html
     assert "Enter — поиск по всей базе" in html
 
-    import ui_companies
+    from fuckhr.web import ui_companies
 
     companies = ui_companies.render_companies(conn)
     assert 'id="cq"' in companies and 'name="cq"' in companies
@@ -393,8 +389,8 @@ def test_мгновенный_отбор_есть_в_списках(conn, make_v
 
 def test_галочки_площадок_отзывов_сохраняются_одной_настройкой() -> None:
     """Пять площадок в одной строке настройки: галочки удобнее адресов."""
-    import reviewsites
-    import ui_settings
+    from fuckhr.company import reviewsites
+    from fuckhr.web import ui_settings
 
     html = ui_settings.render_settings()
     for site in reviewsites.SITES:
@@ -413,7 +409,7 @@ def test_галочки_площадок_отзывов_сохраняются_�
 
 
 def test_параметры_прогона_сохраняются_с_главной(tmp_path: Path, monkeypatch) -> None:
-    import ui_run
+    from fuckhr.web import ui_run
 
     env = tmp_path / ".env"
     monkeypatch.setattr(settings, "ENV_PATH", env)
@@ -429,7 +425,7 @@ def test_параметры_прогона_сохраняются_с_главн�
 
 
 def test_поле_cookie_появляется_только_при_капче() -> None:
-    import ui_run
+    from fuckhr.web import ui_run
 
     class Job:
         def __init__(self, lines: list[str]) -> None:
@@ -445,7 +441,7 @@ def test_поле_cookie_появляется_только_при_капче() -
 
 
 def test_фильтр_только_изменённые_отмечает_поля(monkeypatch) -> None:
-    import ui_settings
+    from fuckhr.web import ui_settings
 
     field = settings.FIELD_BY_KEY["RUN_LIMIT"]
     assert ui_settings.changed(field, "30") is False  # значение по умолчанию
@@ -467,8 +463,7 @@ def test_установочные_настройки_собраны_в_одну_
 
 
 def test_консоль_лога_держит_прокрутку(monkeypatch) -> None:
-    import jobs
-    import ui_run
+    from fuckhr.web import jobs, ui_run
 
     class Job:
         id = 1
@@ -491,8 +486,8 @@ def test_консоль_лога_держит_прокрутку(monkeypatch) ->
 
 
 def test_модель_этапа_правится_в_строке_таблицы(conn, monkeypatch) -> None:
-    import llm_profiles
-    import ui_forms
+    from fuckhr.core import llm_profiles
+    from fuckhr.web import ui_forms
 
     monkeypatch.setattr(settings, "flag", lambda key: key == "LLM_ENABLED")
     html = ui_forms.render_llm(conn)

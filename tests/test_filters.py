@@ -17,12 +17,10 @@ import sqlite3
 
 import pytest
 
-import db
-import filters
-import score
-import ui_filters
-import ui_views
-from hh import Vacancy
+from fuckhr.core import db
+from fuckhr.sources.hh import Vacancy
+from fuckhr.vacancy import score
+from fuckhr.web import filters, ui_filters, ui_views
 
 
 def _add(conn: sqlite3.Connection, title: str, company: str, score: float, **kwargs):
@@ -114,7 +112,7 @@ def test_чип_снимает_только_свой_фильтр() -> None:
 
 
 def test_фильтр_компаний_собирается_и_не_ломает_запрос(conn: sqlite3.Connection) -> None:
-    import ui_companies
+    from fuckhr.web import ui_companies
 
     rows, found, active = ui_companies.filtered_companies(
         conn, {"level": "red", "cq": "'"}, 50
@@ -149,7 +147,7 @@ def test_каждый_фильтр_превращается_в_рабочий_sq
         ui_views.filtered_vacancies(filled, {key: value}, 5)
 
     for item in filters.COMPANY_FILTERS:
-        import ui_companies
+        from fuckhr.web import ui_companies
 
         value = "1" if item.kind == "number" else (item.options[1][0] if item.options else "а")
         ui_companies.filtered_companies(filled, {item.key: value}, 5)

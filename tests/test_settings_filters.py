@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import detector
 import pytest
-import run
-import score
-import settings
+
+from fuckhr.core import settings
+from fuckhr.pipeline import run
+from fuckhr.vacancy import detector, score
 
 
 def test_значения_по_умолчанию(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -117,7 +117,7 @@ def test_потолок_не_гадает_без_слов_запроса(make_va
 
 def test_потолок_работает_и_на_внешних_площадках(make_vacancy, monkeypatch) -> None:
     """Чужой поиск отдаёт мусор охотнее hh.ru — там потолок и нужнее."""
-    import sources
+    from fuckhr.vacancy import sources
 
     profile = score.Profile(
         title="фотограф",

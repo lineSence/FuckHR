@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import sqlite3
 
-import db
-import ui_stages
+from fuckhr.core import db
+from fuckhr.web import ui_stages
 
 
 def base() -> sqlite3.Connection:
@@ -49,7 +49,7 @@ def test_warns_when_weights_are_missing(monkeypatch):
 
 def test_weights_ready_reads_cache(tmp_path, monkeypatch):
     """Готовность весов определяется каталогом кэша, без обращения в сеть."""
-    import extract_spans
+    from fuckhr.vacancy import extract_spans
 
     monkeypatch.setenv("HF_HOME", str(tmp_path))
     monkeypatch.delenv("HF_HUB_CACHE", raising=False)

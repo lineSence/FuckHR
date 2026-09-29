@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-import source_store
+from fuckhr.sources import source_store
 
 
 def base() -> sqlite3.Connection:

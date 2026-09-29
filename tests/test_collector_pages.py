@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import logging
 
-import collector
-import settings
-from hh import Vacancy
+from fuckhr.core import settings
+from fuckhr.sources.hh import Vacancy
+from fuckhr.vacancy import collector
 
 
 def vacancy(number: int) -> Vacancy:
@@ -40,7 +40,7 @@ class PagedClient:
 
 
 def profile(monkeypatch) -> object:
-    import score
+    from fuckhr.vacancy import score
 
     return score.Profile(
         queries=[{"text": "оператор 1с"}],
@@ -85,6 +85,6 @@ def test_нулевой_лимит_означает_до_конца_выдачи
 def test_без_лимита_карточки_не_обнуляются() -> None:
     # RUN_LIMIT=0 не должен превращаться в «не отправлять ни одной карточки»:
     # в run.py на этот случай есть свой потолок.
-    import run
+    from fuckhr.pipeline import run
 
     assert run.CARD_LIMIT > 0

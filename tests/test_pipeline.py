@@ -14,9 +14,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-import db
-import run
-import settings
+from fuckhr.core import db, settings
+from fuckhr.pipeline import run
 
 ROOT = Path(__file__).resolve().parents[1]
 DETAIL = {
@@ -118,7 +117,7 @@ def test_second_run_marks_disappeared_vacancy(monkeypatch, tmp_path, make_vacanc
 
 
 def test_blocked_source_returns_exit_code_two(monkeypatch, tmp_path, make_vacancy):
-    from hh_html import BlockedError
+    from fuckhr.sources.hh_html import BlockedError
 
     class BlockedClient(FakeClient):
         def search(self, **kwargs):

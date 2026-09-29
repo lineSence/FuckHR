@@ -8,10 +8,10 @@
 
 from __future__ import annotations
 
-import db
-import hh_html
-import hh_pages
-from hh import Vacancy
+from fuckhr.core import db
+from fuckhr.sources import hh_html, hh_pages
+from fuckhr.sources.hh import Vacancy
+from fuckhr.vacancy import profiles
 
 STATE = (
     '<template id="HH-Lux-InitialState">'
@@ -118,7 +118,7 @@ def test_без_дельты_карточки_качаются_всем() -> Non
     vacancy = Vacancy(external_id="1", url="https://hh.ru/vacancy/1", title="Оператор 1С")
     # Нулевая дельта — поведение как до B-15: карточка качается всегда,
     # причём до обращения к профилям — поэтому bundle здесь не нужен.
-    assert hh_pages.worth_details(vacancy, None, None, 88, 0.0) is True
+    assert profiles.worth_details(vacancy, None, None, 88, 0.0) is True
 
 
 def test_чужая_площадка_не_открывается_клиентом_hh() -> None:
@@ -131,4 +131,4 @@ def test_чужая_площадка_не_открывается_клиенто�
         url="https://www.rabota.ru/vacancy/54421864/",
         title="Python-разработчик",
     )
-    assert hh_pages.worth_details(alien, None, None, 88, 0.0) is False
+    assert profiles.worth_details(alien, None, None, 88, 0.0) is False

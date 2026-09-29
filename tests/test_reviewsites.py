@@ -11,8 +11,7 @@ docs/review-sites.md). Полные страницы не хранятся: в �
 
 from __future__ import annotations
 
-import reviewpage
-import reviewsites
+from fuckhr.company import reviewpage, reviewsites
 
 DREAMJOB = """
 <div class="review review-fl" id="review1">
@@ -96,7 +95,7 @@ def test_dreamjob_даёт_должность_оценку_и_дату() -> None
 
 def test_дожность_из_разметки_даёт_сферу() -> None:
     """Ради этого всё и делалось: должность — самый сильный признак сферы."""
-    import review_area
+    from fuckhr.company import review_area
 
     items = reviewsites.parse(DREAMJOB, "https://dreamjob.ru/employers/25996")
     codes = [review_area.classify(item.text, item.role).code for item in items]
@@ -192,7 +191,7 @@ def test_повторы_страницы_не_копятся() -> None:
 def test_один_отзыв_с_двух_площадок_считается_один_раз() -> None:
     """Часть площадок пересобирает чужие отзывы: копия портит и среднюю
     оценку, и детекцию накрутки — «группа похожих» ловит как раз копии."""
-    import dossier
+    from fuckhr.company import dossier
 
     один = "https://dreamjob.ru/employers/1"
     другой = "https://jobtrue.ru/company/x/"
@@ -260,11 +259,11 @@ def test_у_каждой_площадки_из_настроек_есть_пар�
 
 
 def test_режим_только_выбранные_площадки(monkeypatch) -> None:
-    import dossier
+    from fuckhr.company import dossier
 
     values = {"REVIEW_ONLY_PARSED": "1", "REVIEW_ONLY_SITES": "dreamjob.ru,antijob.net"}
-    monkeypatch.setattr("settings.get", lambda key, default="": values.get(key, default))
-    monkeypatch.setattr("settings.flag", lambda key, default=False: bool(values.get(key)))
+    monkeypatch.setattr("fuckhr.core.settings.get", lambda key, default="": values.get(key, default))
+    monkeypatch.setattr("fuckhr.core.settings.flag", lambda key, default=False: bool(values.get(key)))
     assert reviewsites.selected() == ("dreamjob.ru", "antijob.net")
     queries = dossier.review_queries("Ромашка")
     assert queries == [
@@ -276,18 +275,18 @@ def test_режим_только_выбранные_площадки(monkeypatch
 
 
 def test_режим_выключен_оставляет_широкие_запросы(monkeypatch) -> None:
-    import dossier
+    from fuckhr.company import dossier
 
-    monkeypatch.setattr("settings.flag", lambda key, default=False: False)
+    monkeypatch.setattr("fuckhr.core.settings.flag", lambda key, default=False: False)
     queries = dossier.review_queries("Ромашка")
     assert [q for q in queries if "site:" not in q]
 
 
 def test_пустой_выбор_означает_все_площадки(monkeypatch) -> None:
-    monkeypatch.setattr("settings.get", lambda key, default="": "")
+    monkeypatch.setattr("fuckhr.core.settings.get", lambda key, default="": "")
     assert reviewsites.selected() == reviewsites.hosts()
     # Мусор в настройке тоже не оставляет нас без отзывов.
-    monkeypatch.setattr("settings.get", lambda key, default="": "какой-то.сайт")
+    monkeypatch.setattr("fuckhr.core.settings.get", lambda key, default="": "какой-то.сайт")
     assert reviewsites.selected() == reviewsites.hosts()
 
 

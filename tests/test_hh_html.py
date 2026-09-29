@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-import hh_html
+from fuckhr.sources import hh_html
 
 NODE = {
     "vacancyId": 111,

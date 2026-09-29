@@ -54,7 +54,7 @@
 ## Быстрая сводка
 
 ```powershell
-.venv\Scripts\python diag.py
+.venv\Scripts\python -m fuckhr.core.diag
 ```
 
 Печатает по последнему файлу: сколько событий каждого вида, что нашлось по

@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import fake_company
-import fake_reviews
-import review_area
-from reviewitems import ReviewItem
+from fuckhr.company import fake_company, fake_reviews, review_area
+from fuckhr.company.reviewitems import ReviewItem
 
 
 def item(index: int, text: str, rating: float | None = None, role: str = "") -> ReviewItem:

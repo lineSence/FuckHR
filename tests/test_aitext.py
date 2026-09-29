@@ -6,10 +6,9 @@
 
 from __future__ import annotations
 
-import aitext
-import aitext_rules as R
-import fake_reviews
-import reviewitems
+from fuckhr.company import fake_reviews, reviewitems
+from fuckhr.text import aitext
+from fuckhr.text import aitext_rules as R
 
 GENERATED = (
     "В современном мире динамично развивающаяся компания открывает широкие "
@@ -96,7 +95,7 @@ def test_сигнал_попадает_в_счёт_накрутки():
 
 
 def test_строка_карточки_из_базы(conn, make_vacancy):
-    import db
+    from fuckhr.core import db
 
     vacancy = make_vacancy(description=GENERATED)
     db.upsert_vacancy(

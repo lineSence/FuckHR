@@ -5,9 +5,8 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-import contacts
-import outreach
-import websearch
+from fuckhr.company import contacts, websearch
+from fuckhr.outreach import outreach
 
 CANDIDATE = contacts.Candidate(
     channel_kind="email",
@@ -163,7 +162,7 @@ def test_карточка_без_контакта_говорит_об_этом_�
 
 
 def _with_dossier(conn: sqlite3.Connection, company: str, risk: str) -> None:
-    import dossier_store
+    from fuckhr.company import dossier_store
 
     dossier_store.ensure_schema(conn)
     conn.execute(
@@ -174,14 +173,14 @@ def _with_dossier(conn: sqlite3.Connection, company: str, risk: str) -> None:
 
 
 def _with_detector(conn: sqlite3.Connection, key: str) -> None:
-    import detector
+    from fuckhr.vacancy import detector
 
     detector.ensure_schema(conn)
     detector.store(conn, detector.Report(key=key))
 
 
 def test_без_досье_письмо_не_готовится(conn: sqlite3.Connection) -> None:
-    import detector
+    from fuckhr.vacancy import detector
 
     detector.ensure_schema(conn)
     assert outreach.precondition(conn, _row()) == "нет досье на компанию"
@@ -200,7 +199,7 @@ def test_досье_и_детектор_открывают_этап(conn: sqlite
 
 
 def test_выборка_пропускает_вакансии_без_досье(conn: sqlite3.Connection, make_vacancy) -> None:
-    import db
+    from fuckhr.core import db
 
     db.upsert_vacancy(conn, make_vacancy(external_id="1", company="АКМЕ"), 80.0, [])
     key = conn.execute("SELECT key FROM vacancies").fetchone()["key"]
@@ -214,7 +213,7 @@ def test_выборка_пропускает_вакансии_без_досье(
 def test_follow_up_готовится_один_раз(conn: sqlite3.Connection, make_vacancy) -> None:
     import datetime as dt
 
-    import db
+    from fuckhr.core import db
 
     db.upsert_vacancy(conn, make_vacancy(external_id="1", company="АКМЕ"), 80.0, [])
     key = conn.execute("SELECT key FROM vacancies").fetchone()["key"]

@@ -4,11 +4,8 @@ from __future__ import annotations
 
 import json
 
-import src_common as C
-import src_hhlike
-import src_rabota
-import src_superjob
-import src_trudvsem
+from fuckhr.sources import src_common as C
+from fuckhr.sources import src_hhlike, src_rabota, src_superjob, src_trudvsem
 
 
 class Fake:

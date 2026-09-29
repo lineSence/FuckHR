@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from score import Profile, evaluate
+from fuckhr.vacancy.score import Profile, evaluate
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "profile.yaml"
@@ -116,7 +116,7 @@ def test_профили_грузятся_каталогом(tmp_path) -> None:
     """Каталог — это несколько профилей, файл — один: старые запуски живы (ADR-023)."""
     import shutil
 
-    import profiles
+    from fuckhr.vacancy import profiles
 
     src = Path("profile.yaml")
     folder = tmp_path / "profiles"
@@ -130,8 +130,8 @@ def test_профили_грузятся_каталогом(tmp_path) -> None:
 
 def test_вакансия_одна_а_профилей_несколько(tmp_path) -> None:
     """Одна запись со связями: балл живёт на связи, критерии у профилей разные."""
-    import profiles
-    from score import Verdict
+    from fuckhr.vacancy import profiles
+    from fuckhr.vacancy.score import Verdict
 
     strict = profiles.Loaded("strict", Profile(min_score=80.0))
     loose = profiles.Loaded("loose", Profile(min_score=10.0))

@@ -12,6 +12,8 @@ hh.ru, сайты отзывов, свой SearXNG, Telegram и адреса м�
 
 ## Цепочка одного прогона (`run.py`)
 
+Порядок в коде — `run.COLLECT` и `run.AFTER`; схема ниже совпадает с ним.
+
 ```
 hh.ru (HTML поиска, ADR-015) + другие площадки (docs/sources.md)
   → зарплатные наблюдения до предфильтра (market.py → market_observations)
@@ -28,7 +30,7 @@ hh.ru (HTML поиска, ADR-015) + другие площадки (docs/sources
   → канарейка, если прогон сам сломался (canary.py)
 ```
 
-Писем в прогоне нет и не будет: контакты и черновики готовит `outreach.py` по явной команде владельца
+Писем в прогоне нет и не будет: контакты и черновики готовит `outreach_run.py` по явной команде владельца
 (`[OUT-006]`, ADR-012, `[CORE-023]`).
 
 ## Как собирается досье
@@ -87,6 +89,28 @@ dossier.build(company)
 решением, а не ошибкой ввода. Стаж считается по множеству месяцев, а не суммой периодов:
 две параллельные работы не дают двойного опыта.
 
+## Пакеты и слои
+
+Код — в `fuckhr/`, по пакету на слой. Слои снизу вверх; модуль импортирует свой слой и слои ниже,
+циклов нет (`[CORE-024]`, проверяет `tests/test_architecture.py`, 29.09.2026).
+
+| Слой | Пакет | Что внутри |
+| --- | --- | --- |
+| 0 | `core` | `db`, `settings` + каталог `settings_fields*`/`settings_base`, `logs`, `diag`, `net_rate`, `company_key`, `llm_profiles`, векторная математика |
+| 1 | `llm` | шлюз `llm`, `llm_http`, `llm_cascade`, `llm_budget`, `llm_cache`, `llm_embed` |
+| 2 | `text` | `injection*`, `aitext*`, `ai_text_rules`, `embeddings_store` |
+| 3 | `sources` | `hh*`, `src_*`, `source_store`, `query_plan`, `geo`, `geo_backfill` |
+| 4 | `vacancy` | `collector`, `sources` (реестр площадок), `score`, `detector*`, `conditions*`, `extract_*`, `stage_gates`, `market*`, `company_signals`, `profile*`, `resume*`, `intake`, `llm_tasks`, `llm_batch` |
+| 5 | `company` | `dossier*`, `review*`, `fake_*`, `reviewlegit*`, `deepresearch*`, `research*`, `websearch`, `company_score*`, `contacts*`, `injection_store`, `embeddings_tasks`, `targets*`, `target_scan`, `judge_labels` |
+| 6 | `outreach` | `outreach`, `outreach_draft`, `outreach_scan`, `contact_finds` |
+| 7 | `bot` | `bot`, `bot_buttons` |
+| 8 | `pipeline` | `run`, `run_*`, `outreach_run`, `rebuild`, `canary`, `maintenance` |
+| 9 | `lab` | `bench*`, `dataset_*`, `review_gate_train` |
+| 10 | `web`, `tools` | `webui*`, `ui_*`, `jobs`, `filters`, `geo_query`, `stats`, `run_view`, `gate_report`; `check_llm`, `probe_hh` |
+
+Имена файлов ниже — без пакета: `llm.py` — это `fuckhr/llm/llm.py`. В корне только запускалки
+`run.py` и `webui.py`; остальные CLI — `python -m fuckhr.<пакет>.<модуль>`.
+
 ## Модули
 
 | Файл | Ответственность |
@@ -98,7 +122,7 @@ dossier.build(company)
 | `net_rate.py` | общий на процесс бакет темпа по доменам: одна очередь на все потоки |
 | `run_details.py` | пул загрузки карточек вакансий и план «качать / взять из базы / пропустить» |
 | `query_plan.py` | общий план запросов: одинаковые запросы разных профилей — один обход |
-| `outreach_scan.py` | этап контактов потоками по компаниям |
+| `outreach_scan.py` | поиск контактов: выдача по компании, находки, потоки по компаниям |
 | `llm_budget.py` | бюджет вызовов модели на прогон: счётчик и выбывшие модели |
 | `diag.py` | диагностический прогон: подробный след запуска в data/diag (docs/diagnostics.md) |
 | `run_view.py` | сводка прогона для страницы запуска: полоски по фазам, цифры, беды по смыслу |
@@ -127,7 +151,7 @@ dossier.build(company)
 | `resume_llm.py` | черновик секции и отбор блоков под вакансию |
 | `contacts.py`, `contacts_rules.py` | поиск рабочих контактов, лог и дедуп, словари этапа |
 | `contact_finds.py` | находки этапа discovery по вакансии: кэш каналов для карточки и письма |
-| `outreach.py`, `outreach_draft.py` | прогон этапа писем и сборка текста черновика |
+| `outreach.py`, `outreach_draft.py`, `outreach_run.py` | черновик по вакансии, текст письма; CLI этапа и карточки в Telegram |
 | `llm.py`, `llm_profiles.py`, `llm_cascade.py`, `llm_cache.py`, `llm_tasks.py`, `check_llm.py` | шлюз к моделям, карта этапов и профилей, каскад фолбэка, кэш ответов, задачи этапов, диагностика |
 | `bench.py`, `bench_cases.py`, `bench_hard.py`, `bench_metrics.py`, `ui_bench.py` | сравнение моделей: базовые и сложные кейсы, веса уровней, отдельные колонки (`docs/model-bench.md`) |
 | `dataset_core.py`, `dataset_export.py`, `ui_dataset.py` | датасет для дообучения: перехватчик шлюза, примеры из своей базы, кнопка сборки (`docs/dataset.md`) |
@@ -148,13 +172,13 @@ dossier.build(company)
 | `ui_cleanup.py` | страница очистки: цели, подтверждение необратимого |
 | `filters.py`, `ui_filters.py` | фильтры и сортировки списков: правила и рисование (`docs/filters.md`) |
 | `ui_injections.py` | страница «Инъекции»: пойманные попытки управлять моделью |
-| `run_setup.py` | обвязка прогона: логи (включая приглушение чужих логгеров), шлюз модели, отправка тревог |
+| `run_setup.py`, `logs.py` | обвязка прогона: шлюз модели и отправка тревог; логи и приглушение чужих логгеров |
 | `targets*.py`, `hh_employer.py`, `target_scan.py` | цели: компании, выбранные владельцем, шаги и слежение (ADR-025) |
 | `webui.py`, `webui_profile.py`, `jobs.py`, `ui_*.py` | локальный интерфейс и запуск задач подпроцессами |
 | `ui_run.py` | страница запуска: кнопки задач, галочка режима цикла, полоска, лог |
 | `intake.py`, `ui_intake.py` | разговор о поиске: свободный текст владельца → критерии поиска и блоки резюме |
 | `embeddings.py`, `llm_embed.py`, `embeddings_store.py`, `embeddings_tasks.py` | векторы текстов: перефразированные отзывы и похожие вакансии (`docs/embeddings.md`) |
-| `settings.py`, `settings_fields.py` | чтение и запись `.env`, каталог полей настроек |
+| `settings.py`, `settings_fields.py`, `settings_base.py` | чтение и запись `.env`, каталог полей настроек, тип поля |
 | `ui_settings.render_settings` | страница настроек: группы подкатами, живой поиск по ключу, названию и подсказке |
 
 ## Хранилище
@@ -167,7 +191,8 @@ dossier.build(company)
 `review_hashes` — общая таблица хэшей на всю базу: она ловит фабрики отзывов, работающие сразу на
 несколько компаний, и живёт ровно столько, сколько живут сами отзывы.
 
-Векторов нет: `sqlite-vec` из ADR-008 не подключён, семантический дедуп не нужен на текущих объёмах.
+Векторы лежат в таблице `embeddings`, поиск — перебор на чистом Python: `sqlite-vec` из ADR-008 не
+подключён (ADR-021). Дедуп вакансий — по ключу `(company_norm, title_norm)`, векторы его не трогают.
 Невосстановимы две вещи: `vacancy_snapshots` — hh.ru не расскажет задним числом, что вакансия висела
 в апреле и исчезла в мае, и `resume_blocks` — это ручной ввод владельца, который неоткуда
 собрать заново (`maintenance.py` помечает такие цели как опасные).
@@ -193,11 +218,33 @@ dossier.build(company)
 первого кандидата попадает в лог и в счётчик `Usage.degraded`. У эмбеддингов каскада нет:
 модель векторов пиннится (`[LLM-011]`).
 
-Оркестратора нет: `run.py` — обычная последовательность вызовов. LangGraph из ADR-007 не внедрён,
-потому что паузы на подтверждение внутри прогона не появилось: подтверждение живёт в `outreach.py`
+Оркестратора нет: `run.py` — два кортежа этапов над общим состоянием `Run`: `COLLECT` (сеть, капча
+hh.ru обрывает их все) и `AFTER` (идут всегда, с тем, что успели собрать). LangGraph из ADR-007 не внедрён,
+потому что паузы на подтверждение внутри прогона не появилось: подтверждение живёт в `outreach_run.py`
 и в интерфейсе.
 
 ## Запуск
+
+Команды. Прогон и интерфейс — `python run.py` и `python webui.py` из корня. Остальное запускается
+модулем, `python -m <модуль> --help` покажет ключи; большая часть есть и кнопками в интерфейсе (`jobs.py`).
+
+| Модуль | Что делает |
+| --- | --- |
+| `fuckhr.core.diag` | диагностический прогон: подробный след одного запуска в файл |
+| `fuckhr.sources.geo_backfill` | адреса для карты по уже собранным вакансиям |
+| `fuckhr.pipeline.rebuild` | пересчёт собранной базы по сегодняшним правилам |
+| `fuckhr.pipeline.outreach_run` | этап контактов и черновики писем по явной команде |
+| `fuckhr.company.research_deep` | глубокий ресёрч по одной компании |
+| `fuckhr.company.target_scan` | шаги по цели: вакансии компании, отзывы |
+| `fuckhr.bot.bot` | Telegram: карточки, служебные сообщения, реакции |
+| `fuckhr.web.gate_report` | что отсекут ворота на карточки при разной дельте |
+| `fuckhr.lab.bench` | сравнение моделей на задачах пайплайна |
+| `fuckhr.lab.dataset_export` | датасет для дообучения из своей базы |
+| `fuckhr.lab.review_gate_train` | обучение линейного гейта отзывов |
+| `fuckhr.vacancy.extract_gate, extract_spans, conditions_overlap` | замеры и отладка этапа extract |
+| `fuckhr.text.ai_text_rules` | стилометрия отзыва правилами |
+| `fuckhr.tools.check_llm` | диагностика шлюза моделей и прокси |
+| `fuckhr.tools.probe_hh` | диагностика сбора с hh.ru |
 
 Интерфейс и прогон запускаются отдельно. Планировщик Windows запускает `run.py` через `pythonw.exe`
 (ADR-014), интерфейс можно держать в фоне тем же способом. Задачи из интерфейса идут подпроцессами:
@@ -217,6 +264,27 @@ dossier.build(company)
 `RUN_LIMIT=0` означает сбор без ограничения — до конца выдачи по всем запросам профиля.
 Карточек за такой прогон всё равно уходит не больше `run.CARD_LIMIT`.
 
+## Расхождения с ранними ADR
+
+Ранние решения (`wiki/architecture/`) записаны до первого работающего прогона. Что из них не
+попало в код и чем заменено — здесь, а не в `wiki`.
+
+| В ADR | В коде |
+|---|---|
+| LangGraph + checkpoint (ADR-007) | оркестратора нет: `run.py` — два кортежа этапов (`COLLECT`, `AFTER`); паузы на подтверждение внутри прогона нет, письма готовятся по явной команде |
+| hh.ru Open API (ADR-003) | разбор HTML (`hh_html.py`): публичный `GET /vacancies` с апреля 2026 отдаёт 403 (ADR-015) |
+| `sqlite-vec` (ADR-008) | векторы есть (`embeddings`, `bge-m3`), индекса нет — перебор дешевле на текущих объёмах (ADR-021) |
+| семантический дедуп вакансий (ADR-008) | дедуп по ключу `(company_norm, title_norm)`; векторы ищут похожие вакансии и дубли отзывов |
+| SQLAlchemy / SQLModel + alembic | прямой `sqlite3`, миграций нет — каждый модуль делает свой `CREATE TABLE IF NOT EXISTS` |
+| `instructor`, structured output | ответы модели разбираются вручную в `llm_tasks.py` |
+| Playwright + trafilatura, карьерные страницы | страницы отзывов читаются обычным HTTP (`reviewpage.py`) |
+| telethon для чтения Telegram | только aiogram 3 на отправку карточек |
+| structlog в JSON | stdlib `logging` с ротацией файла (`logs.py`) |
+| tenacity, pybreaker, pyrate-limiter | свои счётчики, паузы и потолки вызовов |
+| LiteLLM как единый шлюз (ADR-001) | свой шлюз `llm.py` с двумя адресами; LiteLLM — возможный внешний прокси (ADR-005, ADR-017) |
+| systemd timers | Windows Task Scheduler через `pythonw.exe` (ADR-014) |
+| ATS-адаптеры Greenhouse / Ashby / Lever | не портированы сознательно, вне RU-контура |
+
 ## Границы
 
 - Западные ATS (Greenhouse, Ashby, Lever) и LinkedIn не поддерживаются.
@@ -228,8 +296,9 @@ dossier.build(company)
 
 ## Критерий готовности
 
-Пять вакансий с полным досье за прогон (`[CORE-018]`). Досье считается полным, когда у флагов есть
-цитаты из прочитанных отзывов, а не только из заголовков выдачи.
+Компания с полным досье, конкретный нанимающий менеджер, рабочий канал связи и черновик письма
+(`[CORE-018]`). Досье считается полным, когда у флагов есть цитаты из прочитанных отзывов, а не только
+из заголовков выдачи.
 
 ## Где прогон тратит время
 

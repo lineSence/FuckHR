@@ -219,8 +219,8 @@ hh.ru.**
 Замер по своей базе, без сети и без модели:
 
 ```powershell
-.venv\Scripts\python conditions_overlap.py
-.venv\Scripts\python conditions_overlap.py --show 5
+.venv\Scripts\python -m fuckhr.vacancy.conditions_overlap
+.venv\Scripts\python -m fuckhr.vacancy.conditions_overlap --show 5
 ```
 
 Отчёт — строка на поле условий: сколько раз поле пришло от модели, у скольких
@@ -372,7 +372,7 @@ hh.ru отдаёт формат и график массивами (`workFormat:
 
 Список примет нарочно широкий: лишний вызов дешевле потерянного условия.
 Гейт выключен по умолчанию (`GATE_EXTRACT_MARKERS`), а цена считается на своей
-базе до включения — `python extract_gate.py` печатает, сколько вакансий гейт
+базе до включения — `python -m fuckhr.vacancy.extract_gate` печатает, сколько вакансий гейт
 снял бы и сколько уже сохранённых условий при этом потерялось бы [CORE-019].
 
 ## Промах кэша: «новый вопрос» и «сменилась модель»

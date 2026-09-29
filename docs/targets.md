@@ -38,7 +38,7 @@
 остаток доберёт кнопка на странице карты.
 
 Шаг идёт задачей — лог виден на странице «Запуск». Отдельные шаги остались в
-командной строке: `python target_scan.py --target <id> --step vacancies|reviews`.
+командной строке: `python -m fuckhr.company.target_scan --target <id> --step vacancies|reviews`.
 
 ## Слежение
 

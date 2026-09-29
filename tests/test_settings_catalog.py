@@ -16,9 +16,9 @@ import ast
 import pathlib
 import re
 
-import llm
-import settings
-import websearch
+from fuckhr.company import websearch
+from fuckhr.core import settings
+from fuckhr.llm import llm
 
 ENV_RE = re.compile(r"^[A-Z][A-Z0-9]*(_[A-Z0-9]+)+$")
 READERS = {"getenv", "get", "flag", "number"}
@@ -85,7 +85,7 @@ def env_keys_read() -> dict[str, set[str]]:
         if ENV_RE.match(key):
             found.setdefault(key, set()).add(module)
 
-    for path in sorted(ROOT.glob("*.py")):
+    for path in sorted((ROOT / "fuckhr").rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if isinstance(node, ast.Call) and node.args:
@@ -133,3 +133,11 @@ def test_список_исключений_не_протух() -> None:
     read = set(env_keys_read())
     stale = sorted(key for key in OUTSIDE if key not in read and key != "ENV_FILE")
     assert not stale, "в OUTSIDE остались ключи, которых нет в коде: {}".format(stale)
+
+
+def test_списки_в_подсказках_отзывов_совпадают_с_кодом() -> None:
+    from fuckhr.company import review_area, reviewsites
+    from fuckhr.core import settings_fields_reviews as reviews
+
+    assert reviews.SITE_HOSTS == reviewsites.hosts()
+    assert reviews.AREA_CODES == review_area.codes()

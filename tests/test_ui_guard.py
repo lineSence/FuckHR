@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from ui_guard import problem
+from fuckhr.web.ui_guard import problem
 
 PORT = 8765
 OWN = {"Host": "127.0.0.1:8765", "Origin": "http://127.0.0.1:8765"}

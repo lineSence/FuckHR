@@ -111,7 +111,7 @@ python run.py --verbose --limit 10
 ```powershell
 cd C:\dev\fuckhr
 .\.venv\Scripts\Activate.ps1
-python bot.py
+python -m fuckhr.bot.bot
 ```
 
 Нажатия без запущенного `bot.py` не теряются навсегда: Telegram держит их в очереди сутки.

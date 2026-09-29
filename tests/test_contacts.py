@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
-import contacts
+from fuckhr.company import contacts
 
 PAGE = (
     "Наша команда\n"

@@ -10,11 +10,8 @@ from __future__ import annotations
 
 import sqlite3
 
-import geo
-import geo_query
-import jobs
-import ui_core
-import ui_map
+from fuckhr.sources import geo
+from fuckhr.web import geo_query, jobs, ui_core, ui_map
 
 SCHEMA = """
 CREATE TABLE vacancies (
@@ -226,7 +223,7 @@ def test_backfill_button_lives_on_the_map() -> None:
 def test_backfill_task_takes_everything() -> None:
     """Кнопка берёт все недостающие адреса, а не порцию из GEO_BACKFILL_LIMIT."""
     _, argv, _ = jobs.TASKS["geo-backfill"]
-    assert argv == ("geo_backfill.py", "--all")
+    assert argv == ("-m", "fuckhr.sources.geo_backfill", "--all")
 
 
 def test_run_page_keeps_only_regular_tasks() -> None:

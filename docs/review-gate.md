@@ -35,7 +35,7 @@ AI_TEXT_LLM=1
 ```
 
 ```powershell
-.venv\Scripts\python review_gate_train.py --owner my_labels.json
+.venv\Scripts\python -m fuckhr.lab.review_gate_train --owner my_labels.json
 ```
 
 ## Обучение
@@ -43,8 +43,8 @@ AI_TEXT_LLM=1
 Кнопка «Обучить гейт на разметке» в разделе, или командой:
 
 ```powershell
-.venv\Scripts\python review_gate_train.py
-.venv\Scripts\python review_gate_train.py --dry-run --epochs 80
+.venv\Scripts\python -m fuckhr.lab.review_gate_train
+.venv\Scripts\python -m fuckhr.lab.review_gate_train --dry-run --epochs 80
 ```
 
 Что происходит: разметка читается из базы, тексты короче 40 символов
@@ -175,7 +175,7 @@ Laya — энкодер с типизированными вопросами, к
 Замер правил по своей базе, без единого вызова:
 
 ```powershell
-.venv\Scripts\python ai_text_rules.py
+.venv\Scripts\python -m fuckhr.text.ai_text_rules
 ```
 
 ### Замер правил на разметке владельца (24.09.2026)
@@ -195,7 +195,7 @@ Laya — энкодер с типизированными вопросами, к
 пока не переобучишь:
 
 ```powershell
-.venv\Scripts\python review_gate_train.py
+.venv\Scripts\python -m fuckhr.lab.review_gate_train
 ```
 
 Смотреть в отчёте на строку `ai_text`: AUROC и точность против прежних 0.806 и
@@ -233,7 +233,7 @@ Laya — энкодер с типизированными вопросами, к
 Порядок действий:
 
 ```powershell
-.venv\Scripts\python review_gate_train.py
+.venv\Scripts\python -m fuckhr.lab.review_gate_train
 ```
 
 В отчёте появилась строка «без модели на пороге X — точность, полнота, ложных,

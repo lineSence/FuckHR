@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from hh import normalize_published_at
+from fuckhr.sources.hh import normalize_published_at
 
 NOW = datetime(2026, 9, 16, 21, 0, tzinfo=timezone.utc)
 

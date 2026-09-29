@@ -7,20 +7,8 @@
 > и заменён скрейпингом (ADR-015). **Что работает сейчас — `docs/architecture.md`.**
 > Этот файл читается как история выбора, а не как инструкция к установке.
 >
-> | Здесь записано | В коде на 19.09.2026 |
-> |---|---|
-> | LangGraph + langgraph-checkpoint-sqlite (ADR-007) | оркестратора нет, пайплайн собран последовательно в `run.py` |
-> | `sqlite-vec` для векторного поиска (ADR-008) | не подключён: перебор по таблице `embeddings` дешевле на текущих объёмах (ADR-021) |
-> | SQLAlchemy / SQLModel + alembic | прямой `sqlite3`, миграций нет — каждый модуль делает свой `CREATE TABLE IF NOT EXISTS` |
-> | hh.ru Open API в источниках | HTML-скрейпинг `hh_html.py` (ADR-015) |
-> | telethon для чтения Telegram | только aiogram 3 на отправку карточек |
-> | playwright + trafilatura | `reviewpage.py` на httpx, без браузера |
-> | instructor для structured output | разбор JSON вручную в `llm_tasks.py` |
-> | structlog в JSON | stdlib `logging` с ротацией файла |
-> | tenacity, pybreaker, pyrate-limiter | свои счётчики, паузы и потолки вызовов |
-> | systemd timers | Windows Task Scheduler через `pythonw.exe` (ADR-014) |
-> | ATS-адаптеры Greenhouse / Ashby / Lever | не портированы сознательно, вне RU-контура |
-> | эмбеддинги bge-m3 локально | считаются под две задачи: перефраз отзывов и похожие вакансии (ADR-021), по умолчанию выключены |
+> Что из записанного здесь не попало в код и чем заменено — таблица «Расхождения с ранними ADR»
+> в `docs/architecture.md`.
 >
 > Реализовано как записано: Python 3.11+ (ADR-006), один файл SQLite с WAL (ADR-008),
 > httpx, rapidfuzz, aiogram 3, детектор брехни со словарём и детерминированными проверками

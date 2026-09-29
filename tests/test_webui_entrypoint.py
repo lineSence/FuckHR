@@ -24,6 +24,6 @@ def test_у_запускаемых_файлов_есть_точка_входа(n
 
 
 def test_интерфейс_слушает_только_локальный_адрес():
-    import ui_core
+    from fuckhr.web import ui_core
 
     assert ui_core.HOST == "127.0.0.1"

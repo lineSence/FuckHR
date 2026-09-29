@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-import settings
+from fuckhr.core import settings
 
 
 @pytest.fixture(autouse=True)
@@ -35,7 +35,7 @@ def test_перенос_строки_не_пишется(tmp_path, updates):
 
 
 def test_cookie_в_несколько_строк_склеивается(tmp_path, monkeypatch):
-    import ui_run
+    from fuckhr.web import ui_run
 
     monkeypatch.setattr(settings, "ENV_PATH", tmp_path / ".env")
     ui_run.save_cookie({"cookie": ["a=1;\n b=2;\r\nc=3"]})
@@ -43,7 +43,7 @@ def test_cookie_в_несколько_строк_склеивается(tmp_path
 
 
 def test_www_снимается_только_как_префикс():
-    import reviewsites
+    from fuckhr.company import reviewsites
 
     assert reviewsites.host_of("https://www.dreamjob.ru/x") == "dreamjob.ru"
     assert reviewsites.host_of("https://wb.ru") == "wb.ru"

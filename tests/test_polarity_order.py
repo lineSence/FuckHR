@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-import dossier
+from fuckhr.company import dossier
 
 
 def отзыв(text: str) -> dossier.Review:

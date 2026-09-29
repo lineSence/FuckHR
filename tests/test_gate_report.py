@@ -4,12 +4,10 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-import conditions
-import db
-import gate_report
-import profiles
-import score
-from hh import Vacancy
+from fuckhr.core import db
+from fuckhr.sources.hh import Vacancy
+from fuckhr.vacancy import conditions, profiles, score
+from fuckhr.web import gate_report
 
 
 def loaded(min_score: float = 50.0) -> object:

@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import db
-import dossier
-import hh_html
-import reviewpage
-import websearch
-from hh import Vacancy
+from fuckhr.company import dossier, reviewpage, websearch
+from fuckhr.core import db
+from fuckhr.sources import hh_html
+from fuckhr.sources.hh import Vacancy
 
 
 def vacancy(number: int = 1, description: str = "Python, FastAPI") -> Vacancy:
@@ -145,13 +143,9 @@ def test_пауза_снижается_на_чистых_ответах() -> Non
 
 
 def test_контакты_ищутся_один_раз_на_компанию(conn, monkeypatch) -> None:
-    import contact_finds
-    import contacts
-    import outreach
+    from fuckhr.company import contacts, dossier, dossier_store
+    from fuckhr.outreach import contact_finds, outreach
     from tests.test_outreach import _row
-
-    import dossier
-    import dossier_store
 
     contacts.ensure_schema(conn)
     contact_finds.ensure_schema(conn)
@@ -184,9 +178,8 @@ def test_контакты_ищутся_один_раз_на_компанию(con
 
 
 def test_этапы_модели_идут_пулом(tmp_path, monkeypatch) -> None:
-    import llm
-    import llm_batch
-    import llm_tasks
+    from fuckhr.llm import llm
+    from fuckhr.vacancy import llm_batch, llm_tasks
 
     path = tmp_path / "l.sqlite3"
     db.init_schema(db.connect(path))

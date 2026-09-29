@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import threading
 
-import llm
-from llm_budget import Budget
+from fuckhr.llm import llm
+from fuckhr.llm.llm_budget import Budget
 
 
 def _gateway(budget: Budget, answers: list[str] | None = None) -> llm.Gateway:

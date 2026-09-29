@@ -12,14 +12,11 @@ import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
-import company_score
-import company_score_rules as R
-import company_score_store
-import db
-import dossier_store
-import fake_store
-import maintenance
-import ui_companies
+from fuckhr.company import company_score, company_score_store, dossier_store, fake_store
+from fuckhr.company import company_score_rules as R
+from fuckhr.core import db
+from fuckhr.pipeline import maintenance
+from fuckhr.web import ui_companies
 
 
 def _conn() -> sqlite3.Connection:

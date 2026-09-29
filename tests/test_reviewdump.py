@@ -1,6 +1,6 @@
 """Дамп прочитанных отзывов: пишется только когда его попросили."""
 
-import reviewpage
+from fuckhr.company import reviewpage
 
 PAGE = """
 <html><body>

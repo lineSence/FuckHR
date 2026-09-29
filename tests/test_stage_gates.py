@@ -11,12 +11,10 @@ import os
 import sqlite3
 from dataclasses import dataclass
 
-import conditions
-import db
-import embeddings_store as store
-import extract_spans
-import stage_gates
-from llm_tasks import Condition
+from fuckhr.core import db
+from fuckhr.text import embeddings_store as store
+from fuckhr.vacancy import conditions, extract_spans, stage_gates
+from fuckhr.vacancy.llm_tasks import Condition
 
 MODEL = "bge-m3"
 
@@ -95,7 +93,7 @@ def test_без_вектора_вакансия_проходит(monkeypatch) ->
 
 def test_текст_владельца_собирается_из_профиля_и_резюме() -> None:
     conn = _conn()
-    import resume
+    from fuckhr.vacancy import resume
 
     resume.ensure_schema(conn)
     conn.execute(

@@ -5,9 +5,9 @@
 вопрос к прогону: по-русски и на выдумки модели ведут себя очень по-разному.
 
 ```powershell
-.venv\Scripts\python bench.py --models qwen2.5-7b,gpt-4o-mini
-.venv\Scripts\python bench.py --models llama3.1 --route local
-.venv\Scripts\python bench.py --models a,b --stages extract,draft --repeat 3 --json data/bench.json
+.venv\Scripts\python -m fuckhr.lab.bench --models qwen2.5-7b,gpt-4o-mini
+.venv\Scripts\python -m fuckhr.lab.bench --models llama3.1 --route local
+.venv\Scripts\python -m fuckhr.lab.bench --models a,b --stages extract,draft --repeat 3 --json data/bench.json
 ```
 
 То же самое есть в интерфейсе: страница «Модель» → «Сравнение моделей». Модели

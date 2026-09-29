@@ -11,7 +11,9 @@
 | `contact_finds.py` | находки по вакансии (`contact_finds`): что нашёл общий сбор |
 | `contacts_rules.py` | словари и регулярки этапа (ранги ролей, ящики, шаблоны адресов) |
 | `websearch.py` | единый интерфейс внешнего поиска (Tavily/Brave) с кэшем и лимитом вызовов |
-| `outreach.py` | предусловие этапа, прогон, follow-up, CLI |
+| `outreach.py` | предусловие этапа, черновик по вакансии, follow-up |
+| `outreach_scan.py` | поиск контактов по вакансиям и выдаче |
+| `outreach_run.py` | CLI этапа (`python -m fuckhr.pipeline.outreach_run`) и карточки в Telegram |
 | `outreach_draft.py` | текст письма и карточки, без базы и сети |
 
 ## Порядок ролей [OUT-001]
@@ -82,7 +84,7 @@ LinkedIn не используется: автоматизация против�
 компании и в Telegram-карточке. Письма прогон не готовит.
 
 Черновик готовится отдельно: кнопкой «Письмо» рядом с вакансией в интерфейсе или запуском
-`outreach.py`. Он берёт готовые находки; если этап по вакансии ещё не отрабатывал, ищет сам.
+`python -m fuckhr.pipeline.outreach_run`. Он берёт готовые находки; если этап по вакансии ещё не отрабатывал, ищет сам.
 Записи в лог `contacts` появляются только на этом шаге — найденный канал ещё не контакт, и
 правило «не чаще раза в три месяца» к нему не применяется.
 
@@ -134,8 +136,8 @@ Follow-up один и только по контактам, которые вл�
 ## Запуск
 
 ```powershell
-.venv\Scripts\python outreach.py --dry-run
-.venv\Scripts\python outreach.py
+.venv\Scripts\python -m fuckhr.pipeline.outreach_run --dry-run
+.venv\Scripts\python -m fuckhr.pipeline.outreach_run
 ```
 
 Лимит, порог и режимы живут в `.env` и правятся в веб-интерфейсе; у CLI остались только

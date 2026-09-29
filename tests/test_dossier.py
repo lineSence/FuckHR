@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import dossier
+from fuckhr.company import dossier
 
 
 @dataclass(frozen=True)
@@ -220,7 +220,7 @@ def test_запросы_идут_только_живым_площадкам() ->
     Проверка 24.09.2026: `otzyvy-sotrudnikov.ru` не резолвится вовсе,
     `orabote.top` и `antijob.net` отдают 403 (docs/review-sites.md).
     """
-    import dossier_rules
+    from fuckhr.company import dossier_rules
 
     assert "otzyvy-sotrudnikov.ru" not in dossier_rules.SITE_NAMES
     queries = dossier.review_queries("Ромашка")

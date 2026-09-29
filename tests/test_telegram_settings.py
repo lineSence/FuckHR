@@ -11,8 +11,8 @@ from datetime import datetime
 
 import pytest
 
-import bot
-import settings
+from fuckhr.bot import bot
+from fuckhr.core import settings
 
 
 def test_время_разбирается_и_мусор_не_роняет(monkeypatch: pytest.MonkeyPatch) -> None:

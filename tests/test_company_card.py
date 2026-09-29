@@ -9,10 +9,9 @@ from __future__ import annotations
 
 import sqlite3
 
-import contact_finds
-import contacts
-import dossier_store
-import ui_companies
+from fuckhr.company import contacts, dossier_store
+from fuckhr.outreach import contact_finds
+from fuckhr.web import ui_companies
 
 
 def _dossier(conn: sqlite3.Connection, company: str = "ООО «Ромашка»") -> None:
@@ -126,8 +125,7 @@ def _item(
     rating: float,
 ) -> None:
     """Разобранный отзыв прямо в таблицу: сфера ставится теми же словарями."""
-    import fake_store
-    import review_area
+    from fuckhr.company import fake_store, review_area
 
     fake_store.ensure_schema(conn)
     area = review_area.classify(text)
@@ -152,7 +150,7 @@ def test_сферы_видны_на_странице_и_объясняют_мо�
     _item(conn, 2, "ООО «Ромашка»", "Задерживают зарплату второй месяц", 1.0)
     _item(conn, 3, "ООО «Ромашка»", "Всё нормально, работаю второй год", 5.0)
 
-    monkeypatch.setattr("settings.get", lambda key, default="": default)
+    monkeypatch.setattr("fuckhr.core.settings.get", lambda key, default="": default)
     html = ui_companies.render_areas(conn, "ООО «Ромашка»")
     assert "розница, склад и линия" in html and "разработка и ИТ" in html
     assert "про компанию целиком" in html and "сфера не определена" in html
@@ -161,6 +159,6 @@ def test_сферы_видны_на_странице_и_объясняют_мо�
     assert "Своя сфера не выбрана" in html
     assert 'name=area' in html and 'action="/area"' in html
 
-    monkeypatch.setattr("settings.get", lambda key, default="": "it" if key == "REVIEW_AREA" else default)
+    monkeypatch.setattr("fuckhr.core.settings.get", lambda key, default="": "it" if key == "REVIEW_AREA" else default)
     html = ui_companies.render_areas(conn, "ООО «Ромашка»")
     assert "разработка и ИТ" in html and "Своя сфера не выбрана" not in html

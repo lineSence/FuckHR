@@ -8,7 +8,7 @@
 
 from __future__ import annotations
 
-import dossier
+from fuckhr.company import dossier
 
 
 def test_отрицание_не_считается_похвалой():

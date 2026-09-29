@@ -4,11 +4,9 @@ from __future__ import annotations
 
 import sqlite3
 
-import contact_finds
-import contacts
-import outreach
-import ui_views
-import websearch
+from fuckhr.company import contacts, websearch
+from fuckhr.outreach import contact_finds, outreach
+from fuckhr.web import ui_views
 
 
 def _vacancy(conn: sqlite3.Connection, key: str = "hh:1", company: str = "АКМЕ") -> sqlite3.Row:
@@ -25,8 +23,8 @@ def _vacancy(conn: sqlite3.Connection, key: str = "hh:1", company: str = "АКМ
 
 
 def _ready(conn: sqlite3.Connection, key: str, company: str = "АКМЕ") -> None:
-    import detector
-    import dossier_store
+    from fuckhr.company import dossier_store
+    from fuckhr.vacancy import detector
 
     dossier_store.ensure_schema(conn)
     conn.execute(
@@ -108,8 +106,7 @@ def test_подготовка_письма_берёт_готовые_наход�
 
 
 def test_карточка_вакансии_показывает_контакты_и_кнопку(conn: sqlite3.Connection) -> None:
-    import conditions
-    import detector
+    from fuckhr.vacancy import conditions, detector
 
     conditions.ensure_schema(conn)
     detector.ensure_schema(conn)

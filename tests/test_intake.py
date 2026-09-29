@@ -10,8 +10,7 @@ from __future__ import annotations
 import json
 import sqlite3
 
-import intake
-import resume
+from fuckhr.vacancy import intake, resume
 
 SAID = (
     "Ищу backend на Python, 8 лет опыта, последние 3 года highload в финтехе. "
@@ -96,7 +95,7 @@ def test_разговор_пишется_и_чистится() -> None:
 
 def test_этап_разговора_объявлен_и_не_персональный() -> None:
     """Данные владельца о себе — как resume_*: облако разрешено осознанно."""
-    import llm
+    from fuckhr.llm import llm
 
     assert llm.profile_for(intake.STAGE) == llm.SMART
     assert intake.STAGE not in llm.PERSONAL_STAGES
@@ -104,7 +103,7 @@ def test_этап_разговора_объявлен_и_не_персональ
 
 def test_ответы_из_полей_складываются_в_реплику() -> None:
     """В слова владельца идут только его ответы, вопросы — отдельно для модели."""
-    import ui_intake
+    from fuckhr.web import ui_intake
 
     said, dialogue = ui_intake.compose(
         ["Готов ли к гибриду?", "Минимум на руки?"],
@@ -117,7 +116,7 @@ def test_ответы_из_полей_складываются_в_реплику
 
 def test_числа_из_вопроса_модели_не_становятся_фактом() -> None:
     """Иначе модель спросит «у тебя ведь 15 лет?» и сама же это подтвердит."""
-    import ui_intake
+    from fuckhr.web import ui_intake
 
     said, dialogue = ui_intake.compose(["У тебя ведь 15 лет опыта?"], ["Да"], "")
     plan = intake.parse(

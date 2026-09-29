@@ -9,11 +9,8 @@ from __future__ import annotations
 
 from datetime import date
 
-import market
-import market_company
-import market_rules as R
-import market_store
-import score
+from fuckhr.vacancy import market, market_company, market_store, score
+from fuckhr.vacancy import market_rules as R
 
 
 def _observations(conn, count: int, point: int, company: str = "К", role: str = "python"):

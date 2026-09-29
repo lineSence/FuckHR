@@ -1,0 +1,9 @@
+# Ловим только то, что ломает код: синтаксис, неопределённые имена, сравнение с литералом через is.
+target-version = "py311"
+extend-exclude = ["training/*.ipynb"]
+
+[lint]
+select = ["E9", "F63", "F7", "F82"]
+
+[lint.isort]
+known-first-party = ["fuckhr"]

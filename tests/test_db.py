@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import db
+from fuckhr.core import db
 
 
 def test_upsert_reports_new_only_once(conn, make_vacancy):

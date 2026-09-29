@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import sqlite3
 
-import judge_labels
-import ui_gate
-from fake_reviews import text_hash
+from fuckhr.company import judge_labels
+from fuckhr.company.fake_reviews import text_hash
+from fuckhr.web import ui_gate
 
 ОТЗЫВ = "Работал год бэкендом, зарплату задерживали на неделю, задачи ставили криво."
 РЕКЛАМА = "Лучшая компания мечты! Дружный коллектив, печеньки и бесконечный рост!"
