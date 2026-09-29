@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import sqlite3
 
-import db
-import source_store
-import ui_sources
+from fuckhr.core import db
+from fuckhr.sources import source_store
+from fuckhr.web import ui_sources
 
 
 def base() -> sqlite3.Connection:
@@ -30,7 +30,7 @@ def test_block_lists_every_site_and_metric():
 
 def test_metric_resets_when_vacancies_are_wiped():
     """Очистили базу — метрика обнулилась: она про то, что есть сейчас."""
-    import maintenance
+    from fuckhr.pipeline import maintenance
 
     conn = base()
     conn.execute(

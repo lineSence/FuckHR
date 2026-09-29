@@ -11,9 +11,9 @@ import sqlite3
 
 import pytest
 
-import db
-import dossier
-import maintenance
+from fuckhr.core import db
+from fuckhr.company import dossier
+from fuckhr.pipeline import maintenance
 
 
 def test_цели_описаны_и_совпадают():
@@ -95,8 +95,8 @@ def test_сжатие_базы_работает_после_очистки(conn, 
 
 def test_очистка_вакансий_забирает_производные_таблицы():
     """Таблица, которая считается из вакансий, не должна их переживать."""
-    import detector
-    import source_store
+    from fuckhr.vacancy import detector
+    from fuckhr.sources import source_store
 
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row

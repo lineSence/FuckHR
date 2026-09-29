@@ -14,9 +14,9 @@ from pathlib import Path
 
 import pytest
 
-import run_loop
-import settings
-import ui_run
+from fuckhr.pipeline import run_loop
+from fuckhr.core import settings
+from fuckhr.web import ui_run
 
 
 def test_циклы_повторяются_заданное_число_раз(tmp_path: Path) -> None:
@@ -113,7 +113,7 @@ def test_форма_цикла_сохраняет_ключи_env(monkeypatch: py
 def test_мягкая_остановка_не_убивает_процесс(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(run_loop, "STOP_PATH", tmp_path / "stop.flag")
     killed: list[int] = []
-    monkeypatch.setattr("jobs.runner.stop", lambda job_id: killed.append(job_id))
+    monkeypatch.setattr("fuckhr.web.jobs.runner.stop", lambda job_id: killed.append(job_id))
     ui_run.stop(7, soft=True)
     assert killed == []
     assert run_loop.stop_requested(tmp_path / "stop.flag")

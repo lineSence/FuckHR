@@ -8,11 +8,11 @@
 
 from __future__ import annotations
 
-import db
-import hh_html
-import hh_pages
-import profiles
-from hh import Vacancy
+from fuckhr.core import db
+from fuckhr.sources import hh_html
+from fuckhr.sources import hh_pages
+from fuckhr.vacancy import profiles
+from fuckhr.sources.hh import Vacancy
 
 STATE = (
     '<template id="HH-Lux-InitialState">'

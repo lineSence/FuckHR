@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import json
 
-import bench
-import bench_cases
-import llm
+from fuckhr.lab import bench
+from fuckhr.lab import bench_cases
+from fuckhr.llm import llm
 
 
 def _gateway(answers: dict[str, str]) -> llm.Gateway:
@@ -109,7 +109,7 @@ def test_отчёт_выбирает_победителя_по_этапам() ->
 
 def test_имена_моделей_из_формы_фильтруются() -> None:
     """Единственное место, где строка из браузера идёт в командную строку."""
-    import ui_forms
+    from fuckhr.web import ui_forms
 
     assert ui_forms.bench_models("qwen2.5:7b, openai/gpt-4o-mini") == [
         "qwen2.5:7b",
@@ -122,14 +122,14 @@ def test_имена_моделей_из_формы_фильтруются() -> N
 
 def test_задача_сравнения_не_висит_кнопкой_на_запуске() -> None:
     """У bench своя форма: без имён моделей кнопка была бы обманом."""
-    import jobs
+    from fuckhr.web import jobs
 
     assert "bench" in jobs.TASKS
     assert "bench" not in [key for key, _, _ in jobs.task_list()]
 
 
 def test_форма_сравнения_показывает_все_этапы() -> None:
-    import ui_forms
+    from fuckhr.web import ui_forms
 
     html = ui_forms.render_bench_form()
     assert all(stage in html for stage in bench.STAGES)
@@ -138,7 +138,7 @@ def test_форма_сравнения_показывает_все_этапы() 
 
 def test_отчёт_показывает_таблицу_а_не_лог(tmp_path) -> None:
     """Результат сравнения читается глазами: баллы в таблице, а не в логе."""
-    import ui_bench
+    from fuckhr.web import ui_bench
 
     rows = [
         bench.Row("быстрая", "extract", "к1", 1.0, "", 0.5),
@@ -156,7 +156,7 @@ def test_отчёт_показывает_таблицу_а_не_лог(tmp_path)
 
 
 def test_битый_отчёт_не_роняет_страницу(tmp_path) -> None:
-    import ui_bench
+    from fuckhr.web import ui_bench
 
     path = tmp_path / "last.json"
     path.write_text("{не json", encoding="utf-8")
@@ -166,7 +166,7 @@ def test_битый_отчёт_не_роняет_страницу(tmp_path) -> N
 
 def test_прогресс_печатается_счётчиком() -> None:
     """Полоску загрузки интерфейс берёт из строк вида «[3/30]»."""
-    import jobs
+    from fuckhr.web import jobs
 
     assert jobs.parse_progress("[3/30] быстрая · к1 · 1.00 за 0.4 с") == (3, 30)
 
@@ -199,7 +199,7 @@ def test_модель_ставится_на_этап_а_не_на_профиль
 
 
 def test_форма_подстановки_предлагает_ключи_env() -> None:
-    import ui_bench
+    from fuckhr.web import ui_bench
 
     rows = [
         bench.Row("быстрая", "extract", "к1", 1.0, "", 0.7),
@@ -258,7 +258,7 @@ def test_кейсы_покрывают_все_этапы_с_вызовом_мо�
     Вызова не делает только embeddings: векторы — не текстовая задача,
     правилами их не оценить.
     """
-    import llm
+    from fuckhr.llm import llm
 
     covered = {case.stage for case in bench_cases.CASES}
     assert covered == set(bench.STAGES)
@@ -292,7 +292,7 @@ def test_сводка_по_отзывам_не_дорисовывает_цифр
 
 def test_локальный_маршрут_гоняет_названную_модель(monkeypatch) -> None:
     """Без имени в local_models в Ollama уходило `auto:fast` — «model not found»."""
-    import llm
+    from fuckhr.llm import llm
 
     monkeypatch.setenv("LLM_BASE_URL", "http://127.0.0.1:8080/v1")
     gateway = bench.gateway_for("qwen3:8b", llm.ROUTE_LOCAL)
@@ -303,8 +303,8 @@ def test_локальный_маршрут_гоняет_названную_мо�
 
 def test_форма_сравнения_переключает_маршрут() -> None:
     """Локальные модели проверяются на всех кейсах кнопкой, а не только из CLI."""
-    import llm
-    import ui_bench
+    from fuckhr.llm import llm
+    from fuckhr.web import ui_bench
 
     html = ui_bench.render_bench_form(
         known={llm.ROUTE_PROXY: ["gpt-4o-mini"], llm.ROUTE_LOCAL: ["qwen3:8b"]}
@@ -314,8 +314,8 @@ def test_форма_сравнения_переключает_маршрут() -
 
 
 def test_запуск_передаёт_маршрут(monkeypatch) -> None:
-    import jobs
-    import ui_forms
+    from fuckhr.web import jobs
+    from fuckhr.web import ui_forms
 
     seen: dict = {}
     monkeypatch.setattr(

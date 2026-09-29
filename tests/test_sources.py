@@ -5,12 +5,12 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass
 
-import db
-import settings
-import source_store
-import sources
-from hh import Vacancy
-from score import Profile
+from fuckhr.core import db
+from fuckhr.core import settings
+from fuckhr.sources import source_store
+from fuckhr.vacancy import sources
+from fuckhr.sources.hh import Vacancy
+from fuckhr.vacancy.score import Profile
 
 
 @dataclass
@@ -145,7 +145,7 @@ def test_hh_off_means_do_not_go_there():
 
 
 def test_queue_note_показывает_вклад_каждой_площадки() -> None:
-    from hh import Vacancy
+    from fuckhr.sources.hh import Vacancy
 
     seen = {
         "a": Vacancy(source="hh.ru", external_id="1", url="u1", title="t1"),
@@ -185,7 +185,7 @@ def test_площадки_обходятся_параллельно(monkeypatch)
 
 
 def test_фоновый_обход_отдаёт_находки_и_отсекает_известные(monkeypatch) -> None:
-    from hh import Vacancy
+    from fuckhr.sources.hh import Vacancy
 
     draft = Vacancy(source="zarplata", external_id="9", url="u", title="Оператор 1С")
 

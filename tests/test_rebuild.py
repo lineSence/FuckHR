@@ -16,10 +16,10 @@ import sqlite3
 
 import pytest
 
-import db
-import rebuild
-import score
-from hh import Vacancy
+from fuckhr.core import db
+from fuckhr.pipeline import rebuild
+from fuckhr.vacancy import score
+from fuckhr.sources.hh import Vacancy
 
 
 @pytest.fixture

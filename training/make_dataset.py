@@ -25,7 +25,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-import dataset_core  # noqa: E402
+from fuckhr.lab import dataset_core  # noqa: E402
 from training import dataset_cases as cases  # noqa: E402
 from training import dataset_cases_owner as owner  # noqa: E402
 

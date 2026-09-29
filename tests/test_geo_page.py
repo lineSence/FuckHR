@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 
-import geo
+from fuckhr.sources import geo
 
 VACANCY = {
     "vacancyId": 12345678,
@@ -92,8 +92,8 @@ def test_broken_page_is_not_an_exception() -> None:
 
 def test_vacancy_detail_carries_address(monkeypatch):
     """Адрес приезжает вместе с описанием: отдельного похода за точкой нет."""
-    import geo
-    import hh_html
+    from fuckhr.sources import geo
+    from fuckhr.sources import hh_html
 
     state = {
         "vacancyView": {
@@ -127,7 +127,7 @@ def test_vacancy_detail_carries_address(monkeypatch):
 
 def test_point_of_tolerates_broken_detail():
     """Страница без состояния — деталь без адреса, а не исключение [CORE-017]."""
-    import geo
+    from fuckhr.sources import geo
 
     assert geo.point_of({"description": "", "key_skills": []}) is None
     assert geo.point_of(None) is None
@@ -137,7 +137,7 @@ def test_save_needs_the_vacancy_in_base():
     """Адрес без вакансии записать некуда: счётчик не должен врать."""
     import sqlite3
 
-    import geo
+    from fuckhr.sources import geo
 
     conn = sqlite3.connect(":memory:")
     conn.execute("CREATE TABLE vacancies (key TEXT PRIMARY KEY)")

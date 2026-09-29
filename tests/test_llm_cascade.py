@@ -5,8 +5,8 @@ from __future__ import annotations
 import sqlite3
 from typing import Sequence
 
-import bench
-import llm
+from fuckhr.lab import bench
+from fuckhr.llm import llm
 
 MESSAGES = [{"role": "user", "content": "привет"}]
 

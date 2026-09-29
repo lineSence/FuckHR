@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import threading
 
-import contacts
-import db
-import outreach
-import outreach_scan
+from fuckhr.company import contacts
+from fuckhr.core import db
+from fuckhr.outreach import outreach
+from fuckhr.outreach import outreach_scan
 
 
 def row(key: str, company: str, score: float = 50.0) -> dict[str, object]:

@@ -12,8 +12,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import db as db_module  # noqa: E402
-from hh import Vacancy  # noqa: E402
+from fuckhr.core import db as db_module  # noqa: E402
+from fuckhr.sources.hh import Vacancy  # noqa: E402
 
 
 @pytest.fixture(autouse=True)

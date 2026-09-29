@@ -10,9 +10,9 @@ from __future__ import annotations
 import json
 import sqlite3
 
-import conditions
-import conditions_overlap as overlap
-import db
+from fuckhr.vacancy import conditions
+from fuckhr.vacancy import conditions_overlap as overlap
+from fuckhr.core import db
 
 
 def _conn() -> sqlite3.Connection:

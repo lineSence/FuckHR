@@ -10,12 +10,12 @@ import sqlite3
 
 import pytest
 
-import db
-import hh_employer
-import hh_html
-import targets
-import ui_targets
-from hh import Vacancy
+from fuckhr.core import db
+from fuckhr.sources import hh_employer
+from fuckhr.sources import hh_html
+from fuckhr.company import targets
+from fuckhr.web import ui_targets
+from fuckhr.sources.hh import Vacancy
 
 
 EMPLOYER_PAGE = """
@@ -169,7 +169,7 @@ def test_watch_due_only_when_enabled(conn: sqlite3.Connection) -> None:
 
 
 def test_scan_saves_all_vacancies_without_threshold(conn: sqlite3.Connection) -> None:
-    import targets_hh
+    from fuckhr.company import targets_hh
 
     tid = targets.add(conn, "Яндекс", employer_id="1455")
     target = targets.get(conn, tid)
@@ -199,7 +199,7 @@ def test_scan_all_goes_on_after_a_broken_step(
     """Один шаг упал — остальные всё равно выполняются [CORE-017]."""
     import pathlib
 
-    import target_scan
+    from fuckhr.company import target_scan
 
     tid = targets.add(conn, "Яндекс", employer_id="1455")
     target = targets.get(conn, tid)
@@ -251,7 +251,7 @@ def test_render_targets_lists_cards(conn: sqlite3.Connection) -> None:
 
 def seeded(conn: sqlite3.Connection) -> int:
     """Цель с тремя вакансиями из разных городов и с разным скором."""
-    import targets_hh
+    from fuckhr.company import targets_hh
 
     tid = targets.add(conn, "Яндекс", employer_id="1455")
     target = targets.get(conn, tid)

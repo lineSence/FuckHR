@@ -12,12 +12,12 @@ import sqlite3
 
 import pytest
 
-import embeddings
-import embeddings_store as store
-import embeddings_tasks
-import fake_reviews
-import llm_embed
-import reviewitems
+from fuckhr.core import embeddings
+from fuckhr.text import embeddings_store as store
+from fuckhr.company import embeddings_tasks
+from fuckhr.company import fake_reviews
+from fuckhr.llm import llm_embed
+from fuckhr.company import reviewitems
 
 
 class FakeGateway:

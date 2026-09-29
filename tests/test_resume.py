@@ -19,8 +19,8 @@ import json
 import sqlite3
 from datetime import date
 
-import resume
-import resume_llm
+from fuckhr.vacancy import resume
+from fuckhr.vacancy import resume_llm
 
 
 class FakeGateway:

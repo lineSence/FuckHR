@@ -7,7 +7,7 @@ from typing import Sequence
 
 import pytest
 
-import llm
+from fuckhr.llm import llm
 
 MESSAGES = [{"role": "user", "content": "привет"}]
 
@@ -103,7 +103,7 @@ def test_старая_база_кэша_доживает_до_колонки_pro
     """Колонка появилась позже схемы: у кого база с прошлых прогонов, миграция
     обязана пройти молча. Индекс по новой колонке в самом скрипте схемы валил
     её с «no such column: prompt» — и вместе с ней любую страницу интерфейса."""
-    import llm_cache
+    from fuckhr.llm import llm_cache
 
     conn = sqlite3.connect(":memory:")
     conn.executescript(

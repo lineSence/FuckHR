@@ -5,9 +5,9 @@ from __future__ import annotations
 import threading
 import time
 
-import net_rate
-import run_details
-from hh_html import BlockedError
+from fuckhr.core import net_rate
+from fuckhr.pipeline import run_details
+from fuckhr.sources.hh_html import BlockedError
 
 
 class FakeClient:

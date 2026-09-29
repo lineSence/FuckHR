@@ -6,8 +6,8 @@ import sqlite3
 
 import pytest
 
-import contacts_rules
-import websearch
+from fuckhr.company import contacts_rules
+from fuckhr.company import websearch
 
 
 def _hits(n: int = 2) -> list[websearch.Hit]:

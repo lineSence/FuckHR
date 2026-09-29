@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-import canary
+from fuckhr.pipeline import canary
 
 NOW = datetime(2026, 9, 16, 21, 0, tzinfo=timezone.utc)
 

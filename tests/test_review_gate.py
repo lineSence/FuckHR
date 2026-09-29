@@ -6,11 +6,11 @@ import sqlite3
 
 import pytest
 
-import judge_labels
-import linear_model
-import review_gate
-import review_gate_store as store
-import review_gate_train as train
+from fuckhr.company import judge_labels
+from fuckhr.core import linear_model
+from fuckhr.company import review_gate
+from fuckhr.company import review_gate_store as store
+from fuckhr.lab import review_gate_train as train
 
 
 def база() -> sqlite3.Connection:
@@ -79,7 +79,7 @@ def test_гейт_делит_на_да_нет_и_середину(monkeypatch):
     monkeypatch.setenv("REVIEW_GATE_ENABLED", "1")
     monkeypatch.setenv("REVIEW_GATE_LOW", "0.2")
     monkeypatch.setenv("REVIEW_GATE_HIGH", "0.8")
-    from fake_reviews import text_hash
+    from fuckhr.company.fake_reviews import text_hash
 
     тексты = {0: "реклама", 1: "живой отзыв", 2: "серединка"}
     векторы(monkeypatch, {
@@ -149,8 +149,8 @@ def test_поправки_владельца_читаются_из_файла(tm
 
 def test_гейт_снимает_тексты_с_модели(monkeypatch):
     """Решённое гейтом до модели не доходит, а спрошенное — доходит."""
-    import review_scoring
-    from fake_reviews import text_hash
+    from fuckhr.company import review_scoring
+    from fuckhr.company.fake_reviews import text_hash
 
     class Отзыв:
         def __init__(self, index, text):
@@ -182,7 +182,7 @@ def test_гейт_снимает_тексты_с_модели(monkeypatch):
 
 
 def test_выключенный_этап_не_зовёт_даже_гейт(monkeypatch):
-    import review_scoring
+    from fuckhr.company import review_scoring
 
     monkeypatch.setattr(review_scoring.fake_llm, "enabled", lambda: False)
     monkeypatch.setattr(review_scoring.aitext_llm, "enabled", lambda: False)
@@ -208,22 +208,22 @@ def test_без_порогов_экономию_не_обещают():
 
 def test_в_вызов_попадают_самые_спорные_отзывы() -> None:
     """Вызов один и на дюжину текстов: важно, какие двенадцать в него попадут."""
-    import review_scoring
+    from fuckhr.company import review_scoring
 
     scores = {1: 0.05, 2: 0.49, 3: 0.55, 4: 0.3}
     assert review_scoring.by_doubt([1, 2, 3, 4], scores) == [2, 3, 4, 1]
 
 
 def test_без_оценок_гейта_порядок_отзывов_прежний() -> None:
-    import review_scoring
+    from fuckhr.company import review_scoring
 
     assert review_scoring.by_doubt([3, 1, 2], {}) == [3, 1, 2]
 
 
 def test_у_ai_text_к_вектору_добавляются_приметы() -> None:
     """Связка учится на векторе плюс стилометрия, и рантайм считает то же самое."""
-    import ai_text_rules
-    import review_gate
+    from fuckhr.text import ai_text_rules
+    from fuckhr.company import review_gate
 
     text = "Компания обеспечивает комфортную атмосферу. " * 6
     base = [0.1, 0.2, 0.3]
@@ -236,7 +236,7 @@ def test_у_ai_text_к_вектору_добавляются_приметы() ->
 
 def test_веса_связки_лежат_под_своим_именем() -> None:
     """Размерность другая, и старые веса к ней неприменимы [LLM-011]."""
-    import review_gate
+    from fuckhr.company import review_gate
 
     assert review_gate.model_key("ai_text", "bge-m3") == "bge-m3+rules1"
     assert review_gate.model_key("review_fake", "bge-m3") == "bge-m3"
@@ -244,7 +244,7 @@ def test_веса_связки_лежат_под_своим_именем() -> No
 
 def test_решатель_отвечает_без_модели(monkeypatch: pytest.MonkeyPatch) -> None:
     """Включённый и обученный решатель заменяет этап целиком: вызовов нет."""
-    import review_gate
+    from fuckhr.company import review_gate
 
     monkeypatch.setenv("AI_TEXT_SOLVER", "1")
     monkeypatch.setattr(review_gate.llm_embed, "model_name", lambda gateway: "bge-m3")
@@ -261,7 +261,7 @@ def test_решатель_отвечает_без_модели(monkeypatch: pyte
 
 
 def test_выключенный_решатель_молчит(monkeypatch: pytest.MonkeyPatch) -> None:
-    import review_gate
+    from fuckhr.company import review_gate
 
     monkeypatch.delenv("AI_TEXT_SOLVER", raising=False)
     assert review_gate.solve(object(), None, "ai_text", {1: "а"}) is None
@@ -269,7 +269,7 @@ def test_выключенный_решатель_молчит(monkeypatch: pytes
 
 def test_редкий_класс_выравнивается_обучением() -> None:
     """Без веса редкого класса вероятности съезжают вниз целиком."""
-    import linear_model
+    from fuckhr.core import linear_model
 
     rows = [((1.0, 0.0), 1.0)] + [((0.0, 1.0), 0.0)] * 9
     assert linear_model.class_weight(rows) == 9.0
@@ -281,7 +281,7 @@ def test_редкий_класс_выравнивается_обучением()
 def test_порог_решателя_не_берётся_ниже_минимальной_точности() -> None:
     """По F1 выигрывал порог с точностью 0.431 — каждый второй помеченный был
     живым отзывом. Такой порог решателю не годится [CORE-019]."""
-    import linear_model
+    from fuckhr.core import linear_model
 
     # Низкий порог ловит всё и ошибается вдвое; высокий — точен и скромен.
     scores = [0.7] * 10 + [0.3] * 40 + [0.7] * 2 + [0.3] * 60
@@ -292,7 +292,7 @@ def test_порог_решателя_не_берётся_ниже_минимал
 
 
 def test_без_годного_порога_решатель_не_включается() -> None:
-    import linear_model
+    from fuckhr.core import linear_model
 
     scores = [0.6] * 10 + [0.6] * 90
     labels = [1] * 10 + [0] * 90

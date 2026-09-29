@@ -11,8 +11,8 @@ from pathlib import Path
 
 import pytest
 
-import profile_schema
-from score import Profile
+from fuckhr.vacancy import profile_schema
+from fuckhr.vacancy.score import Profile
 
 
 def write(tmp_path: Path, text: str) -> Path:
@@ -130,7 +130,7 @@ def test_навыки_приводятся_к_нижнему_регистру(tm
 
 def test_название_есть_среди_весов_профиля() -> None:
     """Вес без поля в каталоге не виден ни в форме, ни в схеме."""
-    import profile_fields
+    from fuckhr.vacancy import profile_fields
 
     assert "title" in dict(profile_fields.WEIGHTS)
     assert "title" in profile_fields.WEIGHT_HINTS
@@ -139,7 +139,7 @@ def test_название_есть_среди_весов_профиля() -> Non
 
 def test_новый_критерий_в_старом_профиле_считается_важным() -> None:
     """Ноль означал бы «владелец выключил», а он про критерий просто не знал."""
-    import profile_fields
+    from fuckhr.vacancy import profile_fields
 
     old = {"skills": 55, "salary": 20, "nice_to_have": 10, "remote": 10, "experience": 5}
     assert profile_fields.importance_from_weights(old)["title"] == 3

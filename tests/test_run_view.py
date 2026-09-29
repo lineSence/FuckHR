@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-import run_view
+from fuckhr.web import run_view
 
 LINES = [
     "INFO fuckhr настройки: лимит 250, профиль profiles, описания да, модель да",

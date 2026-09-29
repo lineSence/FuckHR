@@ -2,7 +2,7 @@
 
 import pytest
 
-import company_key
+from fuckhr.core import company_key
 
 
 @pytest.mark.parametrize(

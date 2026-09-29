@@ -5,7 +5,7 @@ from __future__ import annotations
 import threading
 import time
 
-import net_rate
+from fuckhr.core import net_rate
 
 
 def _bucket(interval: float) -> net_rate.Bucket:

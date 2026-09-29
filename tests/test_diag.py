@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-import diag
+from fuckhr.core import diag
 
 
 def test_выключенная_диагностика_молчит(tmp_path: Path) -> None:

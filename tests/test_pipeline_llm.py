@@ -12,9 +12,9 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Any, Sequence
 
-import conditions
-import llm_tasks
-import outreach
+from fuckhr.vacancy import conditions
+from fuckhr.vacancy import llm_tasks
+from fuckhr.outreach import outreach
 
 DESCRIPTION = (
     "Ищем Python-разработчика. Гибрид два дня в офисе в Москве, "
@@ -122,7 +122,7 @@ def test_условие_без_цитаты_в_базу_не_попадает(co
 
 def test_без_шлюза_этап_письма_работает_как_раньше(conn) -> None:
     """[CORE-017]: выключенная модель — штатный режим, а не отказ в обслуживании."""
-    import contacts
+    from fuckhr.company import contacts
 
     contacts.ensure_schema(conn)
     discovery, draft, skip = outreach.process_row(
@@ -136,7 +136,7 @@ def test_без_шлюза_этап_письма_работает_как_ран�
 
 def test_модель_меняет_адресата_из_найденных(conn) -> None:
     """Выбор идёт номером по списку: нового человека модель придумать не может."""
-    import contacts
+    from fuckhr.company import contacts
 
     contacts.ensure_schema(conn)
     base, _, _ = outreach.process_row(conn, _row(), (), FakeProvider(enabled=False))
@@ -157,7 +157,7 @@ def test_модель_меняет_адресата_из_найденных(conn
 
 
 def test_бред_вместо_номера_оставляет_первого_по_ранжированию(conn) -> None:
-    import contacts
+    from fuckhr.company import contacts
 
     contacts.ensure_schema(conn)
     base, _, _ = outreach.process_row(conn, _row(), (), FakeProvider(enabled=False))
@@ -170,7 +170,7 @@ def test_бред_вместо_номера_оставляет_первого_п
 
 
 def test_справка_о_компании_становится_поводом_в_письме(conn) -> None:
-    import contacts
+    from fuckhr.company import contacts
 
     contacts.ensure_schema(conn)
     gateway = FakeGateway(
@@ -188,7 +188,7 @@ def test_справка_о_компании_становится_поводом_
 
 
 def test_правка_письма_применяется(conn) -> None:
-    import contacts
+    from fuckhr.company import contacts
 
     contacts.ensure_schema(conn)
     polished = (
@@ -213,7 +213,7 @@ def test_правка_письма_применяется(conn) -> None:
 
 def test_выдуманные_цифры_в_письме_откатываются_к_шаблону(conn) -> None:
     """Главный тест всего этапа: выдуманный опыт — ложь работодателю [CORE-019]."""
-    import contacts
+    from fuckhr.company import contacts
 
     contacts.ensure_schema(conn)
     facts = ("сократил ответ API в 12 раз",)
@@ -237,7 +237,7 @@ def test_выдуманные_цифры_в_письме_откатываютс�
 
 def test_пустой_ответ_модели_не_ломает_пайплайн(conn) -> None:
     """Модель может ответить пустотой на любом этапе — результат должен остаться."""
-    import contacts
+    from fuckhr.company import contacts
 
     contacts.ensure_schema(conn)
     gateway = FakeGateway()
@@ -251,7 +251,7 @@ def test_пустой_ответ_модели_не_ломает_пайплайн
 
 
 def test_условия_показываются_в_карточке(conn) -> None:
-    import contacts
+    from fuckhr.company import contacts
 
     contacts.ensure_schema(conn)
     conditions.ensure_schema(conn)

@@ -8,13 +8,13 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
-import dossier
-import fake_company
-import fake_llm
-import fake_reviews
-import fake_rules
-import fake_store
-import reviewitems
+from fuckhr.company import dossier
+from fuckhr.company import fake_company
+from fuckhr.company import fake_llm
+from fuckhr.company import fake_reviews
+from fuckhr.company import fake_rules
+from fuckhr.company import fake_store
+from fuckhr.company import reviewitems
 
 КЛИШЕ = (
     "Динамично развивающаяся компания, дружный коллектив, современный офис, "
@@ -259,7 +259,7 @@ def test_модель_без_дословной_цитаты_игнорируе�
 
 
 def test_этап_review_fake_только_на_локальной_модели():
-    import llm
+    from fuckhr.llm import llm
 
     assert llm.profile_for("review_fake") == llm.LOCAL
     assert "review_fake" in llm.PERSONAL_STAGES
@@ -283,8 +283,8 @@ class ПоискСОтзывами:
 
 def test_полный_прогон_от_страницы_до_карточки(conn):
     """build → разбор страницы → fake_score → метка → база → страница компании."""
-    import reviewpage
-    import ui_companies
+    from fuckhr.company import reviewpage
+    from fuckhr.web import ui_companies
 
     блоки = "".join(
         '<div class="review-card"><time datetime="2026-03-0{}"></time>'

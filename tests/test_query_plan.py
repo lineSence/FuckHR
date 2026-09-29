@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import collector
-import profiles
-import query_plan
-import score
-import settings
-from hh import Vacancy
+from fuckhr.vacancy import collector
+from fuckhr.vacancy import profiles
+from fuckhr.sources import query_plan
+from fuckhr.vacancy import score
+from fuckhr.core import settings
+from fuckhr.sources.hh import Vacancy
 
 
 def vacancy(number: int, title: str = "Оператор 1С") -> Vacancy:

@@ -9,11 +9,11 @@ from __future__ import annotations
 import json
 import sqlite3
 
-import conditions
-import dataset_core
-import dataset_export
-import db
-import detector
+from fuckhr.vacancy import conditions
+from fuckhr.lab import dataset_core
+from fuckhr.lab import dataset_export
+from fuckhr.core import db
+from fuckhr.vacancy import detector
 
 
 DESCRIPTION = (
@@ -178,8 +178,8 @@ def test_файлы_делятся_на_train_и_val(tmp_path) -> None:
 
 
 def test_блок_интерфейса_считает_что_есть_в_базе() -> None:
-    import dossier
-    import ui_dataset
+    from fuckhr.company import dossier
+    from fuckhr.web import ui_dataset
 
     conn = _conn()
     dossier.ensure_schema(conn)
@@ -199,7 +199,7 @@ def test_блок_интерфейса_считает_что_есть_в_баз�
 
 def test_кнопки_датасета_нет_на_странице_запуска() -> None:
     # Задача без формы бессмысленна: потолок задаётся на странице «Модель».
-    import jobs
+    from fuckhr.web import jobs
 
     assert "dataset" in jobs.TASKS
     assert "dataset" not in [key for key, _, _ in jobs.task_list()]

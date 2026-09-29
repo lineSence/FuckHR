@@ -7,10 +7,10 @@
 
 from __future__ import annotations
 
-import db
-import dossier
-import run_bg
-from hh import Vacancy
+from fuckhr.core import db
+from fuckhr.company import dossier
+from fuckhr.pipeline import run_bg
+from fuckhr.sources.hh import Vacancy
 
 
 def vacancy(number: int) -> Vacancy:

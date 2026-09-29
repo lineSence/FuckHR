@@ -13,8 +13,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import reviewitems
-import reviewlegit
+from fuckhr.company import reviewitems
+from fuckhr.company import reviewlegit
 
 FIXTURES = Path(__file__).parent / "fixtures"
 

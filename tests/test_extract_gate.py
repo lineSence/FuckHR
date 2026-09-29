@@ -13,8 +13,8 @@ import sqlite3
 
 import pytest
 
-import conditions
-import extract_gate
+from fuckhr.vacancy import conditions
+from fuckhr.vacancy import extract_gate
 
 
 class V:

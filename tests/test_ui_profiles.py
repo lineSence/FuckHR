@@ -12,9 +12,9 @@ from pathlib import Path
 import pytest
 import yaml
 
-import profiles
-import ui_profile
-import ui_profiles
+from fuckhr.vacancy import profiles
+from fuckhr.web import ui_profile
+from fuckhr.web import ui_profiles
 
 
 def write(path: Path, **extra: object) -> Path:

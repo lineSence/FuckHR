@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import sqlite3
 
-import ai_text_rules
-import judge_labels
+from fuckhr.text import ai_text_rules
+from fuckhr.company import judge_labels
 
 GENERATED = (
     "Компания обеспечивает комфортную атмосферу и профессиональный рост. "

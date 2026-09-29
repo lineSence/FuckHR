@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import sqlite3
 
-import bot
-import bot_buttons
-import contacts
+from fuckhr.bot import bot
+from fuckhr.bot import bot_buttons
+from fuckhr.company import contacts
 
 
 def test_кнопки_покрывают_статусы_из_правила() -> None:
@@ -75,7 +75,7 @@ def test_нажатая_кнопка_получает_галочку() -> None:
 
 
 def test_оценка_вакансии_пишется_и_повторяется(conn: sqlite3.Connection) -> None:
-    import db
+    from fuckhr.core import db
 
     db.init_schema(conn)
     conn.execute(
