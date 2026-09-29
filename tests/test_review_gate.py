@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import sqlite3
 
+import pytest
+
 import judge_labels
 import linear_model
 import review_gate
