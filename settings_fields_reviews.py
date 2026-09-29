@@ -1,16 +1,18 @@
 """Каталог настроек: где искать отзывы и разбивка по сферам.
 
-Отдельный файл по той же причине, что и settings_fields_gates.py:
-settings_fields.py упёрся в 25 КБ [CORE-024]. Поля подмешиваются в общий
-каталог снизу, поэтому на странице настроек ничем не отличаются от остальных.
+Поля подмешиваются в общий каталог снизу, поэтому на странице настроек ничем
+не отличаются от остальных. Каталог лежит в нижнем слое и не импортирует
+модули отзывов: списки площадок и сфер в подсказках — литералы, их сверяет
+tests/test_settings_catalog.py.
 """
 
 from __future__ import annotations
 
-from settings_fields import BOOL, TEXT, Field
+from settings_base import BOOL, TEXT, Field
 
-import review_area
-import reviewsites
+# Сверяются с reviewsites.hosts() и review_area.codes() в тестах.
+SITE_HOSTS = ("dreamjob.ru", "pravda-sotrudnikov.ru", "jobtrue.ru", "hrlike.ru", "antijob.net")
+AREA_CODES = ("it", "retail", "sales", "support", "office")
 
 GROUP_SITES = "Площадки отзывов"
 GROUP_SITES_HINT = "где искать отзывы и как их читать"
@@ -37,7 +39,7 @@ SITE_FIELDS: tuple[Field, ...] = (
         "",
         "Адреса через запятую: {}. Пусто — все, у кого есть парсер. Удобнее "
         "ставить галочками выше; здесь — чтобы видеть значение целиком.".format(
-            ", ".join(reviewsites.hosts())
+            ", ".join(SITE_HOSTS)
         ),
     ),
     Field(
@@ -66,7 +68,7 @@ AREA_FIELDS: tuple[Field, ...] = (
         "твоей стороны компании: в крупной сети кассиры и разработчики описывают "
         "разные вселенные. Пусто — разбивки нет, всё как раньше. Сфера отзыва "
         "определяется словарями, не моделью; неуверенные остаются без метки.".format(
-            ", ".join(review_area.codes())
+            ", ".join(AREA_CODES)
         ),
     ),
 )

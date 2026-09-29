@@ -133,3 +133,12 @@ def test_список_исключений_не_протух() -> None:
     read = set(env_keys_read())
     stale = sorted(key for key in OUTSIDE if key not in read and key != "ENV_FILE")
     assert not stale, "в OUTSIDE остались ключи, которых нет в коде: {}".format(stale)
+
+
+def test_списки_в_подсказках_отзывов_совпадают_с_кодом() -> None:
+    import review_area
+    import reviewsites
+    import settings_fields_reviews as reviews
+
+    assert reviews.SITE_HOSTS == reviewsites.hosts()
+    assert reviews.AREA_CODES == review_area.codes()

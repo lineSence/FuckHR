@@ -301,7 +301,9 @@ def pick_contact(gateway: Any, candidates: Sequence[Any], role_hint: str = "") -
     return items[index - 1]
 
 
-def polish_draft(gateway: Any, draft: Any, facts: Sequence[str] = ()) -> Any:
+def polish_draft(
+    gateway: Any, draft: Any, facts: Sequence[str] = (), limit: int = 1200
+) -> Any:
     """Переписывает тело письма живым языком (этап draft).
 
     Откат к исходному черновику происходит, если модель:
@@ -316,14 +318,6 @@ def polish_draft(gateway: Any, draft: Any, facts: Sequence[str] = ()) -> Any:
     body = str(getattr(draft, "body", "") or "")
     if not body.strip():
         return draft
-
-    limit = 1200
-    try:
-        import outreach
-
-        limit = int(getattr(outreach, "MAX_LETTER_CHARS", limit))
-    except Exception as exc:  # noqa: BLE001 — лимит не повод падать
-        log.debug("лимит письма по умолчанию: %s", exc)
 
     prompt = (
         "Перепиши письмо живым языком без канцелярита и без клише про «динамично "

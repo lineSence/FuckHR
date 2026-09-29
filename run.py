@@ -78,7 +78,8 @@ import run_cards
 import run_loop
 import embeddings_tasks
 import run_details
-from run_setup import build_gateway, notify_if_broken, setup_logging
+from logs import setup_logging
+from run_setup import build_gateway, notify_if_broken
 from research import (  # noqa: F401 — реэкспорт для старых вызовов
     MAX_RESEARCH_WORKERS,
     _research_one,

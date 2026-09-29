@@ -17,7 +17,7 @@ import db
 import deepresearch
 import deepresearch_store
 import settings
-from run_setup import setup_logging
+from logs import setup_logging
 
 log = logging.getLogger("fuckhr")
 

@@ -1,52 +1,49 @@
 """Каталог настроек: какие поля бывают, как подписаны и в какой группе.
 
-Вынесено из settings.py по [CORE-024]: каталог не знает ни про .env, ни про
-формы — это данные, а не логика. Публичные имена доступны через settings.
+Каталог не знает ни про .env, ни про формы — это данные, а не логика.
+Тематические группы живут в settings_fields_*.py и подмешиваются в конец
+списка; тип поля и имена групп — settings_base.py. Публичные имена доступны
+через settings.
 """
 
 from __future__ import annotations
 
-import llm
+from dataclasses import replace
 
-from dataclasses import dataclass, replace
-
-TEXT = "text"
-SECRET = "secret"
-INT = "int"
-FLOAT = "float"
-BOOL = "bool"
-
-TRUE_VALUES = {"1", "true", "yes", "on", "да"}
-
-
-@dataclass(frozen=True)
-class Field:
-    """Одна настройка: ключ в .env плюс всё, что нужно для формы."""
-
-    key: str
-    label: str
-    group: str
-    kind: str = TEXT
-    default: str = ""
-    help: str = ""
-
-    @property
-    def is_secret(self) -> bool:
-        return self.kind == SECRET
-
-
-GROUP_RUN = "Запуск"
-GROUP_PREFILTER = "Предфильтр"
-GROUP_DETECTOR = "Детектор брехни"
-GROUP_SCORE = "Оценка работодателя"
-GROUP_DEEP = "Глубокий ресёрч"
-GROUP_SOURCE = "Источник вакансий"
-GROUP_TELEGRAM = "Telegram"
-GROUP_LLM = "Модель"
-GROUP_LLM_STAGES = "Модель по этапам"
-GROUP_EMBED = "Векторы и похожесть"
-GROUP_SEARCH = "Внешний поиск"
-GROUP_PATHS = "Файлы и логи"
+import llm_profiles
+from settings_base import (  # noqa: F401 — публичные имена каталога
+    TEXT,
+    SECRET,
+    INT,
+    FLOAT,
+    BOOL,
+    TRUE_VALUES,
+    Field,
+    GROUP_RUN,
+    GROUP_PREFILTER,
+    GROUP_DETECTOR,
+    GROUP_SCORE,
+    GROUP_DEEP,
+    GROUP_SOURCE,
+    GROUP_TELEGRAM,
+    GROUP_LLM,
+    GROUP_LLM_STAGES,
+    GROUP_EMBED,
+    GROUP_SEARCH,
+    GROUP_PATHS,
+)
+from settings_fields_gates import GATE_FIELDS, GROUP_GATES, GROUP_GATES_HINT
+from settings_fields_install import GROUP_INSTALL, INSTALL_HINT, is_install
+from settings_fields_perf import GROUP_PERF, GROUP_PERF_HINT, PERF_FIELDS
+from settings_fields_reviews import (
+    AREA_FIELDS,
+    GROUP_AREA,
+    GROUP_AREA_HINT,
+    GROUP_SITES,
+    GROUP_SITES_HINT,
+    SITE_FIELDS,
+)
+from settings_fields_sources import GROUP_SOURCES, GROUP_SOURCES_HINT, SOURCE_FIELDS
 
 # Подпись группы в свёрнутом виде: по названию не всегда понятно, что внутри.
 GROUP_HINTS: dict[str, str] = {
@@ -486,9 +483,9 @@ FIELDS: tuple[Field, ...] = (
             GROUP_LLM_STAGES,
             TEXT,
             "",
-            "Пусто — берётся модель профиля {}.".format(llm.STAGE_PROFILES[stage]),
+            "Пусто — берётся модель профиля {}.".format(llm_profiles.STAGE_PROFILES[stage]),
         )
-        for stage, env_key in llm.STAGE_MODEL_ENV.items()
+        for stage, env_key in llm_profiles.STAGE_MODEL_ENV.items()
     ),
     *(
         Field(
@@ -501,7 +498,7 @@ FIELDS: tuple[Field, ...] = (
             "модели этапа; последним кандидатом всегда идёт локальная модель "
             "[ADR-022].",
         )
-        for stage, env_key in llm.STAGE_MODELS_ENV.items()
+        for stage, env_key in llm_profiles.STAGE_MODELS_ENV.items()
     ),
     Field(
         "LLM_PERSONAL_VIA_PROXY",
@@ -630,14 +627,16 @@ FIELDS: tuple[Field, ...] = (
     ),
 )
 
-# Импорт снизу: дополнительные каталоги берут отсюда Field [CORE-024].
-from settings_fields_extra import EXTRA_FIELDS, EXTRA_HINTS  # noqa: E402
-
-FIELDS = FIELDS + EXTRA_FIELDS
-GROUP_HINTS.update(EXTRA_HINTS)
-
-from settings_fields_install import GROUP_INSTALL, INSTALL_HINT, is_install  # noqa: E402
-
+FIELDS = FIELDS + GATE_FIELDS + SITE_FIELDS + AREA_FIELDS + SOURCE_FIELDS + PERF_FIELDS
+GROUP_HINTS.update(
+    {
+        GROUP_GATES: GROUP_GATES_HINT,
+        GROUP_SITES: GROUP_SITES_HINT,
+        GROUP_AREA: GROUP_AREA_HINT,
+        GROUP_SOURCES: GROUP_SOURCES_HINT,
+        GROUP_PERF: GROUP_PERF_HINT,
+    }
+)
 GROUP_HINTS[GROUP_INSTALL] = INSTALL_HINT
 # Пути, потолки и темп запросов ставят один раз при установке: на странице
 # настроек они только удлиняют список (docs/ui-map.md).

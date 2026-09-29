@@ -15,10 +15,12 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Sequence
 
+import contacts
 import db
 import settings
 import websearch
@@ -38,7 +40,6 @@ def _one_company(
     db_path: Path, rows: Sequence[Any], check_mx: bool
 ) -> list[tuple[str, Any]]:
     """Работа одного потока: хиты на компанию и находки по её вакансиям."""
-    import outreach  # noqa: PLC0415 — обратный импорт только в потоке
 
     conn = db.connect(db_path)
     try:
@@ -48,10 +49,10 @@ def _one_company(
             key=lambda r: r["score"] if "score" in r.keys() and r["score"] is not None else 0,
         )
         name = (best["company"] or "").strip()
-        hits = outreach.company_hits(provider, name, best["title"]) if name else []
+        hits = company_hits(provider, name, best["title"]) if name else []
         out: list[tuple[str, Any]] = []
         for row in rows:
-            discovery, _ = outreach.find_contacts(
+            discovery, _ = find_contacts(
                 conn, row, provider, check_mx=check_mx, hits=hits
             )
             out.append((row["key"], discovery))
@@ -118,7 +119,6 @@ def discover_here(
     Нужен там, где потоки завести нечем: провайдер и его кэш принадлежат
     соединению вызывающего, а делить соединение между потоками нельзя.
     """
-    import outreach  # noqa: PLC0415 — обратный импорт
 
     out: dict[str, Any] = {}
     for name, rows in rows_by_company.items():
@@ -126,13 +126,61 @@ def discover_here(
             rows,
             key=lambda r: r["score"] if "score" in r.keys() and r["score"] is not None else 0,
         )
-        hits = outreach.company_hits(provider, name, best["title"]) if name else []
+        hits = company_hits(provider, name, best["title"]) if name else []
         for row in rows:
-            discovery, _ = outreach.find_contacts(
+            discovery, _ = find_contacts(
                 conn, row, provider, check_mx=check_mx, hits=hits
             )
             out[row["key"]] = discovery
     return out
+
+
+def company_hits(
+    provider: websearch.SearchProvider, company: str | None, title: str | None = None
+) -> list[websearch.Hit]:
+    """Сырая выдача по компании. Пусто — тоже нормально.
+
+    Хиты нужны целиком дважды: поиску контактов (текст страницы) и справке
+    о компании (титул и сниппет), поэтому поиск делается один раз.
+    """
+    if not company or not provider.enabled:
+        return []
+    roles = contacts.lead_roles(title)
+    return list(provider.search_many(websearch.contact_queries(company, roles), limit=5))
+
+
+def pages_from_hits(hits: Sequence[websearch.Hit]) -> list[tuple[str, str]]:
+    return [(hit.url, f"{hit.title}\n{hit.snippet}") for hit in hits]
+
+
+def find_contacts(
+    conn: sqlite3.Connection,
+    row: sqlite3.Row,
+    provider: websearch.SearchProvider,
+    check_mx: bool = False,
+    hits: Sequence[websearch.Hit] | None = None,
+) -> tuple[contacts.Discovery, list[websearch.Hit]]:
+    """Ищет рабочие каналы по одной вакансии. Внешний поиск — один раз.
+
+    Хиты возвращаются наружу: справка о компании собирается из них же, чтобы
+    не платить за второй поиск. Готовые хиты можно передать: у трёх вакансий
+    одной компании страницы «Команда» и «Контакты» одни и те же.
+    """
+    company = row["company"]
+    text = "\n".join(str(row[field] or "") for field in ("title", "description"))
+    hits = list(hits) if hits is not None else company_hits(provider, company, row["title"])
+    pages = pages_from_hits(hits)
+    site_url = next((contacts.domain_of(url) for url, _ in pages if contacts.domain_of(url)), None)
+    discovery = contacts.discover(
+        key=row["key"],
+        company=company,
+        vacancy_text=text,
+        company_pages=pages,
+        site_url=site_url,
+        check_mx=check_mx,
+        vacancy_url=row["url"],
+    )
+    return discovery, list(hits)
 
 
 __all__ = ("MAX_CONTACT_WORKERS", "contact_workers", "discover_all", "discover_here")

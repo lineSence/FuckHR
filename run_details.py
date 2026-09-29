@@ -104,7 +104,7 @@ def plan(
     в пул сразу: к началу цикла первые карточки уже в пути.
     """
     import db  # noqa: PLC0415 — модуль сети не должен тянуть базу при импорте
-    import hh_pages
+    import profiles
     import sources
 
     cached_details: dict[str, Any] = {}
@@ -113,7 +113,7 @@ def plan(
         cached = db.cached_details(conn, draft.key) if with_details else None
         if cached and (not draft.published_at or cached[2] == draft.published_at):
             cached_details[draft.key] = cached
-        elif with_details and hh_pages.worth_details(
+        elif with_details and profiles.worth_details(
             draft, bundle, owners.get(draft.key), fuzzy, delta
         ):
             details.submit(draft.key, draft.external_id)

@@ -8,7 +8,7 @@
 
 from __future__ import annotations
 
-from settings_fields import BOOL, FLOAT, INT, TEXT, Field
+from settings_base import BOOL, FLOAT, INT, TEXT, Field
 
 GROUP_GATES = "Гейты и разметка"
 GROUP_GATES_HINT = "когда этап можно не отдавать модели"

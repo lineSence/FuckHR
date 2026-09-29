@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from settings_fields import FLOAT, INT, Field
+from settings_base import FLOAT, INT, Field
 
 GROUP_PERF = "Темп и потоки"
 GROUP_PERF_HINT = "сколько запросов идёт одновременно; темп к источнику держит общий ограничитель"

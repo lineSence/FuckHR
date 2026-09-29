@@ -399,7 +399,7 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     # Чужие INFO-строки (httpx на каждый запрос, поиск весов у huggingface_hub)
     # прячут наши: приглушаем их здесь же, где настраиваем лог.
-    from run_setup import quiet_libraries  # noqa: PLC0415 — цикл импорта
+    from logs import quiet_libraries  # noqa: PLC0415 — логи настраивает только запуск
 
     quiet_libraries()
     token_env = os.environ["TELEGRAM_BOT_TOKEN"]

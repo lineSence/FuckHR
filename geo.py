@@ -363,9 +363,9 @@ def from_state(state: Any, vacancy: str | None = None) -> Point | None:
     вакансии, иногда отдельной веткой состояния. Первый заход точнее,
     второй — живучее.
     """
-    import hh_html  # локально: hh_html тянет httpx, а интерфейс читает только базу
+    import hh_parse  # локально: интерфейс читает только базу
 
-    nodes = hh_html.find_vacancy_nodes(state)
+    nodes = hh_parse.find_vacancy_nodes(state)
     chosen: dict[str, Any] | None = None
     for node in nodes:
         if vacancy and str(node.get("vacancyId") or node.get("id")) == str(vacancy):
@@ -398,11 +398,11 @@ def from_state(state: Any, vacancy: str | None = None) -> Point | None:
 
 def from_page(page: str, vacancy: str | None = None) -> Point | None:
     """Адрес со страницы вакансии. Сломанная страница — это None, а не исключение."""
-    import hh_html
+    import hh_parse
 
     try:
-        state = hh_html.extract_state(page)
-    except hh_html.ExtractionError as exc:
+        state = hh_parse.extract_state(page)
+    except hh_parse.ExtractionError as exc:
         log.warning("состояние страницы не разобралось: %s", exc)
         return None
     return from_state(state, vacancy)
@@ -425,7 +425,7 @@ def backfill(
     Каждая страница — пауза в пару секунд, поэтому есть потолок и счётчик в логе:
     интерфейс рисует полоску из строк вида [3/30] (jobs.py).
     """
-    import hh_html
+    import hh_parse
 
     rows = pending(conn, limit, keys)
     filled = 0
@@ -439,8 +439,8 @@ def backfill(
         tried += 1
         log.info("[%s/%s] адрес: %s", index, len(rows), row["title"])
         try:
-            page = client.fetch(hh_html.VACANCY_PREFIX + ident)
-        except hh_html.BlockedError:
+            page = client.fetch(hh_parse.VACANCY_PREFIX + ident)
+        except hh_parse.BlockedError:
             # Капча не лечится следующей страницей: честнее остановиться.
             log.warning("hh.ru больше не пускает, останавливаюсь на %s из %s", index, len(rows))
             break
@@ -457,7 +457,7 @@ def backfill(
             # поля. Без неё починка парсера превращается в гадание (ADR-015).
             dumped = True
             try:
-                path = hh_html.dump_failure(page, "geo-no-point-" + ident)
+                path = hh_parse.dump_failure(page, "geo-no-point-" + ident)
                 log.warning("точки нет, сырая страница сохранена: %s", path)
             except OSError as exc:
                 log.debug("не смог сохранить страницу: %s", exc)

@@ -179,6 +179,36 @@ def facts(bundle: Sequence[Loaded]) -> list[str]:
     return out
 
 
+def worth_details(
+    vacancy: Any,
+    bundle: Sequence[Any],
+    owner_ids: Iterable[str] | None,
+    fuzzy: int,
+    delta: float,
+) -> bool:
+    """Стоит ли открывать карточку вакансии на hh.ru.
+
+    Черновой скор считается по выдаче и занижен: описания ещё нет. Поэтому
+    сравнение идёт не с порогом профиля, а с «порог минус дельта», и достаточно
+    одного профиля, который вакансию почти пропускает.
+
+    Вакансия не с hh.ru — сразу нет. Открывается `hh.ru/vacancy/<external_id>`,
+    а id Работы.ру или Труда России на hh.ru ведёт на другую, вполне
+    существующую вакансию: описание и адрес приехали бы от чужого объявления и
+    выглядели бы настоящими. У внешних площадок описание и так приходит вместе
+    с выдачей, второй запрос им не нужен.
+    """
+    if str(getattr(vacancy, "source", "") or "") != "hh.ru":
+        return False
+    if delta <= 0:
+        return True
+    thresholds = {loaded.id: loaded.profile.min_score for loaded in bundle}
+    matches = score_all(vacancy, bundle, owner_ids, fuzzy)
+    return any(
+        verdict.score >= thresholds.get(pid, 0.0) - delta for pid, verdict in matches
+    )
+
+
 __all__ = (
     "EXPECTED_MAX",
     "Loaded",
@@ -189,4 +219,5 @@ __all__ = (
     "min_threshold",
     "passed",
     "score_all",
+    "worth_details",
 )

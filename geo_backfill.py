@@ -35,7 +35,7 @@ import db
 import geo
 import settings
 from hh_html import VACANCY_PREFIX, HHHtmlClient
-from run_setup import setup_logging
+from logs import setup_logging
 
 log = logging.getLogger("fuckhr")
 

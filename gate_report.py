@@ -23,7 +23,6 @@ from typing import Sequence
 import conditions
 import db
 import detector
-import hh_pages
 import profiles
 import rebuild
 import settings
@@ -71,7 +70,7 @@ def report(
             vacancy = rebuild.vacancy_of(row)
             # Ворота работают до загрузки описания: считаем по черновику.
             draft = vacancy.model_copy(update={"description": "", "skills": []})
-            if hh_pages.worth_details(draft, bundle, None, fuzzy, delta):
+            if profiles.worth_details(draft, bundle, None, fuzzy, delta):
                 continue
             skipped += 1
             if _has_conditions(conn, row["key"]):

@@ -29,8 +29,8 @@ def test_компании_расходятся_по_потокам(tmp_path, mon
     def fake_find(conn, r, provider, check_mx=False, hits=None):  # noqa: ANN001
         return contacts.Discovery(key=r["key"], company=r["company"]), []
 
-    monkeypatch.setattr(outreach, "company_hits", fake_hits)
-    monkeypatch.setattr(outreach, "find_contacts", fake_find)
+    monkeypatch.setattr(outreach_scan, "company_hits", fake_hits)
+    monkeypatch.setattr(outreach_scan, "find_contacts", fake_find)
 
     found = outreach_scan.discover_all(
         tmp_path / "t.sqlite3",
@@ -56,8 +56,8 @@ def test_упавшая_компания_не_роняет_этап(tmp_path, mo
     def fake_find(conn, r, provider, check_mx=False, hits=None):  # noqa: ANN001
         return contacts.Discovery(key=r["key"], company=r["company"]), []
 
-    monkeypatch.setattr(outreach, "company_hits", fake_hits)
-    monkeypatch.setattr(outreach, "find_contacts", fake_find)
+    monkeypatch.setattr(outreach_scan, "company_hits", fake_hits)
+    monkeypatch.setattr(outreach_scan, "find_contacts", fake_find)
 
     found = outreach_scan.discover_all(
         tmp_path / "t.sqlite3",

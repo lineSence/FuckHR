@@ -596,7 +596,7 @@ def main(argv: list[str] | None = None) -> int:
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
-    from run_setup import quiet_libraries  # noqa: PLC0415 — цикл импорта
+    from logs import quiet_libraries  # noqa: PLC0415 — логи настраивает только запуск
 
     quiet_libraries(args.verbose)
     try:

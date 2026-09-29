@@ -8,7 +8,7 @@
 
 from __future__ import annotations
 
-from settings_fields import FLOAT, GROUP_SEARCH, GROUP_SOURCE, INT, SECRET, TEXT, Field
+from settings_base import FLOAT, GROUP_SEARCH, GROUP_SOURCE, INT, SECRET, TEXT, Field
 
 GROUP_SOURCES = "Другие площадки"
 GROUP_SOURCES_HINT = "какие агрегаторы входят в сбор и чем они платят"

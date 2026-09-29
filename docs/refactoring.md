@@ -33,9 +33,9 @@
 
 ### Шаг 1. Гигиена
 
-- [ ] Удалить HTML-дампы из корня, `*.html` в корне — в `.gitignore` (фикстуры остаются в `tests/fixtures/`).
-- [ ] `ruff` в `requirements-dev.txt`, минимальный набор правил: синтаксис и неопределённые имена.
-- [ ] GitHub Actions: `pytest` и `ruff` на каждый push и PR.
+- [x] Удалить HTML-дампы из корня, `*.html` в корне — в `.gitignore` (фикстуры остаются в `tests/fixtures/`).
+- [x] `ruff` в `requirements-dev.txt`, минимальный набор правил: синтаксис и неопределённые имена.
+- [x] GitHub Actions: `pytest` и `ruff` на каждый push и PR.
 
 Готово, когда: корень без дампов, CI-конфиг в репозитории, тесты зелёные.
 
@@ -43,15 +43,15 @@
 
 Каждый цикл рвётся переносом кода туда, где ему место, а не ленивым импортом.
 
-- [ ] `settings` ↔ `reviewsites`/`review_area`: каталог настроек не импортирует предметные модули;
+- [x] `settings` ↔ `reviewsites`/`review_area`: каталог настроек не импортирует предметные модули;
       списки в подсказках — литералы, их актуальность проверяет тест.
-- [ ] `settings_fields` → `llm`: каталог берёт имена этапов из `llm_profiles` (чистые данные).
-- [ ] `bot` ↔ `run_setup`: `setup_logging` и `quiet_libraries` — в отдельный модуль `logs.py`.
-- [ ] `outreach` ↔ `outreach_scan` ↔ `llm_tasks`: лимит письма передаётся параметром;
+- [x] `settings_fields` → `llm`: каталог берёт имена этапов из `llm_profiles` (чистые данные).
+- [x] `bot` ↔ `run_setup`: `setup_logging` и `quiet_libraries` — в отдельный модуль `logs.py`.
+- [x] `outreach` ↔ `outreach_scan` ↔ `llm_tasks`: лимит письма передаётся параметром;
       запуск этапа контактов (CLI, Telegram) уходит из `outreach.py` в пайплайн.
-- [ ] `collector` → `hh_pages` → `profiles` → `collector`: `worth_details` переезжает к скорингу профилей.
-- [ ] `geo` ↔ `hh_html`: `geo` разбирает состояние через `hh_parse`, дозаполнение адресов — в `geo_backfill`.
-- [ ] `dossier` ↔ `dossier_*`: импорты только для аннотаций (`TYPE_CHECKING`) циклом не считаются;
+- [x] `collector` → `hh_pages` → `profiles` → `collector`: `worth_details` переезжает к скорингу профилей.
+- [x] `geo` ↔ `hh_html`: `geo` разбирает состояние через `hh_parse`, дозаполнение адресов — в `geo_backfill`.
+- [x] `dossier` ↔ `dossier_*`: импорты только для аннотаций (`TYPE_CHECKING`) циклом не считаются;
       остальные связи проверяются тестом.
 
 Готово, когда: ноль циклов по всем импортам, включая импорты внутри функций.
@@ -124,3 +124,13 @@
 ## Журнал
 
 Заполняется по ходу: что сделано на шаге, что пошло не по плану.
+
+**Шаг 1.** Удалены 7 дампов (~1,5 МБ), `/*.html` в `.gitignore`. `ruff` с минимальным набором сразу нашёл настоящую ошибку: `tests/test_review_gate.py` использовал `pytest` без импорта. CI: `.github/workflows/ci.yml`.
+
+**Шаг 2.** Все 5 циклов разорваны переносом кода, ни одного нового ленивого импорта:
+- `logs.py` — `setup_logging`, `quiet_libraries` (были в `run_setup`, из-за чего `bot` и шесть других модулей тянули пайплайн).
+- `settings_base.py` — `Field`, виды значений и имена групп; `settings_fields_extra.py` удалён, сборка каталога — в `settings_fields.py` без импорта снизу файла. Каталог больше не импортирует `llm`, `reviewsites`, `review_area`; литералы сверяет новый тест.
+- `reviewtext.py` — HTML → текст и «похоже ли на отзыв»: нижний уровень под `reviewitems` и `reviewpage`.
+- `outreach_run.py` — CLI этапа контактов с отправкой в Telegram; `company_hits`, `find_contacts`, `pages_from_hits` переехали в `outreach_scan`; лимит письма в `llm_tasks.polish_draft` — параметр.
+- `worth_details` — из `hh_pages` в `profiles`; `geo` разбирает состояние через `hh_parse`.
+- Не по плану: внутри каталога настроек нашёлся шестой цикл (`settings_fields` ↔ `settings_fields_*`), его не было видно в первом замере, потому что он сливался с большим.

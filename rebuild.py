@@ -44,7 +44,8 @@ import injection_store
 import market_store
 import settings
 from hh import Vacancy
-from run_setup import build_gateway, setup_logging
+from logs import setup_logging
+from run_setup import build_gateway
 from score import Profile, evaluate
 
 log = logging.getLogger("fuckhr")

@@ -36,24 +36,17 @@ llm.Gateway по правилам [CORE-012]. С выключенной моде
 
 from __future__ import annotations
 
-import argparse
-import asyncio
 import logging
-import os
 import sqlite3
-import sys
 from pathlib import Path
 from typing import Any, Sequence
 
 import yaml
 
-import conditions
 import contact_finds
 import contacts
-import db
 import detector
 import dossier_store
-import llm
 import llm_tasks
 import outreach_scan
 import resume
@@ -77,7 +70,6 @@ from outreach_draft import (  # noqa: F401
 log = logging.getLogger("outreach")
 
 FOLLOW_UP_DAYS = 6  # [OUT-004]: один follow-up через 5–7 дней
-
 
 
 def load_facts(profile_path: str | Path = "profile.yaml") -> tuple[str, ...]:
@@ -159,54 +151,6 @@ def follow_up_cards(
         if not dry_run:
             contacts.mark_follow_up(conn, int(contact["id"]))
     return out
-
-
-def company_hits(
-    provider: websearch.SearchProvider, company: str | None, title: str | None = None
-) -> list[websearch.Hit]:
-    """Сырая выдача по компании. Пусто — тоже нормально.
-
-    Хиты нужны целиком дважды: поиску контактов (текст страницы) и справке
-    о компании (титул и сниппет), поэтому поиск делается один раз.
-    """
-    if not company or not provider.enabled:
-        return []
-    roles = contacts.lead_roles(title)
-    return list(provider.search_many(websearch.contact_queries(company, roles), limit=5))
-
-
-def pages_from_hits(hits: Sequence[websearch.Hit]) -> list[tuple[str, str]]:
-    return [(hit.url, f"{hit.title}\n{hit.snippet}") for hit in hits]
-
-
-def find_contacts(
-    conn: sqlite3.Connection,
-    row: sqlite3.Row,
-    provider: websearch.SearchProvider,
-    check_mx: bool = False,
-    hits: Sequence[websearch.Hit] | None = None,
-) -> tuple[contacts.Discovery, list[websearch.Hit]]:
-    """Ищет рабочие каналы по одной вакансии. Внешний поиск — один раз.
-
-    Хиты возвращаются наружу: справка о компании собирается из них же, чтобы
-    не платить за второй поиск. Готовые хиты можно передать: у трёх вакансий
-    одной компании страницы «Команда» и «Контакты» одни и те же.
-    """
-    company = row["company"]
-    text = "\n".join(str(row[field] or "") for field in ("title", "description"))
-    hits = list(hits) if hits is not None else company_hits(provider, company, row["title"])
-    pages = pages_from_hits(hits)
-    site_url = next((contacts.domain_of(url) for url, _ in pages if contacts.domain_of(url)), None)
-    discovery = contacts.discover(
-        key=row["key"],
-        company=company,
-        vacancy_text=text,
-        company_pages=pages,
-        site_url=site_url,
-        check_mx=check_mx,
-        vacancy_url=row["url"],
-    )
-    return discovery, list(hits)
 
 
 def _skip_reason(conn: sqlite3.Connection, row: sqlite3.Row) -> str | None:
@@ -300,7 +244,7 @@ def process_row(
     hits: list[websearch.Hit] = []
     discovery = contact_finds.load(conn, row["key"], company)
     if discovery is None:
-        discovery, hits = find_contacts(conn, row, provider, check_mx=check_mx)
+        discovery, hits = outreach_scan.find_contacts(conn, row, provider, check_mx=check_mx)
         contact_finds.save(conn, discovery)
 
     # «Другой контакт» в Telegram обязан приводить к другому человеку: без
@@ -322,7 +266,7 @@ def process_row(
     # модель в сеть не ходит и свои знания о компании не вспоминает.
     brief = None
     if gateway is not None and not hits:
-        hits = company_hits(provider, company, row["title"])
+        hits = outreach_scan.company_hits(provider, company, row["title"])
     if gateway is not None and hits:
         brief = llm_tasks.company_brief(gateway, company or "", hits)
 
@@ -338,7 +282,7 @@ def process_row(
         )
         draft = build_draft(row, fallback, facts, _brief_reason(brief))
         if gateway is not None:
-            draft = llm_tasks.polish_draft(gateway, draft, facts)
+            draft = llm_tasks.polish_draft(gateway, draft, facts, limit=MAX_LETTER_CHARS)
         return discovery, draft, None
 
     # Этап contacts. Модель выбирает номер из списка, поэтому нового человека
@@ -367,7 +311,7 @@ def process_row(
     # числа или вернула огрызок, так что проверять результат здесь не нужно.
     draft = build_draft(row, best, facts, reason)
     if gateway is not None:
-        draft = llm_tasks.polish_draft(gateway, draft, facts)
+        draft = llm_tasks.polish_draft(gateway, draft, facts, limit=MAX_LETTER_CHARS)
     return discovery, draft, None
 
 
@@ -415,164 +359,3 @@ def top_rows(conn: sqlite3.Connection, min_score: float, limit: int) -> list[sql
         if len(out) >= limit:
             break
     return out
-
-
-def setup_logging(verbose: bool = False) -> None:
-    logging.basicConfig(
-        level=logging.DEBUG if verbose else logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
-    from run_setup import quiet_libraries  # noqa: PLC0415 — цикл импорта
-
-    quiet_libraries(verbose)
-
-
-def build_gateway(conn: sqlite3.Connection, disabled: bool) -> llm.Gateway | None:
-    """Шлюз или None. None — штатный режим, а не авария [CORE-017]."""
-    if disabled:
-        log.info("модель выключена в настройках (LLM_ENABLED)")
-        return None
-    candidate = llm.Gateway.from_env(conn)
-    if not candidate.enabled:
-        log.info("модель не настроена (%s), идём без неё", candidate.disabled_reason)
-        return None
-    for stage, profile, route, model, source in candidate.describe_routes():
-        if stage in {"company", "contacts", "draft"}:
-            log.info(
-                "этап %s: профиль %s, маршрут %s, модель %s (имя из: %s)",
-                stage, profile, route, model, source,
-            )
-    return candidate
-
-
-def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        description="Поиск нанимающего менеджера и черновик письма. Настройки — в webui.py"
-    )
-    parser.add_argument("--dry-run", action="store_true", help="ничего не писать и не шлать")
-    parser.add_argument("--verbose", action="store_true", help="подробный лог")
-    args = parser.parse_args(argv)
-
-    setup_logging(args.verbose)
-    options = settings.outreach_options()
-    log.info(
-        "настройки: лимит %s, порог %s, профиль %s, без прямого контакта %s, MX %s, модель %s",
-        options.limit,
-        options.min_score,
-        options.profile,
-        "да" if options.allow_generic else "нет",
-        "да" if options.check_mx else "нет",
-        "да" if options.use_llm else "нет",
-    )
-
-    conn = db.connect(settings.get("DB_PATH", "data/fuckhr.sqlite3"))
-    db.init_schema(conn)
-    contacts.ensure_schema(conn)
-    detector.ensure_schema(conn)
-    conditions.ensure_schema(conn)
-    resume.ensure_schema(conn)
-
-    # Факты читаются после открытия базы: главный их источник теперь резюме.
-    facts = collect_facts(conn, options.profile)
-    if not facts:
-        log.warning(
-            "ни подтверждённых блоков резюме, ни фактов в %s — в черновике будет "
-            "заглушка; заполните резюме на /resume",
-            options.profile,
-        )
-
-    gateway = build_gateway(conn, not options.use_llm)
-
-    provider = websearch.SearchProvider.from_env(conn)
-    if not provider.enabled:
-        log.info(
-            "внешний поиск выключен (%s): ищем только в том, что уже собрано",
-            provider.disabled_reason,
-        )
-
-    rows = top_rows(conn, options.min_score, options.limit)
-    if not rows:
-        log.info("нет вакансий со скором >= %s", options.min_score)
-        return 0
-
-    cards: list[tuple[str, int | None]] = []
-    prepared = 0
-    generic_cards = 0
-    for row in rows:
-        discovery, draft, skip_reason = process_row(
-            conn,
-            row,
-            facts,
-            provider,
-            check_mx=options.check_mx,
-            allow_generic=options.allow_generic,
-            gateway=gateway,
-        )
-        if skip_reason:
-            log.info("%s: пропуск — %s", row["key"], skip_reason)
-            continue
-
-        best = discovery.candidates[0]
-        if best.channel_kind == APPLY_CHANNEL:
-            generic_cards += 1
-        contact_id = None
-        if not args.dry_run:
-            contact_id = contacts.store(conn, row["key"], row["company"], best)
-        cards.append(
-            (
-                format_card(
-                    row,
-                    discovery,
-                    draft,
-                    detector.load_lines(conn, row["key"]),
-                    conditions.lines(conn, row["key"]),
-                ),
-                contact_id,
-            )
-        )
-        prepared += 1
-
-    cards.extend(follow_up_cards(conn, facts, args.dry_run))
-
-    for card, _ in cards:
-        print(card)
-        print("-" * 40)
-
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
-    chat_id = os.getenv("TELEGRAM_CHAT_ID")
-    if cards and not args.dry_run and token and chat_id:
-        import bot as tg
-
-        for card, contact_id in cards:
-            # Кнопки статуса [OUT-006]: без них контакт навсегда остаётся в drafted.
-            asyncio.run(tg.send_contact_card(token, chat_id, card, contact_id))
-
-    direct, total = contacts.coverage(conn)
-    log.info(
-        "подготовлено: %s (из них без прямого контакта %s); "
-        "в логе контактов вакансий с прямым контактом %s из %s",
-        prepared,
-        generic_cards,
-        direct,
-        total,
-    )
-    if gateway is not None:
-        usage = gateway.usage
-        log.info(
-            "модель: вызовов %s, из кэша %s, ошибок %s, пропущено %s",
-            usage.calls,
-            usage.cached,
-            usage.failures,
-            usage.skipped,
-        )
-    if not options.allow_generic and prepared == 0:
-        log.info(
-            "прямых контактов в тексте вакансий почти не бывает: "
-            "включи внешний поиск и режим «сопроводительное к отклику» в настройках"
-        )
-    conn.close()
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())

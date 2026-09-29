@@ -42,7 +42,7 @@ import settings
 import targets
 import targets_hh
 from hh_html import HHHtmlClient
-from run_setup import setup_logging
+from logs import setup_logging
 
 log = logging.getLogger("fuckhr")
 

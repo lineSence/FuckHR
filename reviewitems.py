@@ -32,7 +32,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 
 import review_area
-import reviewpage
+import reviewtext
 from dossier_rules import LONE_RATING_RE, RATING_RE, STARS_RE
 
 ITEM_MARK = "\x00ITEM\x00"
@@ -228,7 +228,7 @@ def _clean(chunk: str) -> str:
     lines = [
         line.strip()
         for line in DATE_TOKEN_RE.sub(" ", chunk).split("\n")
-        if reviewpage.looks_like_review(line.strip())
+        if reviewtext.looks_like_review(line.strip())
     ]
     return "\n".join(dict.fromkeys(lines)).strip()
 
@@ -273,7 +273,7 @@ def split_page(
             return items
     # Границ не нашлось ни одним способом — страница считается одним отзывом.
     whole = _split_item(
-        reviewpage.strip_tags(mark_blocks(html, ANCHOR_RE)),
+        reviewtext.strip_tags(mark_blocks(html, ANCHOR_RE)),
         url=url,
         site=site,
         index=0,
@@ -290,7 +290,7 @@ def _split_with(
     site: str,
     today: date | None,
 ) -> tuple[ReviewItem, ...]:
-    flat = reviewpage.strip_tags(mark_blocks(html, pattern))
+    flat = reviewtext.strip_tags(mark_blocks(html, pattern))
     if ITEM_MARK not in flat:
         return ()  # этот способ границ не нашёл, пробуем следующий
     chunks = flat.split(ITEM_MARK)[1:]  # до первой метки лежит шапка сайта

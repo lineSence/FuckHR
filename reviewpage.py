@@ -43,22 +43,19 @@ X — читайте на …»). Досье собиралось из таки�
 
 from __future__ import annotations
 
-import html as html_mod
 import json
 import logging
 import os
-import re
 import sqlite3
-import time
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable, Sequence
 
-import injection
 import net_rate
 import reviewsites
+from reviewtext import looks_like_review, strip_tags
 
 log = logging.getLogger(__name__)
 
@@ -86,39 +83,6 @@ MAX_PAGE_CHARS = 8000
 # а не на «страница не открылась»: без прокси её не открыть вовсе.
 GUARD_MARKS = ("just a moment", "cf-chl", "cf_chl", "attention required", "checking your browser")
 CACHE_DAYS = 30
-MIN_LINE_CHARS = 40
-
-# Блоки, внутри которых текста отзывов не бывает никогда.
-DROP_BLOCK_RE = re.compile(
-    r"<(script|style|noscript|svg|template|head|nav|footer|form|select|aside)\b[^>]*>.*?</\1>",
-    re.IGNORECASE | re.DOTALL,
-)
-# Границы абзацев: без них весь текст страницы слипается в одну строку и
-# отделить отзыв от меню становится нечем.
-BREAK_RE = re.compile(
-    r"</?(p|div|li|tr|td|h[1-6]|section|article|blockquote|br)\b[^>]*>",
-    re.IGNORECASE,
-)
-TAG_RE = re.compile(r"<[^>]+>")
-SPACES_RE = re.compile(r"[ \t\u00a0]+")
-
-# Строки обвязки сайта. Проверяется вхождение в нижнем регистре.
-BOILERPLATE = (
-    "cookie", "куки", "политика конфиденциальн", "все права защищены",
-    "пользовательское соглашение", "подпишитесь", "подписаться на рассылку",
-    "войти через", "зарегистрироваться", "оставьте отзыв", "оставить отзыв",
-    "читайте отзывы сотрудников", "реклама", "мы используем",
-    "нажимая кнопку", "вакансии компании", "добавить компанию",
-)
-
-# Признаки живого отзыва. Строка без них — почти наверняка описание сервиса.
-REVIEW_HINTS = (
-    "плюс", "минус", "работал", "работаю", "работала", "уволил", "уволен",
-    "зарплат", "оклад", "преми", "руководств", "начальник", "директор",
-    "коллектив", "команд", "офис", "переработ", "график", "отпуск",
-    "собеседован", "испытательн", "проект", "задач", "рекомендую",
-    "сотрудник", "текучк", "обещал", "платят", "выплат",
-)
 
 
 @dataclass
@@ -197,42 +161,12 @@ def split_items(raw_html: str, url: str, text: str) -> tuple[object, ...]:
     return decode_items("[]", url, text)
 
 
-def strip_tags(page: str) -> str:
-    """HTML → плоский текст с сохранением границ абзацев.
-
-    Скрытые вёрсткой блоки снимаются первыми: после снятия тегов текст
-    «белым по белому» неотличим от обычного, а прячут в нём инструкции для
-    ИИ-ассистента (ADR-020).
-    """
-    visible, _hidden = injection.drop_hidden(page or "")
-    text = DROP_BLOCK_RE.sub(" ", visible)
-    text = BREAK_RE.sub("\n", text)
-    text = TAG_RE.sub(" ", text)
-    text = html_mod.unescape(text)
-    text = SPACES_RE.sub(" ", text)
-    return text
-
-
 def guarded(status: int, body: str) -> bool:
     """Это не страница, а проверка Cloudflare? Тогда повторять бессмысленно."""
     if status not in (403, 503):
         return False
     low = (body or "")[:4000].lower()
     return any(mark in low for mark in GUARD_MARKS)
-
-
-def looks_like_review(line: str) -> bool:
-    """Похожа ли строка на кусок отзыва, а не на меню и не на рекламу."""
-    low = line.lower()
-    if len(line) < MIN_LINE_CHARS:
-        return False
-    if any(mark in low for mark in BOILERPLATE):
-        return False
-    if not any(hint in low for hint in REVIEW_HINTS):
-        return False
-    # Меню и хлебные крошки — это перечисления через разделители без точек.
-    letters = sum(ch.isalpha() for ch in line)
-    return letters >= len(line) * 0.5
 
 
 def extract_reviews(page: str, max_chars: int = MAX_PAGE_CHARS) -> str:
